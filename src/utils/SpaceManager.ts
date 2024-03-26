@@ -112,7 +112,7 @@ export async function listSpaces() {
 
   const header = `| ${"Name".padEnd(maxWidthName)} | ${"Email".padEnd(maxWidthEmail)} | ${"User Name".padEnd(maxWidthUserName)} |`;
 
-  const topBottomBar = "+" + "-".repeat(header.length - 2) + "+\n";
+  const topBottomBar = "+" + "-".repeat(header.length - 2) + "+";
 
   console.log("Your Spaces:");
   console.log(topBottomBar);
@@ -125,7 +125,7 @@ export async function listSpaces() {
     console.log(row);
   });
 
-  console.log(topBottomBar);
+  console.log(topBottomBar + "\n");
 }
 
 export async function switchSpace(

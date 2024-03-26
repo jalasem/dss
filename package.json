@@ -1,14 +1,20 @@
 {
-  "name": "dss",
+  "name": "@jalasem/dss",
   "version": "1.0.0",
   "description": "Dev Spaces Switcher (DSS) is a tool for switching between different context for working seamlessly in different environment/companies without having to worry about ssh or github configurations",
-  "main": "src/index.js",
+  "main": "build/index.js",
+  "bin": {
+    "dss": "./build/index.js"
+  },
+  "files": [
+    "build/**/*"
+  ],
   "scripts": {
-    "build": "npx tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node -r tsconfig-paths/register src/index.ts",
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "ts-node src/index.ts",
     "lint": "eslint 'src/**/*.{js,ts}' --fix",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "cli",
@@ -45,5 +51,13 @@
     "ts-node-dev": "^2.0.0",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.4.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jalasem/dss.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jalasem/dss/issues"
+  },
+  "homepage": "https://github.com/jalasem/dss#readme"
 }
