@@ -1,6 +1,6 @@
 {
   "name": "@jalasem/dss",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Dev Spaces Switcher (DSS) is a tool for switching between different context for working seamlessly in different environment/companies without having to worry about ssh or github configurations",
   "main": "build/index.js",
   "bin": {
