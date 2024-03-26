@@ -24,10 +24,12 @@ export async function addSpace() {
     message: "Space name: ",
     validate: (input) => !!input.trim() || "Space name is required!",
   });
-  const email = await input({
-    message: "Email: ",
-    validate: (input) => !!input.trim() || "Email is required!",
-  });
+  const email = (
+    await input({
+      message: "Email: ",
+      validate: (input) => !!input.trim() || "Email is required!",
+    })
+  )?.trim();
   const userName = await input({
     message: "User name: ",
     validate: (input) => !!input.trim() || "User name is required!",
@@ -38,14 +40,16 @@ export async function addSpace() {
   });
 
   const config: IConfig = await fs.readJson(configPath);
-  if (config.spaces.find((space) => space.name === name)) {
+  const slugifiedSpaceName = name.toLowerCase().replace(/\s/g, "-");
+
+  if (config.spaces.find((space) => space.name === slugifiedSpaceName)) {
     console.log(`A space with the name "${name}" already exists.`);
     return;
   }
 
   let sshKeyPath = "";
   if (generateKey) {
-    sshKeyPath = await generateSSHKey(name, email);
+    sshKeyPath = await generateSSHKey(slugifiedSpaceName, email);
     const publicKeyPath = `${sshKeyPath}.pub`;
 
     try {

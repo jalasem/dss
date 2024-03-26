@@ -26,7 +26,6 @@ export const copyToClipboard = (publicKey: string) => {
       if (error) {
         reject(error);
       } else {
-        console.log("The public SSH key has been copied to your clipboard.");
         resolve("Public SSH key copied to clipboard.");
       }
     });
