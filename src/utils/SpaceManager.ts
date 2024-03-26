@@ -153,7 +153,8 @@ export async function switchSpace(
         title: space.name,
         value: space.name,
       })),
-    }));
+    }).catch(() => null));
+  if (!selectedSpaceName) return;
 
   const space = config.spaces.find((s) => s.name === selectedSpaceName);
   if (!space || !space.sshKeyPath) {

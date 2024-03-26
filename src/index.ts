@@ -24,12 +24,12 @@ program
   .action(switchSpace);
 
 program
-  .command("remove")
+  .command("remove [spaceName]")
   .description("Remove a specified space")
   .action(removeSpace);
 
 program
-  .command("edit")
+  .command("edit [spaceName]")
   .description("Modify an existing space")
   .action(modifySpace);
 
