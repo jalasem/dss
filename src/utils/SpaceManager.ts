@@ -1,12 +1,11 @@
-import { exec } from "child_process";
+import { execSync } from "child_process";
 import { input, confirm, select } from "@inquirer/prompts";
 import os from "os";
 import fs from "fs-extra";
 import path from "path";
-import { generateSSHKey } from "./utils/sshKeyGen";
+import { generateSSHKey } from "./sshKeyGen";
+import { copyToClipboard } from ".";
 import { IConfig, ISpace } from "./types";
-import { execSync } from "child_process";
-import { copyToClipboard } from "./utils";
 
 const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
 
@@ -113,9 +112,9 @@ export async function listSpaces() {
 
   const header = `| ${"Name".padEnd(maxWidthName)} | ${"Email".padEnd(maxWidthEmail)} | ${"User Name".padEnd(maxWidthUserName)} |`;
 
-  const topBottomBar = "+" + "-".repeat(header.length - 2) + "+";
+  const topBottomBar = "+" + "-".repeat(header.length - 2) + "+\n";
 
-  console.log("Spaces:");
+  console.log("Your Spaces:");
   console.log(topBottomBar);
   console.log(header);
   console.log("-".repeat(header.length));

@@ -5,7 +5,7 @@ import {
   switchSpace,
   removeSpace,
   modifySpace,
-} from "./SpaceManager";
+} from "./utils/SpaceManager";
 
 program
   .name("dss")
