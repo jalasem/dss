@@ -6,6 +6,7 @@ import path from "path";
 import { generateSSHKey } from "./utils/sshKeyGen";
 import { IConfig, ISpace } from "./types";
 import { execSync } from "child_process";
+import { copyToClipboard } from "./utils";
 
 const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
 
@@ -50,37 +51,15 @@ export async function addSpace() {
 
     try {
       const publicKey = await fs.readFile(publicKeyPath, "utf8");
+      await copyToClipboard(publicKey);
 
-      // Platform-specific command to copy the SSH public key to clipboard
-      let copyCommand;
-      switch (process.platform) {
-        case "darwin":
-          copyCommand = "pbcopy";
-          break;
-        case "win32":
-          copyCommand = "clip";
-          break;
-        case "linux":
-          copyCommand = "xclip -selection clipboard";
-          break;
-        default:
-          throw new Error(
-            `Platform ${process.platform} is not supported for clipboard operations.`
-          );
-      }
-
-      exec(`echo "${publicKey}" | ${copyCommand}`, (error) => {
-        if (error) {
-          throw error;
-        }
-        console.log(
-          "The public SSH key has been copied to your clipboard. Please add it to your GitHub account or wherever it's needed. \n"
-        );
-        console.log("Public SSH Key:\n" + publicKey, "\n");
-        console.log(
-          "GitHub SSH Key Addition URL: https://github.com/settings/keys"
-        );
-      });
+      console.log(
+        "The public SSH key has been copied to your clipboard. Please add it to your GitHub account or wherever it's needed. \n"
+      );
+      console.log("Public SSH Key:\n" + publicKey);
+      console.log(
+        "GitHub SSH Key Addition URL: https://github.com/settings/keys\n"
+      );
     } catch (err) {
       console.error(
         "Failed to read the public SSH key or copy it to the clipboard.",
@@ -98,7 +77,17 @@ export async function addSpace() {
 
   config.spaces.push(newSpace);
   await fs.writeJson(configPath, config);
-  console.log(`Space "${name}" added successfully.`);
+
+  const switchToNewSpace = await confirm({
+    message: `Do you want to switch to the newly added space "${name}" now?`,
+    default: true,
+  });
+
+  if (switchToNewSpace) {
+    await switchSpace(name);
+  } else {
+    console.log(`Space "${name}" added successfully.`);
+  }
 }
 
 export async function listSpaces() {
@@ -132,8 +121,7 @@ export async function listSpaces() {
   console.log("-".repeat(header.length));
 
   config.spaces.forEach((space) => {
-    // Add the active space indicator to the name if applicable
-    const displayName = `${space.name === config.activeSpace ? "🔥 " : ""}${space.name}`;
+    const displayName = `${space.name === config.activeSpace ? "🔥" : ""}${space.name}`;
     const row = `| ${displayName.padEnd(maxWidthName)} | ${space.email.padEnd(maxWidthEmail)} | ${space.userName.padEnd(maxWidthUserName)} |`;
     console.log(row);
   });
@@ -141,7 +129,15 @@ export async function listSpaces() {
   console.log(topBottomBar);
 }
 
-export async function switchSpace(): Promise<void> {
+export async function switchSpace(
+  spaceName?: string | { name: string }
+): Promise<void> {
+  const spaceNameProvided = spaceName
+    ? typeof spaceName === "string"
+      ? spaceName
+      : spaceName.name
+    : null;
+
   await ensureConfigFileExists();
   const config: IConfig = await fs.readJson(configPath);
 
@@ -150,29 +146,26 @@ export async function switchSpace(): Promise<void> {
     return;
   }
 
-  let selectedSpaceName = await select({
-    message: "Please choose a space to switch to: ",
-    choices: config.spaces.map((space) => ({
-      title: space.name,
-      value: space.name,
-    })),
-  });
-
-  if (!selectedSpaceName) {
-    selectedSpaceName = await select({
+  let selectedSpaceName =
+    spaceNameProvided ||
+    (await select({
       message: "Please choose a space to switch to: ",
       choices: config.spaces.map((space) => ({
         title: space.name,
         value: space.name,
       })),
-    });
-  }
+    }));
 
   const space = config.spaces.find((s) => s.name === selectedSpaceName);
   if (!space || !space.sshKeyPath) {
     console.log(
-      `Space "${selectedSpaceName}" not found or does not have an associated SSH key.`
+      `Space "${selectedSpaceName}" not found or does not have an associated SSH key. \n`
     );
+    return;
+  }
+
+  if (config.activeSpace === selectedSpaceName) {
+    console.log(`Space "${selectedSpaceName}" is already active. \n`);
     return;
   }
 
@@ -190,7 +183,9 @@ export async function switchSpace(): Promise<void> {
 
     config.activeSpace = space.name;
     await fs.writeJson(configPath, config);
-    console.log(`Switched to and activated space "${space.name}".`);
+    console.log(`Switched to and activated space "${space.name}". \n`);
+
+    listSpaces();
   } catch (error) {
     console.error(`Failed to switch to space "${selectedSpaceName}":`, error);
   }

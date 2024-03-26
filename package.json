@@ -24,10 +24,13 @@
   "dependencies": {
     "@inquirer/prompts": "^4.3.0",
     "@inquirer/select": "^2.2.0",
+    "boxen": "^7.1.1",
     "chalk": "^5.3.0",
     "clipboardy": "^4.0.0",
     "commander": "^12.0.0",
+    "figlet": "^1.7.0",
     "fs-extra": "^11.2.0",
+    "ora": "^8.0.1",
     "ssh-keygen": "^0.5.0"
   },
   "devDependencies": {
