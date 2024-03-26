@@ -4,7 +4,7 @@ import os from "os";
 import fs from "fs-extra";
 import path from "path";
 import { generateSSHKey } from "./sshKeyGen";
-import { copyToClipboard } from ".";
+import { copyToClipboard, setGitHubSSHKey } from ".";
 import { IConfig, ISpace } from "./types";
 
 const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
@@ -186,6 +186,8 @@ export async function switchSpace(
     console.log(`SSH key added to ssh-agent successfully.`);
 
     config.activeSpace = space.name;
+
+    await setGitHubSSHKey(space.sshKeyPath);
     await fs.writeJson(configPath, config);
     console.log(`Switched to and activated space "${space.name}". \n`);
 
