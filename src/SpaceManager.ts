@@ -6,7 +6,6 @@ import path from "path";
 import { generateSSHKey } from "./utils/sshKeyGen";
 import { IConfig, ISpace } from "./types";
 import { execSync } from "child_process";
-import clipboard from "clipboardy";
 
 const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
 
@@ -112,34 +111,34 @@ export async function listSpaces() {
     return;
   }
 
-  // Calculate column widths
   let maxWidthName = "Name".length;
   let maxWidthEmail = "Email".length;
   let maxWidthUserName = "User Name".length;
   config.spaces.forEach((space) => {
-    maxWidthName = Math.max(maxWidthName, space.name.length);
+    const nameLength =
+      space.name.length + (space.name === config.activeSpace ? 3 : 0);
+    maxWidthName = Math.max(maxWidthName, nameLength);
     maxWidthEmail = Math.max(maxWidthEmail, space.email.length);
     maxWidthUserName = Math.max(maxWidthUserName, space.userName.length);
   });
 
-  // Create a header
   const header = `| ${"Name".padEnd(maxWidthName)} | ${"Email".padEnd(maxWidthEmail)} | ${"User Name".padEnd(maxWidthUserName)} |`;
 
-  // Create top and bottom bars
   const topBottomBar = "+" + "-".repeat(header.length - 2) + "+";
 
   console.log("Spaces:");
-  console.log(topBottomBar); // Top bar
+  console.log(topBottomBar);
   console.log(header);
-  console.log("-".repeat(header.length)); // Separator between header and rows
+  console.log("-".repeat(header.length));
 
-  // Display each space in tabular format
   config.spaces.forEach((space) => {
-    const row = `| ${space.name.padEnd(maxWidthName)} | ${space.email.padEnd(maxWidthEmail)} | ${space.userName.padEnd(maxWidthUserName)} |`;
+    // Add the active space indicator to the name if applicable
+    const displayName = `${space.name === config.activeSpace ? "🔥 " : ""}${space.name}`;
+    const row = `| ${displayName.padEnd(maxWidthName)} | ${space.email.padEnd(maxWidthEmail)} | ${space.userName.padEnd(maxWidthUserName)} |`;
     console.log(row);
   });
 
-  console.log(topBottomBar); // Bottom bar
+  console.log(topBottomBar);
 }
 
 export async function switchSpace(): Promise<void> {
