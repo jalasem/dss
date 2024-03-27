@@ -4,8 +4,8 @@ import os from "os";
 import fs from "fs-extra";
 import path from "path";
 import { generateSSHKey } from "./sshKeyGen";
-import { copyToClipboard, setGitHubSSHKey } from ".";
-import { IConfig, ISpace } from "./types";
+import { copyToClipboard, removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAccess } from ".";
+import { IConfig, ISpace, SpaceNameArg } from "./types";
 
 const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
 
@@ -154,7 +154,7 @@ export async function switchSpace(
     (await select({
       message: "Please choose a space to switch to: ",
       choices: config.spaces.map((space) => ({
-        title: space.name,
+        title: space.name === config.activeSpace ? '🚀' : '' + space.name,
         value: space.name,
       })),
     }).catch(() => null));
@@ -190,6 +190,13 @@ export async function switchSpace(
     await setGitHubSSHKey(space.sshKeyPath);
     await fs.writeJson(configPath, config);
     console.log(`Switched to and activated space "${space.name}". \n`);
+
+    const confirmTest = await confirm({
+      message: "Do you want to test the space's access to GitHub?",
+      default: false,
+    });
+  
+    if (confirmTest) await testGithubAccess(space.sshKeyPath);
 
     listSpaces();
   } catch (error) {
@@ -232,9 +239,42 @@ export async function removeSpace() {
   }
 
   // Proceed with removal
+  const spaceToRemove = config.spaces.find((space) => space.name === spaceName);
+
+  if (!spaceToRemove) return
+  removeSSHKeyFromAgent(spaceToRemove.sshKeyPath);
+
   config.spaces = config.spaces.filter((space) => space.name !== spaceName);
   await fs.writeJson(configPath, config);
   console.log(`Space '${spaceName}' has been removed.`);
+}
+
+export async function testSpace(spaceName?: SpaceNameArg) {
+  spaceName = spaceName ? typeof spaceName === "string" ? spaceName : spaceName?.name : null;
+
+  await ensureConfigFileExists();
+  const config: IConfig = await fs.readJson(configPath);
+
+  if (config.spaces.length === 0) {
+    console.log("⚠️ No spaces have been added yet.");
+    return;
+  }
+
+  const space = spaceName && config.spaces.find(s => s.name === spaceName) || config.spaces.find(s => s.name === config.activeSpace);
+
+  if (!space) {
+    console.log(spaceName ? `Space "${spaceName}" not found.` : `Active space "${config.activeSpace}" not found.`);
+    return;
+  }
+
+  if (!space.sshKeyPath) {
+    console.log(
+      `Active space "${config.activeSpace}" does not have an associated SSH key.`
+    );
+    return;
+  }
+
+  await testGithubAccess(space.sshKeyPath);
 }
 
 export async function modifySpace() {

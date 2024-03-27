@@ -6,6 +6,7 @@ import {
   switchSpace,
   removeSpace,
   modifySpace,
+  testSpace,
 } from "./utils/SpaceManager";
 
 program
@@ -32,5 +33,10 @@ program
   .command("edit [spaceName]")
   .description("Modify an existing space")
   .action(modifySpace);
+
+program
+    .command("test")
+    .description("Test the current space's access to GitHub")
+    .action(testSpace)
 
 program.parse(process.argv);
