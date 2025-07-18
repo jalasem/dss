@@ -1,6 +1,6 @@
 {
   "name": "@jalasem/dss",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "Dev Spaces Switcher (DSS) is a tool for switching between different context for working seamlessly in different environment/companies without having to worry about ssh or github configurations",
   "main": "build/index.js",
   "bin": {
@@ -14,7 +14,11 @@
     "start": "node build/index.js",
     "dev": "ts-node src/index.ts",
     "lint": "eslint 'src/**/*.{js,ts}' --fix",
-    "prepublishOnly": "npm run build"
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --coverage --watchAll=false",
+    "prepublishOnly": "npm run build && npm run test:ci"
   },
   "keywords": [
     "cli",
@@ -30,14 +34,25 @@
   "dependencies": {
     "@inquirer/prompts": "^4.3.0",
     "@inquirer/select": "^2.2.0",
+    "chalk": "^4.1.2",
     "commander": "^12.0.0",
     "fs-extra": "^11.2.0",
+    "fuzzy-search": "^3.2.1",
     "ssh-keygen": "^0.5.0"
   },
   "devDependencies": {
+    "@types/chalk": "^0.4.31",
     "@types/fs-extra": "^11.0.4",
+    "@types/fuzzy-search": "^2.1.5",
     "@types/inquirer": "^9.0.7",
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.11.30",
+    "@typescript-eslint/eslint-plugin": "^8.37.0",
+    "@typescript-eslint/parser": "^8.37.0",
+    "eslint": "^9.31.0",
+    "inquirer-autocomplete-prompt": "^3.0.1",
+    "jest": "^30.0.4",
+    "ts-jest": "^29.4.0",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.3"
