@@ -1,10 +1,10 @@
 {
   "name": "@jalasem/dss",
-  "version": "1.1.1",
-  "description": "Dev Spaces Switcher (DSS) is a tool for switching between different context for working seamlessly in different environment/companies without having to worry about ssh or github configurations",
+  "version": "1.1.2",
+  "description": "Dev Spaces Switcher (DSS) - Seamlessly manage isolated development environments with separate SSH keys and Git configurations. Enhanced UI with beautiful tables and improved documentation.",
   "main": "build/index.js",
   "bin": {
-    "dss": "./build/index.js"
+    "dss": "build/index.js"
   },
   "files": [
     "build/**/*"
@@ -27,7 +27,14 @@
     "github",
     "productivity",
     "dev",
-    "dev-tool"
+    "dev-tool",
+    "workspace",
+    "development-environment",
+    "ssh-keys",
+    "git-config",
+    "developer-tools",
+    "terminal",
+    "beautiful-cli"
   ],
   "author": "Ajala Abdulsamii <kgasta@gmail.com>",
   "license": "ISC",

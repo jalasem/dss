@@ -95,18 +95,30 @@ export class UIHelper {
 
   static printHeader(title: string): void {
     const terminalWidth = process.stdout.columns || 80;
-    const maxWidth = Math.min(60, terminalWidth - 4);
+    const maxWidth = Math.min(Math.max(title.length + 8, 50), terminalWidth - 4);
     
-    console.log('');
     console.log(chalk.cyan('╭' + '─'.repeat(maxWidth) + '╮'));
     
     const titleLength = title.length;
     const padding = Math.max(0, Math.floor((maxWidth - titleLength) / 2));
     const paddedTitle = ' '.repeat(padding) + title + ' '.repeat(maxWidth - titleLength - padding);
     
-    console.log(chalk.cyan('│') + chalk.bold.cyan(paddedTitle) + chalk.cyan('│'));
+    console.log(chalk.cyan('│') + chalk.bold.white(paddedTitle) + chalk.cyan('│'));
     console.log(chalk.cyan('╰' + '─'.repeat(maxWidth) + '╯'));
-    console.log('');
+  }
+
+  // Helper function to get string length without ANSI escape codes
+  private static getDisplayLength(str: string): number {
+    // Remove ANSI escape codes to get actual display length
+    // eslint-disable-next-line no-control-regex
+    return str.replace(/\u001b\[[0-9;]*m/g, '').length;
+  }
+
+  // Helper function to pad string accounting for ANSI escape codes
+  private static padWithColors(str: string, targetLength: number): string {
+    const displayLength = this.getDisplayLength(str);
+    const padding = Math.max(0, targetLength - displayLength);
+    return str + ' '.repeat(padding);
   }
 
   static printSpaceTable(spaces: Array<{ name: string; email: string; userName: string; sshKeyPath: string }>, activeSpace?: string): void {
@@ -116,69 +128,92 @@ export class UIHelper {
     }
 
     const terminalWidth = process.stdout.columns || 80;
-    const maxTableWidth = Math.min(terminalWidth - 4, 100);
+    const maxTableWidth = Math.min(terminalWidth - 4, 120);
     
     // Calculate column widths with responsive sizing
-    const baseNameWidth = Math.max(4, ...spaces.map(s => s.name.length));
-    const baseEmailWidth = Math.max(5, ...spaces.map(s => s.email.length));
-    const baseUserWidth = Math.max(9, ...spaces.map(s => s.userName.length));
-    
-    // Add status column
+    const minNameWidth = 8;
+    const minEmailWidth = 12;
+    const minUserWidth = 8;
     const statusWidth = 8;
-    const totalBaseWidth = baseNameWidth + baseEmailWidth + baseUserWidth + statusWidth + 12; // 12 for borders
+    
+    // Get the actual content lengths
+    const baseNameWidth = Math.max(minNameWidth, ...spaces.map(s => s.name.length));
+    const baseEmailWidth = Math.max(minEmailWidth, ...spaces.map(s => s.email.length));
+    const baseUserWidth = Math.max(minUserWidth, ...spaces.map(s => s.userName.length));
+    
+    const totalBaseWidth = baseNameWidth + baseEmailWidth + baseUserWidth + statusWidth + 12; // 12 for borders and padding
     
     let nameWidth = baseNameWidth;
     let emailWidth = baseEmailWidth;
     let userWidth = baseUserWidth;
     
-    // Adjust widths if table is too wide
+    // Adjust widths if table is too wide for terminal
     if (totalBaseWidth > maxTableWidth) {
       const availableWidth = maxTableWidth - statusWidth - 12;
-      const ratio = availableWidth / (baseNameWidth + baseEmailWidth + baseUserWidth);
-      nameWidth = Math.floor(baseNameWidth * ratio);
-      emailWidth = Math.floor(baseEmailWidth * ratio);
-      userWidth = Math.floor(baseUserWidth * ratio);
+      const totalContentWidth = baseNameWidth + baseEmailWidth + baseUserWidth;
+      
+      // Proportionally reduce each column
+      nameWidth = Math.max(minNameWidth, Math.floor((baseNameWidth / totalContentWidth) * availableWidth));
+      emailWidth = Math.max(minEmailWidth, Math.floor((baseEmailWidth / totalContentWidth) * availableWidth));
+      userWidth = Math.max(minUserWidth, availableWidth - nameWidth - emailWidth);
     }
 
-    // Print header
-    const header = `│ ${chalk.bold('Name'.padEnd(nameWidth))} │ ${chalk.bold('Email'.padEnd(emailWidth))} │ ${chalk.bold('User'.padEnd(userWidth))} │ ${chalk.bold('Status'.padEnd(statusWidth))} │`;
-    const separator = `├${'─'.repeat(nameWidth + 2)}┼${'─'.repeat(emailWidth + 2)}┼${'─'.repeat(userWidth + 2)}┼${'─'.repeat(statusWidth + 2)}┤`;
+    // Create border components
     const topBorder = `┌${'─'.repeat(nameWidth + 2)}┬${'─'.repeat(emailWidth + 2)}┬${'─'.repeat(userWidth + 2)}┬${'─'.repeat(statusWidth + 2)}┐`;
+    const separator = `├${'─'.repeat(nameWidth + 2)}┼${'─'.repeat(emailWidth + 2)}┼${'─'.repeat(userWidth + 2)}┼${'─'.repeat(statusWidth + 2)}┤`;
     const bottomBorder = `└${'─'.repeat(nameWidth + 2)}┴${'─'.repeat(emailWidth + 2)}┴${'─'.repeat(userWidth + 2)}┴${'─'.repeat(statusWidth + 2)}┘`;
 
-    console.log(chalk.gray(topBorder));
-    console.log(header);
-    console.log(chalk.gray(separator));
+    // Print table header
+    console.log(chalk.cyan(topBorder));
+    
+    const headerRow = `│ ${this.padWithColors(chalk.bold.white('Name'), nameWidth)} │ ${this.padWithColors(chalk.bold.white('Email'), emailWidth)} │ ${this.padWithColors(chalk.bold.white('User'), userWidth)} │ ${this.padWithColors(chalk.bold.white('Status'), statusWidth)} │`;
+    console.log(headerRow);
+    console.log(chalk.cyan(separator));
 
-    // Print spaces
+    // Print each space row
     spaces.forEach(space => {
       const isActive = space.name === activeSpace;
-      // const displayName = isActive ? this.activeSpace(space.name) : this.inactiveSpace(space.name);
       
-      // Truncate long values
+      // Truncate long values with ellipsis
       const truncatedName = space.name.length > nameWidth ? space.name.substring(0, nameWidth - 3) + '...' : space.name;
       const truncatedEmail = space.email.length > emailWidth ? space.email.substring(0, emailWidth - 3) + '...' : space.email;
       const truncatedUser = space.userName.length > userWidth ? space.userName.substring(0, userWidth - 3) + '...' : space.userName;
       
-      // Status with color
-      const status = isActive ? chalk.green.bold('ACTIVE') : chalk.gray('inactive');
+      // Apply styling based on active state
+      const styledName = isActive ? this.activeSpace(truncatedName) : chalk.white(truncatedName);
+      const styledEmail = isActive ? chalk.green(truncatedEmail) : chalk.gray(truncatedEmail);
+      const styledUser = isActive ? chalk.green(truncatedUser) : chalk.gray(truncatedUser);
+      const styledStatus = isActive ? this.badge('ACTIVE', 'success') : chalk.dim('inactive');
       
-      const nameColumn = isActive ? this.activeSpace(truncatedName) : this.inactiveSpace(truncatedName);
-      const emailColumn = isActive ? chalk.green(truncatedEmail) : chalk.white(truncatedEmail);
-      const userColumn = isActive ? chalk.green(truncatedUser) : chalk.white(truncatedUser);
-      
-      const row = `│ ${nameColumn.padEnd(nameWidth + (isActive ? 10 : 0))} │ ${emailColumn.padEnd(emailWidth + (isActive ? 10 : 0))} │ ${userColumn.padEnd(userWidth + (isActive ? 10 : 0))} │ ${status.padEnd(statusWidth + (isActive ? 10 : 0))} │`;
+      const row = `│ ${this.padWithColors(styledName, nameWidth)} │ ${this.padWithColors(styledEmail, emailWidth)} │ ${this.padWithColors(styledUser, userWidth)} │ ${this.padWithColors(styledStatus, statusWidth)} │`;
       console.log(row);
     });
 
-    console.log(chalk.gray(bottomBorder));
+    console.log(chalk.cyan(bottomBorder));
     
-    // Add summary footer
+    // Enhanced summary footer with better formatting
     const totalSpaces = spaces.length;
     const activeCount = activeSpace ? 1 : 0;
     const inactiveCount = totalSpaces - activeCount;
     
-    console.log(chalk.dim(`\n📊 Summary: ${totalSpaces} total spaces • ${activeCount} active • ${inactiveCount} inactive`));
+    console.log('');
+    console.log(chalk.dim('📊 Summary:'), 
+      chalk.cyan(`${totalSpaces} total`), 
+      chalk.green(`• ${activeCount} active`), 
+      chalk.gray(`• ${inactiveCount} inactive`)
+    );
+    
+    if (activeSpace) {
+      console.log('');
+      console.log(chalk.dim('🔥 Currently active:'), chalk.green.bold(activeSpace));
+    }
+    
+    console.log('');
+    console.log(chalk.dim('Commands:'));
+    console.log(chalk.dim('  • '), this.command('dss switch'), chalk.dim(' - Change active space'));
+    console.log(chalk.dim('  • '), this.command('dss inspect <space>'), chalk.dim(' - View detailed space info'));
+    console.log(chalk.dim('  • '), this.command('dss test'), chalk.dim(' - Test GitHub access'));
+    console.log('');
   }
 
   private static progressState = {
@@ -303,5 +338,36 @@ export class UIHelper {
     }[status];
     
     console.log(`${statusIcon} ${chalk.bold(label)}: ${statusColor(value)}`);
+  }
+
+  static printWelcome(): void {
+    const terminalWidth = process.stdout.columns || 80;
+    const maxWidth = Math.min(70, terminalWidth - 4);
+    
+    console.log('');
+    console.log(chalk.cyan('╭' + '═'.repeat(maxWidth) + '╮'));
+    console.log(chalk.cyan('║') + chalk.bold.cyan(' '.repeat(Math.floor((maxWidth - 24) / 2)) + '🚀 Dev Spaces Switcher' + ' '.repeat(Math.ceil((maxWidth - 24) / 2))) + chalk.cyan('║'));
+    console.log(chalk.cyan('║') + chalk.dim(' '.repeat(Math.floor((maxWidth - 52) / 2)) + 'Manage isolated development environments with ease' + ' '.repeat(Math.ceil((maxWidth - 52) / 2))) + chalk.cyan('║'));
+    console.log(chalk.cyan('╰' + '═'.repeat(maxWidth) + '╯'));
+    console.log('');
+  }
+
+  static printQuickHelp(): void {
+    console.log(chalk.dim('Quick commands:'));
+    console.log(chalk.dim('  • '), this.command('dss list'), chalk.dim(' - Show all spaces'));
+    console.log(chalk.dim('  • '), this.command('dss add'), chalk.dim(' - Add new space'));
+    console.log(chalk.dim('  • '), this.command('dss switch'), chalk.dim(' - Switch between spaces'));
+    console.log(chalk.dim('  • '), this.command('dss --help'), chalk.dim(' - Show detailed help'));
+    console.log('');
+  }
+
+  static printSpaceSwitched(spaceName: string): void {
+    console.log('');
+    console.log(chalk.green('╭─────────────────────────────────────╮'));
+    console.log(chalk.green('│') + chalk.green.bold('  ✨ Space Switched Successfully!  ') + chalk.green('│'));
+    console.log(chalk.green('├─────────────────────────────────────┤'));
+    console.log(chalk.green('│') + chalk.white(`  Active space: ${chalk.green.bold(spaceName)}`.padEnd(35)) + chalk.green('│'));
+    console.log(chalk.green('╰─────────────────────────────────────╯'));
+    console.log('');
   }
 }

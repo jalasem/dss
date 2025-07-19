@@ -139,15 +139,6 @@ export async function listSpaces() {
 
   UIHelper.printHeader("Your Development Spaces");
   UIHelper.printSpaceTable(config.spaces, config.activeSpace);
-  
-  if (config.activeSpace) {
-    UIHelper.success(`Currently active: ${UIHelper.highlight(config.activeSpace)}`);
-  }
-  
-  console.log(UIHelper.dim(`\n💡 Commands:`));
-  console.log(UIHelper.dim(`  • ${UIHelper.command("dss switch")} - Change active space`));
-  console.log(UIHelper.dim(`  • ${UIHelper.command("dss inspect <space>")} - View detailed space info`));
-  console.log(UIHelper.dim(`  • ${UIHelper.command("dss test")} - Test GitHub access`));
 }
 
 export async function switchSpace(
