@@ -70,45 +70,41 @@ export class AutocompleteHelper {
         ? `${message} (filtered by: "${query}")`
         : `${message} (type to search)`;
 
-      try {
-        const answer = await input({
-          message: prompt,
-          validate: (input) => {
-            if (!input.trim()) {
-              return 'Please enter a space name or search term';
-            }
-            return true;
+      const answer = await input({
+        message: prompt,
+        validate: (input) => {
+          if (!input.trim()) {
+            return 'Please enter a space name or search term';
           }
+          return true;
+        }
+      });
+
+      // If input matches exactly, return it
+      const exactMatch = spaces.find(s => s.name.toLowerCase() === answer.toLowerCase());
+      if (exactMatch) {
+        return exactMatch.name;
+      }
+
+      // Otherwise, use as search query
+      query = answer;
+      const searcher = new FuzzySpaceSearch(spaces);
+      filteredSpaces = searcher.search(query);
+
+      // If only one result, return it
+      if (filteredSpaces.length === 1) {
+        return filteredSpaces[0].name;
+      }
+
+      // If multiple results, show them
+      if (filteredSpaces.length > 1) {
+        console.log(`\n🔍 Found ${filteredSpaces.length} matches:`);
+        filteredSpaces.forEach((space, index) => {
+          const isActive = space.name === activeSpace;
+          const displayName = isActive ? `🔥 ${space.name}` : space.name;
+          console.log(`  ${index + 1}. ${displayName} (${space.email})`);
         });
-
-        // If input matches exactly, return it
-        const exactMatch = spaces.find(s => s.name.toLowerCase() === answer.toLowerCase());
-        if (exactMatch) {
-          return exactMatch.name;
-        }
-
-        // Otherwise, use as search query
-        query = answer;
-        const searcher = new FuzzySpaceSearch(spaces);
-        filteredSpaces = searcher.search(query);
-
-        // If only one result, return it
-        if (filteredSpaces.length === 1) {
-          return filteredSpaces[0].name;
-        }
-
-        // If multiple results, show them
-        if (filteredSpaces.length > 1) {
-          console.log(`\n🔍 Found ${filteredSpaces.length} matches:`);
-          filteredSpaces.forEach((space, index) => {
-            const isActive = space.name === activeSpace;
-            const displayName = isActive ? `🔥 ${space.name}` : space.name;
-            console.log(`  ${index + 1}. ${displayName} (${space.email})`);
-          });
-          console.log('');
-        }
-      } catch (error) {
-        throw error;
+        console.log('');
       }
     }
   }

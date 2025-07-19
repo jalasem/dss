@@ -27,9 +27,9 @@ describe('Utility Functions', () => {
 
   describe('setGitHubSSHKey', () => {
     it('should create SSH config for GitHub with new key', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
-      mockFs.readFile.mockResolvedValue('');
-      mockFs.writeFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue('');
+      (mockFs.writeFile as unknown as jest.Mock).mockResolvedValue(undefined);
 
       await setGitHubSSHKey(mockSshKeyPath);
 
@@ -55,9 +55,9 @@ Host other.com
   HostName other.com
   User git`;
 
-      mockFs.ensureFile.mockResolvedValue(undefined);
-      mockFs.readFile.mockResolvedValue(existingConfig);
-      mockFs.writeFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(existingConfig);
+      (mockFs.writeFile as unknown as jest.Mock).mockResolvedValue(undefined);
 
       await setGitHubSSHKey(mockSshKeyPath);
 
@@ -72,15 +72,14 @@ Host other.com
     });
 
     it('should handle errors gracefully', async () => {
-      mockFs.ensureFile.mockRejectedValue(new Error('Permission denied'));
+      (mockFs.ensureFile as jest.Mock).mockRejectedValue(new Error('Permission denied'));
       
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
       await setGitHubSSHKey(mockSshKeyPath);
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        'Failed to update SSH config for GitHub:',
-        expect.any(Error)
+        expect.stringContaining('Failed to update SSH config for GitHub: Permission denied')
       );
       
       consoleSpy.mockRestore();
@@ -88,35 +87,43 @@ Host other.com
   });
 
   describe('removeSSHKeyFromAgent', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
     it('should remove SSH key from agent successfully', async () => {
-      const mockExecAsync = jest.fn().mockResolvedValue({ stdout: '', stderr: '' });
-      jest.doMock('util', () => ({
-        promisify: () => mockExecAsync
-      }));
+      const mockExec = require('child_process').exec;
+      mockExec.mockImplementation((cmd: string, callback: Function) => {
+        callback(null, { stdout: '', stderr: '' });
+      });
 
       const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
       await removeSSHKeyFromAgent(mockSshKeyPath);
 
-      expect(mockExecAsync).toHaveBeenCalledWith(`ssh-add -d ${mockSshKeyPath}`);
-      expect(consoleSpy).toHaveBeenCalledWith('SSH key removed from ssh-agent successfully.');
+      expect(mockExec).toHaveBeenCalledWith(
+        `ssh-add -d ${mockSshKeyPath}`,
+        expect.any(Function)
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('SSH key removed from ssh-agent successfully.')
+      );
       
       consoleSpy.mockRestore();
     });
 
     it('should handle errors when removing SSH key', async () => {
-      const mockExecAsync = jest.fn().mockRejectedValue(new Error('Key not found'));
-      jest.doMock('util', () => ({
-        promisify: () => mockExecAsync
-      }));
+      const mockExec = require('child_process').exec;
+      mockExec.mockImplementation((cmd: string, callback: Function) => {
+        callback(new Error('Key not found'), null);
+      });
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
       await removeSSHKeyFromAgent(mockSshKeyPath);
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        'Error removing SSH key from ssh-agent:',
-        'Key not found'
+        expect.stringContaining('Error removing SSH key from ssh-agent: Key not found')
       );
       
       consoleSpy.mockRestore();
@@ -137,7 +144,7 @@ Host other.com
       const mockCallback = jest.fn();
       mockExec.mockImplementation((command, callback) => {
         expect(command).toBe(`echo "${mockPublicKey}" | pbcopy`);
-        callback!(null, '', '');
+        (callback as any)(null, '', '');
         return {} as any;
       });
 
@@ -154,7 +161,7 @@ Host other.com
 
       mockExec.mockImplementation((command, callback) => {
         expect(command).toBe(`echo "${mockPublicKey}" | clip`);
-        callback!(null, '', '');
+        (callback as any)(null, '', '');
         return {} as any;
       });
 
@@ -171,7 +178,7 @@ Host other.com
 
       mockExec.mockImplementation((command, callback) => {
         expect(command).toBe(`echo "${mockPublicKey}" | xclip -selection clipboard`);
-        callback!(null, '', '');
+        (callback as any)(null, '', '');
         return {} as any;
       });
 
@@ -186,7 +193,7 @@ Host other.com
     it('should reject on unsupported platform', async () => {
       Object.defineProperty(process, 'platform', { value: 'unsupported' });
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
       await expect(copyToClipboard(mockPublicKey)).rejects.toThrow(
         'Unsupported platform for clipboard operations.'
@@ -198,7 +205,7 @@ Host other.com
     it('should handle clipboard errors', async () => {
       const mockError = new Error('Clipboard not available');
       mockExec.mockImplementation((command, callback) => {
-        callback!(mockError, '', '');
+        (callback as any)(mockError, '', '');
         return {} as any;
       });
 

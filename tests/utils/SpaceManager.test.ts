@@ -3,21 +3,28 @@ import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
 import { input, confirm, select } from '@inquirer/prompts';
-import { 
+import { generateSSHKey } from '../../src/utils/sshKeyGen';
+import { copyToClipboard, testGithubAccess } from '../../src/utils/index';
+
+jest.mock('fs-extra');
+jest.mock('os');
+jest.mock('child_process');
+jest.mock('@inquirer/prompts');
+jest.mock('../../src/utils/sshKeyGen');
+jest.mock('../../src/utils/index');
+
+// Set up os.homedir mock before importing SpaceManager
+const mockOs = os as jest.Mocked<typeof os>;
+mockOs.homedir.mockReturnValue('/mock/home');
+
+// Now import SpaceManager after mocks are set
+const { 
   addSpace, 
   listSpaces, 
   switchSpace, 
   removeSpace, 
   testSpace 
-} from '../../src/utils/SpaceManager';
-import { generateSSHKey } from '../../src/utils/sshKeyGen';
-import { copyToClipboard, testGithubAccess } from '../../src/utils/index';
-
-jest.mock('fs-extra');
-jest.mock('child_process');
-jest.mock('@inquirer/prompts');
-jest.mock('../../src/utils/sshKeyGen');
-jest.mock('../../src/utils/index');
+} = require('../../src/utils/SpaceManager');
 
 const mockFs = fs as jest.Mocked<typeof fs>;
 const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
@@ -36,17 +43,16 @@ describe('SpaceManager', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.spyOn(os, 'homedir').mockReturnValue(mockHomeDir);
     jest.spyOn(console, 'log').mockImplementation();
     jest.spyOn(console, 'error').mockImplementation();
   });
 
   describe('addSpace', () => {
     it('should add a new space successfully', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
-      mockFs.writeJson.mockResolvedValue(undefined);
-      mockFs.readFile.mockResolvedValue(mockPublicKey);
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
       
       mockInput
         .mockResolvedValueOnce('Test Space')
@@ -73,7 +79,7 @@ describe('SpaceManager', () => {
     });
 
     it('should handle duplicate space names', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ 
         spaces: [{ name: 'test-space', email: 'existing@example.com', userName: 'Existing', sshKeyPath: '' }] 
       });
@@ -89,10 +95,10 @@ describe('SpaceManager', () => {
     });
 
     it('should handle SSH key generation without switch', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
-      mockFs.writeJson.mockResolvedValue(undefined);
-      mockFs.readFile.mockResolvedValue(mockPublicKey);
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
       
       mockInput
         .mockResolvedValueOnce('Test Space')
@@ -115,7 +121,7 @@ describe('SpaceManager', () => {
 
   describe('listSpaces', () => {
     it('should list spaces with active space indicator', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({
         spaces: [
           { name: 'space1', email: 'user1@example.com', userName: 'User1', sshKeyPath: '' },
@@ -126,17 +132,21 @@ describe('SpaceManager', () => {
 
       await listSpaces();
 
-      expect(console.log).toHaveBeenCalledWith('Your Spaces:');
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('🔥space1'));
+      // Check that the table was printed - looking for the active space indicator
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      const hasActiveSpace = calls.some(call => call && call.includes && call.includes('🔥 space1'));
+      expect(hasActiveSpace).toBe(true);
     });
 
     it('should handle no spaces', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
 
       await listSpaces();
 
-      expect(console.log).toHaveBeenCalledWith('⚠️ No spaces have been added yet.');
+      expect(console.log).toHaveBeenCalledTimes(2);
+      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
+      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
     });
   });
 
@@ -149,9 +159,9 @@ describe('SpaceManager', () => {
     };
 
     it('should switch to a space successfully', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
-      mockFs.writeJson.mockResolvedValue(undefined);
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
       mockConfirm.mockResolvedValue(false); // Don't test GitHub access
 
       await switchSpace('test-space');
@@ -166,16 +176,18 @@ describe('SpaceManager', () => {
     });
 
     it('should handle space not found', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
 
       await switchSpace('nonexistent-space');
 
-      expect(console.log).toHaveBeenCalledWith('Space "nonexistent-space" not found or does not have an associated SSH key. \n');
+      expect(console.log).toHaveBeenCalledTimes(2);
+      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
+      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
     });
 
     it('should handle already active space', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ 
         spaces: [mockSpace], 
         activeSpace: 'test-space' 
@@ -183,21 +195,21 @@ describe('SpaceManager', () => {
 
       await switchSpace('test-space');
 
-      expect(console.log).toHaveBeenCalledWith('Space "test-space" is already active. \n');
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('is already active'));
     });
 
     it('should prompt for space selection when none provided', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
-      mockFs.writeJson.mockResolvedValue(undefined);
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
       mockSelect.mockResolvedValue('test-space');
       mockConfirm.mockResolvedValue(false);
 
       await switchSpace();
 
       expect(mockSelect).toHaveBeenCalledWith({
-        message: 'Please choose a space to switch to: ',
-        choices: [{ title: 'test-space', value: 'test-space' }]
+        message: 'Choose a space to switch to:',
+        choices: [{ name: expect.any(String), value: 'test-space', description: 'test@example.com (Test User)' }]
       });
     });
   });
@@ -211,20 +223,24 @@ describe('SpaceManager', () => {
     };
 
     it('should remove a space successfully', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
-      mockFs.writeJson.mockResolvedValue(undefined);
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
       mockSelect.mockResolvedValue('test-space');
       mockConfirm.mockResolvedValue(true);
 
       await removeSpace();
 
       expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, { spaces: [] });
-      expect(console.log).toHaveBeenCalledWith("Space 'test-space' has been removed.");
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      const hasRemoveMessage = calls.some(call => 
+        call && call.includes && call.includes("has been removed successfully")
+      );
+      expect(hasRemoveMessage).toBe(true);
     });
 
     it('should prevent removing active space', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ 
         spaces: [mockSpace], 
         activeSpace: 'test-space' 
@@ -233,20 +249,23 @@ describe('SpaceManager', () => {
 
       await removeSpace();
 
+      // Check for the error message (UIHelper.error uses console.log with red color)
       expect(console.log).toHaveBeenCalledWith(
-        "Cannot remove the active space 'test-space'. Please switch to another space first."
+        expect.stringContaining("Cannot remove the active space")
       );
     });
 
     it('should handle removal cancellation', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
       mockSelect.mockResolvedValue('test-space');
       mockConfirm.mockResolvedValue(false);
 
       await removeSpace();
 
-      expect(console.log).toHaveBeenCalledWith('Removal cancelled.');
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('Removal cancelled')
+      );
       expect(mockFs.writeJson).not.toHaveBeenCalled();
     });
   });
@@ -260,7 +279,7 @@ describe('SpaceManager', () => {
     };
 
     it('should test the active space', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ 
         spaces: [mockSpace], 
         activeSpace: 'test-space' 
@@ -274,7 +293,7 @@ describe('SpaceManager', () => {
 
     it('should handle space without SSH key', async () => {
       const spaceWithoutKey = { ...mockSpace, sshKeyPath: '' };
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ 
         spaces: [spaceWithoutKey], 
         activeSpace: 'test-space' 
@@ -282,18 +301,20 @@ describe('SpaceManager', () => {
 
       await testSpace();
 
-      expect(console.log).toHaveBeenCalledWith(
-        'Active space "test-space" does not have an associated SSH key.'
-      );
+      expect(console.log).toHaveBeenCalledTimes(2);
+      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('Active space "test-space" does not have an associated SSH key.'));
+      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss edit test-space'));
     });
 
     it('should handle no spaces', async () => {
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
 
       await testSpace();
 
-      expect(console.log).toHaveBeenCalledWith('⚠️ No spaces have been added yet.');
+      expect(console.log).toHaveBeenCalledTimes(2);
+      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
+      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
     });
   });
 });

@@ -1,4 +1,3 @@
-// @ts-ignore - no types available
 import keygen from 'ssh-keygen';
 import fs from 'fs-extra';
 import os from 'os';

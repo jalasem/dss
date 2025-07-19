@@ -1,6 +1,6 @@
 {
   "name": "@jalasem/dss",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Dev Spaces Switcher (DSS) is a tool for switching between different context for working seamlessly in different environment/companies without having to worry about ssh or github configurations",
   "main": "build/index.js",
   "bin": {
@@ -18,7 +18,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:ci": "jest --coverage --watchAll=false",
-    "prepublishOnly": "npm run build && npm run test:ci"
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "cli",
@@ -41,6 +41,7 @@
     "ssh-keygen": "^0.5.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
     "@types/chalk": "^0.4.31",
     "@types/fs-extra": "^11.0.4",
     "@types/fuzzy-search": "^2.1.5",

@@ -4,13 +4,11 @@ import os from 'os';
 import { generateSSHKey } from '../../src/utils/sshKeyGen';
 
 jest.mock('fs-extra');
-jest.mock('ssh-keygen');
+jest.mock('ssh-keygen', () => jest.fn());
+jest.mock('../../src/utils/ui');
 
 const mockFs = fs as jest.Mocked<typeof fs>;
-
-// Mock the ssh-keygen module
-const mockKeygen = jest.fn();
-jest.doMock('ssh-keygen', () => mockKeygen);
+const mockKeygen = require('ssh-keygen') as jest.MockedFunction<any>;
 
 describe('SSH Key Generation', () => {
   const mockHomeDir = '/mock/home';
@@ -21,11 +19,11 @@ describe('SSH Key Generation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(os, 'homedir').mockReturnValue(mockHomeDir);
-    mockFs.ensureDir.mockResolvedValue(undefined);
+    (mockFs.ensureDir as jest.Mock).mockResolvedValue(undefined);
   });
 
   it('should generate SSH key successfully', async () => {
-    mockKeygen.mockImplementation((options, callback) => {
+    mockKeygen.mockImplementation((options: any, callback: any) => {
       expect(options).toEqual({
         location: expectedKeyPath,
         comment: email,
@@ -50,7 +48,7 @@ describe('SSH Key Generation', () => {
 
   it('should handle SSH key generation errors', async () => {
     const mockError = new Error('SSH key generation failed');
-    mockKeygen.mockImplementation((options, callback) => {
+    mockKeygen.mockImplementation((options: any, callback: any) => {
       callback(mockError);
     });
 
@@ -64,7 +62,7 @@ describe('SSH Key Generation', () => {
   });
 
   it('should create proper directory structure', async () => {
-    mockKeygen.mockImplementation((options, callback) => {
+    mockKeygen.mockImplementation((options: any, callback: any) => {
       callback(null);
     });
 
@@ -79,7 +77,7 @@ describe('SSH Key Generation', () => {
     const specialSpaceName = 'test space-with_special.chars';
     const expectedPath = path.join(mockHomeDir, '.dss', 'spaces', specialSpaceName, 'id_rsa');
 
-    mockKeygen.mockImplementation((options, callback) => {
+    mockKeygen.mockImplementation((options: any, callback: any) => {
       expect(options.location).toBe(expectedPath);
       callback(null);
     });

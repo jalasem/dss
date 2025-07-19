@@ -1,20 +1,15 @@
-import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
 
 // Mock the home directory for tests
-const mockHomeDir = path.join(__dirname, '__mocks__', 'home');
+const mockHomeDir = '/mock/home';
 
-beforeEach(async () => {
-  // Ensure mock home directory exists
-  await fs.ensureDir(mockHomeDir);
-  
+beforeEach(() => {
   // Mock os.homedir to return our test directory
   jest.spyOn(os, 'homedir').mockReturnValue(mockHomeDir);
 });
 
-afterEach(async () => {
-  // Clean up mock directories after each test
-  await fs.remove(mockHomeDir);
+afterEach(() => {
+  // Restore all mocks after each test
   jest.restoreAllMocks();
 });

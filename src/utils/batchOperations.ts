@@ -1,10 +1,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { select, confirm, checkbox } from '@inquirer/prompts';
+import { select, confirm, checkbox, input } from '@inquirer/prompts';
 import { IConfig, ISpace } from './types';
 import { UIHelper } from './ui';
 import { switchSpace } from './SpaceManager';
+import { generateSSHKey } from './sshKeyGen';
 
 const configPath = path.join(os.homedir(), '.dss', 'spaces', 'config.json');
 
@@ -211,7 +212,145 @@ export async function bulkUpdateSpaces() {
     return;
   }
 
-  // Implementation would depend on the update type
-  UIHelper.info(`Bulk update feature for '${updateType}' coming soon!`);
   UIHelper.info(`Selected ${selectedSpaces.length} spaces for update.`);
+  
+  let updatedCount = 0;
+  
+  try {
+    switch (updateType) {
+      case 'email-domain': {
+        const oldDomain = await input({
+          message: 'Enter the old domain to replace (e.g., oldcompany.com):',
+          validate: (input) => input.trim().length > 0 || 'Domain is required'
+        });
+        
+        const newDomain = await input({
+          message: 'Enter the new domain (e.g., newcompany.com):',
+          validate: (input) => input.trim().length > 0 || 'Domain is required'
+        });
+        
+        UIHelper.printProgress(`Updating email domains from ${oldDomain} to ${newDomain}`);
+        
+        for (const spaceName of selectedSpaces) {
+          const space = config.spaces.find(s => s.name === spaceName);
+          if (space && space.email.includes(oldDomain)) {
+            space.email = space.email.replace(oldDomain, newDomain);
+            updatedCount++;
+          }
+        }
+        break;
+      }
+        
+      case 'username-pattern': {
+        const operation = await select({
+          message: 'What would you like to do with usernames?',
+          choices: [
+            { name: 'Add prefix', value: 'add-prefix' },
+            { name: 'Add suffix', value: 'add-suffix' },
+            { name: 'Replace text', value: 'replace' }
+          ]
+        });
+        
+        if (operation === 'add-prefix') {
+          const prefix = await input({
+            message: 'Enter prefix to add:',
+            validate: (input) => input.trim().length > 0 || 'Prefix is required'
+          });
+          
+          UIHelper.printProgress(`Adding prefix "${prefix}" to usernames`);
+          
+          for (const spaceName of selectedSpaces) {
+            const space = config.spaces.find(s => s.name === spaceName);
+            if (space && !space.userName.startsWith(prefix)) {
+              space.userName = prefix + space.userName;
+              updatedCount++;
+            }
+          }
+        } else if (operation === 'add-suffix') {
+          const suffix = await input({
+            message: 'Enter suffix to add:',
+            validate: (input) => input.trim().length > 0 || 'Suffix is required'
+          });
+          
+          UIHelper.printProgress(`Adding suffix "${suffix}" to usernames`);
+          
+          for (const spaceName of selectedSpaces) {
+            const space = config.spaces.find(s => s.name === spaceName);
+            if (space && !space.userName.endsWith(suffix)) {
+              space.userName = space.userName + suffix;
+              updatedCount++;
+            }
+          }
+        } else if (operation === 'replace') {
+          const oldText = await input({
+            message: 'Enter text to replace:',
+            validate: (input) => input.trim().length > 0 || 'Text is required'
+          });
+          
+          const newText = await input({
+            message: 'Enter replacement text:',
+            validate: (input) => input.trim().length > 0 || 'Replacement text is required'
+          });
+          
+          UIHelper.printProgress(`Replacing "${oldText}" with "${newText}" in usernames`);
+          
+          for (const spaceName of selectedSpaces) {
+            const space = config.spaces.find(s => s.name === spaceName);
+            if (space && space.userName.includes(oldText)) {
+              space.userName = space.userName.replace(new RegExp(oldText, 'g'), newText);
+              updatedCount++;
+            }
+          }
+        }
+        break;
+      }
+        
+      case 'regenerate-keys': {
+        const confirmRegenerate = await confirm({
+          message: 'Are you sure you want to regenerate SSH keys? This will replace existing keys.',
+          default: false
+        });
+        
+        if (!confirmRegenerate) {
+          UIHelper.info('SSH key regeneration cancelled.');
+          return;
+        }
+        
+        UIHelper.printProgress('Regenerating SSH keys');
+        
+        for (const spaceName of selectedSpaces) {
+          const space = config.spaces.find(s => s.name === spaceName);
+          if (space) {
+            try {
+              UIHelper.updateProgress(`Regenerating SSH key for ${space.name}`);
+              const newKeyPath = await generateSSHKey(space.name, space.email);
+              space.sshKeyPath = newKeyPath;
+              updatedCount++;
+            } catch (error) {
+              UIHelper.error(`Failed to regenerate SSH key for ${space.name}: ${(error as Error).message}`);
+            }
+          }
+        }
+        break;
+      }
+    }
+    
+    UIHelper.clearProgress();
+    
+    if (updatedCount > 0) {
+      await fs.writeJson(configPath, config);
+      UIHelper.printSuccessBox('Bulk Update Complete', [
+        `✓ ${updatedCount} spaces updated successfully`,
+        `✓ Operation: ${updateType}`,
+        '',
+        'Use `dss list` to view updated spaces'
+      ]);
+    } else {
+      UIHelper.info('No spaces were updated.');
+    }
+    
+  } catch (error) {
+    UIHelper.clearProgress();
+    UIHelper.error(`Bulk update failed: ${(error as Error).message}`);
+  }
 }

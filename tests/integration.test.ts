@@ -92,13 +92,13 @@ describe('Integration Tests', () => {
   describe('Configuration Management', () => {
     it('should create configuration directory structure', async () => {
       const configDir = path.join(testHomeDir, '.dss', 'spaces');
-      const configFile = path.join(configDir, 'config.json');
       
       // The config should be created when we run any command
       try {
-        execSync(`node ${CLI_PATH} list`, { 
+        const result = execSync(`node ${CLI_PATH} list`, { 
           encoding: 'utf8',
-          stdio: 'pipe' 
+          stdio: 'pipe',
+          env: { ...process.env, HOME: testHomeDir }
         });
       } catch (error) {
         // Command might fail due to no spaces, but config should be created
@@ -114,12 +114,13 @@ describe('Integration Tests', () => {
       try {
         const result = execSync(`node ${CLI_PATH} list`, { 
           encoding: 'utf8',
-          stdio: 'pipe' 
+          stdio: 'pipe',
+          env: { ...process.env, HOME: testHomeDir }
         });
-        expect(result).toMatch(/no spaces|empty/i);
+        expect(result).toMatch(/no spaces|empty|⚠️/i);
       } catch (error: any) {
         const output = error.stdout || error.stderr || '';
-        expect(output).toMatch(/no spaces|empty/i);
+        expect(output).toMatch(/no spaces|empty|⚠️/i);
       }
     });
   });

@@ -5,6 +5,7 @@ import { performance } from 'perf_hooks';
 import { addSpace, listSpaces, switchSpace } from '../src/utils/SpaceManager';
 
 // Mock external dependencies for performance tests
+jest.mock('fs-extra');
 jest.mock('child_process');
 jest.mock('@inquirer/prompts');
 jest.mock('../src/utils/sshKeyGen');
@@ -13,6 +14,7 @@ jest.mock('../src/utils/index');
 describe('Performance Tests', () => {
   const mockHomeDir = '/mock/home';
   const mockConfigPath = path.join(mockHomeDir, '.dss', 'spaces', 'config.json');
+  const mockFs = fs as jest.Mocked<typeof fs>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -30,8 +32,7 @@ describe('Performance Tests', () => {
         sshKeyPath: `/mock/path/space-${i}/id_rsa`
       }));
 
-      const mockFs = fs as jest.Mocked<typeof fs>;
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: mockSpaces });
 
       const startTime = performance.now();
@@ -50,8 +51,7 @@ describe('Performance Tests', () => {
         sshKeyPath: '/mock/path/test-space/id_rsa'
       };
 
-      const mockFs = fs as jest.Mocked<typeof fs>;
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
       mockFs.writeJson.mockResolvedValue();
 
@@ -70,8 +70,7 @@ describe('Performance Tests', () => {
     });
 
     it('should handle configuration file operations efficiently', async () => {
-      const mockFs = fs as jest.Mocked<typeof fs>;
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
       mockFs.writeJson.mockResolvedValue();
 
@@ -95,8 +94,7 @@ describe('Performance Tests', () => {
 
   describe('Memory Usage Tests', () => {
     it('should not leak memory during repeated operations', async () => {
-      const mockFs = fs as jest.Mocked<typeof fs>;
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
 
       const initialMemory = process.memoryUsage().heapUsed;
@@ -121,8 +119,7 @@ describe('Performance Tests', () => {
 
   describe('Stress Tests', () => {
     it('should handle concurrent operations gracefully', async () => {
-      const mockFs = fs as jest.Mocked<typeof fs>;
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
 
       const concurrentOperations = Array.from({ length: 20 }, () => listSpaces());
@@ -143,8 +140,7 @@ describe('Performance Tests', () => {
         sshKeyPath: `/mock/path/space-${i}/id_rsa`
       }));
 
-      const mockFs = fs as jest.Mocked<typeof fs>;
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: largeSpacesArray });
 
       const startTime = performance.now();
@@ -158,8 +154,7 @@ describe('Performance Tests', () => {
 
   describe('Benchmarks', () => {
     it('should benchmark basic operations', async () => {
-      const mockFs = fs as jest.Mocked<typeof fs>;
-      mockFs.ensureFile.mockResolvedValue(undefined);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [] });
 
       const benchmarks = {
