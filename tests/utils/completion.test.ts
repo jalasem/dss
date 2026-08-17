@@ -11,12 +11,49 @@ jest.mock('@inquirer/prompts', () => ({
 }));
 
 function hasZsh(): boolean {
+  const environment = createZshEnvironment('dss-zsh-availability-', false);
+
   try {
-    execFileSync('zsh', ['-lc', 'exit 0'], { stdio: 'pipe' });
+    execFileSync('zsh', ['-fc', 'exit 0'], {
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        HOME: environment.homeDirectory,
+        ZDOTDIR: environment.zdotdir
+      }
+    });
     return true;
   } catch {
     return false;
+  } finally {
+    fs.rmSync(environment.temporaryDirectory, { recursive: true, force: true });
   }
+}
+
+function createZshEnvironment(prefix: string, poisonStartupFiles: boolean): {
+  temporaryDirectory: string;
+  homeDirectory: string;
+  zdotdir: string;
+} {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const homeDirectory = path.join(temporaryDirectory, 'home');
+  const zdotdir = path.join(temporaryDirectory, 'zdotdir');
+
+  fs.mkdirSync(homeDirectory, { recursive: true });
+  fs.mkdirSync(zdotdir, { recursive: true });
+
+  if (poisonStartupFiles) {
+    const poisonScript = 'print -r -- "startup-files-loaded"\nexit 91\n';
+    fs.writeFileSync(path.join(homeDirectory, '.zshenv'), poisonScript);
+    fs.writeFileSync(path.join(zdotdir, '.zshenv'), poisonScript);
+    fs.writeFileSync(path.join(zdotdir, '.zshrc'), poisonScript);
+  }
+
+  return {
+    temporaryDirectory,
+    homeDirectory,
+    zdotdir
+  };
 }
 
 describe('completion script generation', () => {
@@ -105,7 +142,8 @@ describe('completion script generation', () => {
   zshIt('generates parseable zsh completions that extract configured space names', async () => {
     const output = await captureCompletionOutput('zsh');
     const script = extractGeneratedScript(output);
-    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'dss-zsh-completion-'));
+    const environment = createZshEnvironment('dss-zsh-completion-', true);
+    const temporaryDirectory = environment.temporaryDirectory;
     const scriptPath = path.join(temporaryDirectory, '_dss');
 
     fs.writeFileSync(scriptPath, script);
@@ -115,7 +153,14 @@ describe('completion script generation', () => {
       expect(script).not.toContain('dummy');
 
       expect(() => {
-        execFileSync('zsh', ['-n', scriptPath], { stdio: 'pipe' });
+        execFileSync('zsh', ['-fn', scriptPath], {
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            HOME: environment.homeDirectory,
+            ZDOTDIR: environment.zdotdir
+          }
+        });
       }).not.toThrow();
     } finally {
       fs.rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -125,9 +170,10 @@ describe('completion script generation', () => {
   zshIt('sources zsh completions and offers configured spaces for bind', async () => {
     const output = await captureCompletionOutput('zsh');
     const script = extractGeneratedScript(output);
-    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'dss-zsh-runtime-'));
+    const environment = createZshEnvironment('dss-zsh-runtime-', true);
+    const temporaryDirectory = environment.temporaryDirectory;
     const scriptPath = path.join(temporaryDirectory, '_dss');
-    const spacesDirectory = path.join(temporaryDirectory, '.dss', 'spaces');
+    const spacesDirectory = path.join(environment.homeDirectory, '.dss', 'spaces');
     const harnessPath = path.join(temporaryDirectory, 'harness.zsh');
 
     fs.mkdirSync(spacesDirectory, { recursive: true });
@@ -169,11 +215,12 @@ describe('completion script generation', () => {
     );
 
     try {
-      const runtimeOutput = execFileSync('zsh', [harnessPath], {
+      const runtimeOutput = execFileSync('zsh', ['-fc', `source ${JSON.stringify(harnessPath)}`], {
         encoding: 'utf8',
         env: {
           ...process.env,
-          HOME: temporaryDirectory
+          HOME: environment.homeDirectory,
+          ZDOTDIR: environment.zdotdir
         },
         stdio: ['ignore', 'pipe', 'pipe']
       }).trim();
