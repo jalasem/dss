@@ -176,6 +176,10 @@ run Git inside that repository, while `dss switch` remains the separate global
 mode for changing your active DSS space everywhere else. A repository's linked
 Git worktrees can each be bound to a different DSS space.
 
+DSS registers the private file with a Git `includeIf.gitdir:` condition for the
+current worktree. Unbinding removes only that exact DSS condition and file; it
+does not change `extensions.worktreeConfig` or unrelated Git includes.
+
 ### Advanced Features
 
 <details>

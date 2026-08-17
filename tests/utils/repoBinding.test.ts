@@ -39,6 +39,36 @@ function readGitValues(cwd: string, args: string[]): string[] {
   }
 }
 
+function readOptionalGitValue(cwd: string, args: string[]): string | undefined {
+  try {
+    return runGit(cwd, args);
+  } catch (error) {
+    if ((error as { status?: unknown }).status === 1) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function bindingConditionKey(repository: string): Promise<string> {
+  const gitDirectory = await fs.realpath(
+    runGit(repository, ['rev-parse', '--absolute-git-dir'])
+  );
+  const pattern = gitDirectory
+    .replace(/[?*[\]\\]/g, '\\$&')
+    .replace(/[\r\n]/g, '?');
+  return `includeIf.gitdir:${pattern}.path`;
+}
+
+async function commitFixture(repository: string): Promise<string> {
+  runGit(repository, ['config', 'user.name', 'Fixture User']);
+  runGit(repository, ['config', 'user.email', 'fixture@example.com']);
+  await fs.writeFile(path.join(repository, 'README.md'), 'fixture\n');
+  runGit(repository, ['add', 'README.md']);
+  runGit(repository, ['commit', '-m', 'fixture']);
+  return runGit(repository, ['branch', '--show-current']);
+}
+
 function readOptionalGlobalGitConfig(key: string): string | undefined {
   try {
     return execFileSync('git', ['config', '--global', '--get', key], {
@@ -183,9 +213,10 @@ describe('repository targeting', () => {
     const repository = await createRepository(parent, 'project');
 
     const status = await bindRepository(repository, personalSpace);
-    const includes = runGit(repository, ['config', '--worktree', '--get-all', 'include.path'])
-      .split('\n')
-      .filter(Boolean);
+    const conditionKey = await bindingConditionKey(repository);
+    const includes = readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', conditionKey
+    ]);
 
     expect(status.bound).toBe(true);
     expect(status.spaceName).toBe('personal');
@@ -202,11 +233,7 @@ describe('repository targeting', () => {
   it('keeps linked worktree bindings independent through rebind and unbind', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project');
-    runGit(repository, ['config', 'user.name', 'Fixture User']);
-    runGit(repository, ['config', 'user.email', 'fixture@example.com']);
-    await fs.writeFile(path.join(repository, 'README.md'), 'fixture\n');
-    runGit(repository, ['add', 'README.md']);
-    runGit(repository, ['commit', '-m', 'fixture']);
+    await commitFixture(repository);
     const linkedWorktree = path.join(parent, 'linked');
     runGit(repository, ['worktree', 'add', '-b', 'linked-fixture', linkedWorktree]);
 
@@ -252,6 +279,111 @@ describe('repository targeting', () => {
       userName: 'Fixture User',
       email: 'fixture@example.com'
     });
+    expect(readOptionalGitValue(repository, [
+      'config', '--local', '--get', 'extensions.worktreeConfig'
+    ])).toBeUndefined();
+  });
+
+  it('preserves a shared core.worktree repository through bind and unbind', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = path.join(parent, 'worktree');
+    const gitDirectory = path.join(parent, 'shared.git');
+    execFileSync('git', ['init', '--separate-git-dir', gitDirectory, repository], {
+      encoding: 'utf8',
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    runGit(repository, ['config', '--local', 'core.worktree', repository]);
+    const originalRoot = runGit(repository, ['rev-parse', '--show-toplevel']);
+    const originalCoreWorktree = runGit(repository, [
+      'config', '--local', '--get', 'core.worktree'
+    ]);
+
+    await expect(bindRepository(repository, personalSpace)).resolves.toMatchObject({
+      bound: true,
+      spaceName: 'personal'
+    });
+    expect(runGit(repository, ['rev-parse', '--show-toplevel'])).toBe(originalRoot);
+    expect(runGit(repository, ['config', '--local', '--get', 'core.worktree']))
+      .toBe(originalCoreWorktree);
+
+    await unbindRepository(repository);
+    expect(runGit(repository, ['rev-parse', '--show-toplevel'])).toBe(originalRoot);
+    expect(runGit(repository, ['config', '--local', '--get', 'core.worktree']))
+      .toBe(originalCoreWorktree);
+  });
+
+  it('binds a linked worktree created from a bare repository without changing bare behavior', async () => {
+    const parent = await createTemporaryDirectory();
+    const source = await createRepository(parent, 'source');
+    const branch = await commitFixture(source);
+    const bareRepository = path.join(parent, 'bare.git');
+    execFileSync('git', ['init', '--bare', bareRepository], {
+      encoding: 'utf8',
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    runGit(source, ['remote', 'add', 'origin', bareRepository]);
+    runGit(source, ['push', 'origin', branch]);
+    const linkedWorktree = path.join(parent, 'bare-linked');
+    runGit(bareRepository, [
+      'worktree', 'add', '-b', 'bare-linked-fixture', linkedWorktree, branch
+    ]);
+
+    await expect(bindRepository(linkedWorktree, personalSpace)).resolves.toMatchObject({
+      bound: true,
+      spaceName: 'personal'
+    });
+    expect(runGit(linkedWorktree, ['rev-parse', '--is-bare-repository'])).toBe('false');
+    expect(runGit(bareRepository, ['config', '--local', '--get', 'core.bare'])).toBe('true');
+
+    await unbindRepository(linkedWorktree);
+    expect(runGit(linkedWorktree, ['rev-parse', '--show-toplevel']))
+      .toBe(await fs.realpath(linkedWorktree));
+    expect(runGit(bareRepository, ['rev-parse', '--is-bare-repository'])).toBe('true');
+  });
+
+  it('does not activate a dormant config.worktree during bind or after unbind', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    runGit(repository, ['config', '--local', 'user.name', 'Original User']);
+    runGit(repository, ['config', '--local', 'user.email', 'original@example.com']);
+    const gitDirectory = runGit(repository, ['rev-parse', '--absolute-git-dir']);
+    const dormantConfig = path.join(gitDirectory, 'config.worktree');
+    runGit(repository, [
+      'config', '--file', dormantConfig, 'user.email', 'dormant@example.com'
+    ]);
+
+    expect(runGit(repository, ['config', 'user.email'])).toBe('original@example.com');
+    await bindRepository(repository, personalSpace);
+    expect(runGit(repository, ['config', 'user.email'])).toBe('personal@example.com');
+
+    await unbindRepository(repository);
+    expect(runGit(repository, ['config', 'user.email'])).toBe('original@example.com');
+    expect(runGit(repository, [
+      'config', '--file', dormantConfig, '--get', 'user.email'
+    ])).toBe('dormant@example.com');
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['false', 'false']
+  ])('leaves extensions.worktreeConfig exactly %s after bind and unbind', async (_label, value) => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    if (value !== undefined) {
+      runGit(repository, ['config', '--local', 'extensions.worktreeConfig', value]);
+    }
+
+    const before = readOptionalGitValue(repository, [
+      'config', '--local', '--get', 'extensions.worktreeConfig'
+    ]);
+    await bindRepository(repository, personalSpace);
+    await unbindRepository(repository);
+
+    expect(readOptionalGitValue(repository, [
+      'config', '--local', '--get', 'extensions.worktreeConfig'
+    ])).toBe(before);
   });
 
   it('continues recursive binding after an individual repository fails', async () => {
@@ -308,8 +440,59 @@ describe('repository targeting', () => {
     await bindRepository(repository, workSpace);
 
     expect(runGit(repository, ['config', 'dss.space'])).toBe('work');
-    expect(runGit(repository, ['config', '--worktree', '--get-all', 'include.path']).split('\n'))
-      .toHaveLength(1);
+    expect(readGitValues(repository, [
+      'config',
+      '-z',
+      '--local',
+      '--get-all',
+      await bindingConditionKey(repository)
+    ])).toHaveLength(1);
+  });
+
+  it('normalizes only duplicate DSS conditional includes and preserves unrelated entries', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const binding = await bindRepository(repository, personalSpace);
+    const conditionKey = await bindingConditionKey(repository);
+    const unrelatedKey = `includeIf.gitdir:${path.join(parent, 'unrelated.git')}.path`;
+    const unrelatedPath = path.join(parent, 'unrelated.config');
+    runGit(repository, ['config', '--local', '--add', conditionKey, binding.configPath]);
+    runGit(repository, ['config', '--local', '--add', conditionKey, binding.configPath]);
+    runGit(repository, ['config', '--local', '--add', conditionKey, unrelatedPath]);
+    runGit(repository, ['config', '--local', '--add', unrelatedKey, unrelatedPath]);
+
+    await bindRepository(repository, workSpace);
+    expect(readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', conditionKey
+    ])).toEqual([unrelatedPath, binding.configPath]);
+    expect(readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', unrelatedKey
+    ])).toEqual([unrelatedPath]);
+
+    await unbindRepository(repository);
+    expect(readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', conditionKey
+    ])).toEqual([unrelatedPath]);
+    expect(readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', unrelatedKey
+    ])).toEqual([unrelatedPath]);
+  });
+
+  it('escapes glob metacharacters in an exact gitdir condition', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project[abc]*?');
+
+    const binding = await bindRepository(repository, personalSpace);
+
+    expect(binding).toMatchObject({ bound: true, spaceName: 'personal' });
+    expect(runGit(repository, ['config', 'user.email'])).toBe('personal@example.com');
+    expect(readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', await bindingConditionKey(repository)
+    ])).toEqual([binding.configPath]);
+    expect(await fs.readFile(path.join(repository, '.git', 'config'), 'utf8'))
+      .toContain('project\\\\[abc\\\\]\\\\*\\\\?/.git');
+
+    await expect(unbindRepository(repository)).resolves.toMatchObject({ bound: false });
   });
 
   it('binds, rebinds, reports, and unbinds a repository whose path contains a newline', async () => {
@@ -325,9 +508,9 @@ describe('repository targeting', () => {
     expect(readGitValues(repository, [
       'config',
       '-z',
-      '--worktree',
+      '--local',
       '--get-all',
-      'include.path'
+      await bindingConditionKey(repository)
     ])).toEqual([rebound.configPath]);
 
     const unbound = await unbindRepository(repository);
@@ -335,9 +518,9 @@ describe('repository targeting', () => {
     expect(readGitValues(repository, [
       'config',
       '-z',
-      '--worktree',
+      '--local',
       '--get-all',
-      'include.path'
+      await bindingConditionKey(repository)
     ])).toEqual([]);
     await expect(fs.pathExists(rebound.configPath)).resolves.toBe(false);
   });
@@ -448,7 +631,13 @@ describe('repository targeting', () => {
     await expect(fs.pathExists(externalConfig)).resolves.toBe(false);
 
     await fs.writeFile(externalConfig, '[dss]\n    space = external\n');
-    runGit(repository, ['config', '--local', '--add', 'include.path', expectedConfigPath]);
+    runGit(repository, [
+      'config',
+      '--local',
+      '--add',
+      await bindingConditionKey(repository),
+      expectedConfigPath
+    ]);
 
     await expect(unbindRepository(repository)).rejects.toThrow(/symbolic link/i);
     await expect(fs.readFile(externalConfig, 'utf8')).resolves.toBe(
@@ -456,10 +645,63 @@ describe('repository targeting', () => {
     );
   });
 
+  it('removes a newly written DSS file when conditional include registration fails', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const preview = await bindRepository(repository, personalSpace, { dryRun: true });
+    const conditionKey = await bindingConditionKey(repository);
+    const gitWrapperDirectory = path.join(parent, 'git-wrapper-registration');
+    const gitWrapper = path.join(gitWrapperDirectory, 'git');
+    const gitExecutable = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    const originalPath = process.env.PATH;
+    const originalGitExecutable = process.env.DSS_TEST_REAL_GIT;
+    await fs.ensureDir(gitWrapperDirectory);
+    await fs.writeFile(
+      gitWrapper,
+      [
+        '#!/usr/bin/env node',
+        "const { execFileSync } = require('child_process');",
+        'const args = process.argv.slice(2);',
+        "const configIndex = args.indexOf('config');",
+        "const key = args[configIndex + 3] || '';",
+        "if (args[configIndex + 1] === '--local' && args[configIndex + 2] === '--add' && key.startsWith('includeIf.gitdir:')) {",
+        "  process.stderr.write('simulated registration failure\\n');",
+        '  process.exit(2);',
+        '}',
+        "execFileSync(process.env.DSS_TEST_REAL_GIT, args, { stdio: 'inherit' });",
+        ''
+      ].join('\n')
+    );
+    await fs.chmod(gitWrapper, 0o755);
+    process.env.DSS_TEST_REAL_GIT = gitExecutable;
+    process.env.PATH = `${gitWrapperDirectory}${path.delimiter}${originalPath ?? ''}`;
+
+    try {
+      await expect(bindRepository(repository, personalSpace))
+        .rejects.toThrow('simulated registration failure');
+      await expect(fs.pathExists(preview.configPath)).resolves.toBe(false);
+      await expect(fs.pathExists(path.dirname(preview.configPath))).resolves.toBe(false);
+      expect(readGitValues(repository, [
+        'config', '-z', '--local', '--get-all', conditionKey
+      ])).toEqual([]);
+      expect(readOptionalGitValue(repository, [
+        'config', '--local', '--get', 'extensions.worktreeConfig'
+      ])).toBeUndefined();
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalGitExecutable === undefined) {
+        delete process.env.DSS_TEST_REAL_GIT;
+      } else {
+        process.env.DSS_TEST_REAL_GIT = originalGitExecutable;
+      }
+    }
+  });
+
   it('preserves the DSS config when the local include read fails', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project');
     const binding = await bindRepository(repository, personalSpace);
+    const conditionKey = await bindingConditionKey(repository);
     const gitWrapperDirectory = path.join(parent, 'git-wrapper');
     const gitWrapper = path.join(gitWrapperDirectory, 'git');
     const gitExecutable = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
@@ -472,7 +714,9 @@ describe('repository targeting', () => {
         '#!/usr/bin/env node',
         "const { execFileSync } = require('child_process');",
         'const args = process.argv.slice(2);',
-        "if (args.slice(-5).join(' ') === 'config -z --worktree --get-all include.path') {",
+        "const configIndex = args.indexOf('config');",
+        "const key = args[configIndex + 4] || '';",
+        "if (args.slice(configIndex, configIndex + 4).join(' ') === 'config -z --local --get-all' && key.startsWith('includeIf.gitdir:')) {",
         "  process.stderr.write('simulated config failure\\n');",
         '  process.exit(2);',
         '}',
@@ -490,9 +734,9 @@ describe('repository targeting', () => {
       expect(() => runGit(repository, [
         'config',
         '-z',
-        '--worktree',
+        '--local',
         '--get-all',
-        'include.path'
+        conditionKey
       ]))
         .toThrow('simulated config failure');
       await expect(unbindRepository(repository)).rejects.toThrow('simulated config failure');

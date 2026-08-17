@@ -53,6 +53,11 @@ interface BindingOptions {
   dryRun?: boolean;
 }
 
+interface BindingLocation {
+  configPath: string;
+  conditionKey: string;
+}
+
 export interface BatchBindingFailure {
   repositoryPath: string;
   message: string;
@@ -117,13 +122,24 @@ async function assertBindingConfigPathContained(
   }
 }
 
-async function resolveBindingConfigPath(repositoryRoot: string): Promise<string> {
+function escapeGitdirPattern(gitDirectory: string): string {
+  // Git config subsection names cannot contain literal newlines.
+  return gitDirectory
+    .replace(/\\/g, '\\\\')
+    .replace(/([*?[\]])/g, '\\$1')
+    .replace(/[\r\n]/g, '?');
+}
+
+async function resolveBindingLocation(repositoryRoot: string): Promise<BindingLocation> {
   const gitDirectory = await runGit(repositoryRoot, ['rev-parse', '--absolute-git-dir']);
   const realGitDirectory = await fs.realpath(gitDirectory);
   const gitPath = await runGit(repositoryRoot, ['rev-parse', '--git-path', 'dss/config']);
   const configPath = path.resolve(repositoryRoot, gitPath);
   await assertBindingConfigPathContained(configPath, realGitDirectory);
-  return configPath;
+  return {
+    configPath,
+    conditionKey: `includeIf.gitdir:${escapeGitdirPattern(realGitDirectory)}.path`
+  };
 }
 
 async function readOptionalGitConfig(
@@ -141,20 +157,70 @@ async function readOptionalGitConfig(
   }
 }
 
-async function getWorktreeIncludes(repositoryRoot: string): Promise<string[]> {
+async function getConditionalIncludes(
+  repositoryRoot: string,
+  conditionKey: string
+): Promise<string[]> {
   const output = await readOptionalGitConfig(repositoryRoot, [
-    'config', '-z', '--worktree', '--get-all', 'include.path'
+    'config', '-z', '--local', '--get-all', conditionKey
   ], false);
   return output ? output.split('\0').filter(Boolean) : [];
 }
 
-async function enableWorktreeConfig(repositoryRoot: string): Promise<void> {
+async function removeExactConditionalIncludes(
+  repositoryRoot: string,
+  conditionKey: string,
+  configPath: string
+): Promise<void> {
   await runGit(repositoryRoot, [
     'config',
     '--local',
-    'extensions.worktreeConfig',
-    'true'
+    '--fixed-value',
+    '--unset-all',
+    conditionKey,
+    configPath
   ]);
+}
+
+async function addConditionalInclude(
+  repositoryRoot: string,
+  conditionKey: string,
+  configPath: string
+): Promise<void> {
+  await runGit(repositoryRoot, [
+    'config', '--local', '--add', conditionKey, configPath
+  ]);
+}
+
+async function normalizeConditionalInclude(
+  repositoryRoot: string,
+  conditionKey: string,
+  configPath: string,
+  includes: string[]
+): Promise<void> {
+  const exactCount = includes.filter(include => include === configPath).length;
+  if (exactCount === 1) return;
+
+  if (exactCount > 0) {
+    await removeExactConditionalIncludes(repositoryRoot, conditionKey, configPath);
+  }
+
+  try {
+    await addConditionalInclude(repositoryRoot, conditionKey, configPath);
+  } catch (error) {
+    if (exactCount > 0) {
+      try {
+        for (let index = 0; index < exactCount; index += 1) {
+          await addConditionalInclude(repositoryRoot, conditionKey, configPath);
+        }
+      } catch (rollbackError) {
+        throw new Error(
+          `${errorMessage(error)}; failed to restore conditional includes: ${errorMessage(rollbackError)}`
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 async function writeBindingConfig(configPath: string, space: ISpace): Promise<void> {
@@ -179,6 +245,29 @@ async function writeBindingConfig(configPath: string, space: ISpace): Promise<vo
     await fs.remove(temporaryPath);
     throw error;
   }
+}
+
+async function removeBindingConfig(configPath: string): Promise<void> {
+  await fs.remove(configPath);
+  const directory = path.dirname(configPath);
+  try {
+    if ((await fs.readdir(directory)).length === 0) {
+      await fs.rmdir(directory);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+async function restoreBindingConfig(
+  configPath: string,
+  previousContents: Buffer | undefined
+): Promise<void> {
+  if (previousContents === undefined) {
+    await removeBindingConfig(configPath);
+    return;
+  }
+  await fs.writeFile(configPath, previousContents);
 }
 
 function errorMessage(error: unknown): string {
@@ -239,8 +328,8 @@ export async function getRepositoryBindingStatus(
   repositoryPath: string
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
-  const configPath = await resolveBindingConfigPath(repositoryRoot);
-  const includes = await getWorktreeIncludes(repositoryRoot);
+  const { configPath, conditionKey } = await resolveBindingLocation(repositoryRoot);
+  const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
   const bound = includes.includes(configPath) && await fs.pathExists(configPath);
   const [spaceName, userName, email, sshCommand] = await Promise.all([
     bound
@@ -268,7 +357,7 @@ export async function bindRepository(
   options: BindingOptions = {}
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
-  const configPath = await resolveBindingConfigPath(repositoryRoot);
+  const { configPath, conditionKey } = await resolveBindingLocation(repositoryRoot);
 
   if (options.dryRun) {
     return {
@@ -282,11 +371,21 @@ export async function bindRepository(
     };
   }
 
-  await enableWorktreeConfig(repositoryRoot);
+  const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
+  const previousContents = await fs.pathExists(configPath)
+    ? await fs.readFile(configPath)
+    : undefined;
   await writeBindingConfig(configPath, space);
-  const includes = await getWorktreeIncludes(repositoryRoot);
-  if (!includes.includes(configPath)) {
-    await runGit(repositoryRoot, ['config', '--worktree', '--add', 'include.path', configPath]);
+  try {
+    await normalizeConditionalInclude(
+      repositoryRoot,
+      conditionKey,
+      configPath,
+      includes
+    );
+  } catch (error) {
+    await restoreBindingConfig(configPath, previousContents);
+    throw error;
   }
 
   return getRepositoryBindingStatus(repositoryRoot);
@@ -315,24 +414,17 @@ export async function unbindRepository(
   options: BindingOptions = {}
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
-  const configPath = await resolveBindingConfigPath(repositoryRoot);
+  const { configPath, conditionKey } = await resolveBindingLocation(repositoryRoot);
 
   if (options.dryRun) {
     return getRepositoryBindingStatus(repositoryRoot);
   }
 
-  const includes = await getWorktreeIncludes(repositoryRoot);
+  const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
   if (includes.includes(configPath)) {
-    await runGit(repositoryRoot, [
-      'config',
-      '--worktree',
-      '--fixed-value',
-      '--unset-all',
-      'include.path',
-      configPath
-    ]);
+    await removeExactConditionalIncludes(repositoryRoot, conditionKey, configPath);
   }
-  await fs.remove(configPath);
+  await removeBindingConfig(configPath);
 
   return getRepositoryBindingStatus(repositoryRoot);
 }
