@@ -18,6 +18,11 @@ import {
   bulkUpdateSpaces
 } from "./utils/batchOperations";
 import { UIHelper } from "./utils/ui";
+import {
+  bindSpaceToRepository,
+  showRepositoryBindingStatus,
+  unbindSpaceFromRepository
+} from './utils/repoBindingCommands';
 
 program
   .name("dss")
@@ -88,6 +93,27 @@ program
     .description("Bulk update operations for multiple spaces")
     .option('--dry-run', 'Preview changes without applying them')
     .action(bulkUpdateSpaces)
+
+program
+  .command('bind [spaceName]')
+  .description('Bind a space to one or more Git repositories')
+  .option('-p, --path <repositoryPath>', 'Bind an explicit Git repository')
+  .option('-r, --recursive [parentPath]', 'Bind repositories beneath a parent directory')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(bindSpaceToRepository);
+
+program
+  .command('unbind')
+  .description('Remove the DSS binding from a Git repository')
+  .option('-p, --path <repositoryPath>', 'Select an explicit Git repository')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(unbindSpaceFromRepository);
+
+program
+  .command('status')
+  .description('Show repository-local DSS binding status')
+  .option('-p, --path <repositoryPath>', 'Select an explicit Git repository')
+  .action(showRepositoryBindingStatus);
 
 program.parse(process.argv);
 
