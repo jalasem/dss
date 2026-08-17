@@ -83,16 +83,17 @@ function generateBashScript(): string {
 # DSS (Dev Spaces Switcher) Bash Completion Script
 
 _dss_completion() {
-    local cur prev opts
+    local cur prev command opts
     COMPREPLY=()
     cur="\${COMP_WORDS[COMP_CWORD]}"
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
+    command="\${COMP_WORDS[1]}"
     
     # Main commands
-    opts="add list switch remove edit test inspect onboard batch export import bulk completion --help --version -h -v"
+    opts="add list switch remove edit test inspect onboard batch export import bulk bind unbind status completion --help --version -h -v"
     
     # Get space names for relevant commands
-    if [[ \$prev == "switch" || \$prev == "remove" || \$prev == "edit" || \$prev == "test" || \$prev == "inspect" ]]; then
+    if [[ \$cur != -* && (\$prev == "switch" || \$prev == "remove" || \$prev == "edit" || \$prev == "test" || \$prev == "inspect" || \$prev == "bind") ]]; then
         local spaces
         if [ -f ~/.dss/spaces/config.json ]; then
             spaces=$(cat ~/.dss/spaces/config.json | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')
@@ -102,7 +103,22 @@ _dss_completion() {
     fi
     
     # Options for specific commands
-    case \$prev in
+    case \$command in
+        bind)
+            if [[ \$cur == -* ]]; then
+                opts="--path --recursive --dry-run"
+            fi
+            ;;
+        unbind)
+            if [[ \$cur == -* ]]; then
+                opts="--path --dry-run"
+            fi
+            ;;
+        status)
+            if [[ \$cur == -* ]]; then
+                opts="--path"
+            fi
+            ;;
         switch|remove|bulk)
             opts="$opts --dry-run"
             ;;
@@ -142,6 +158,9 @@ _dss() {
         'export:Export space configuration'
         'import:Import space configuration'
         'bulk:Bulk update operations'
+        'bind:Bind a space to one or more Git repositories'
+        'unbind:Remove the DSS binding from a Git repository'
+        'status:Show repository-local DSS binding status'
         'completion:Generate shell completion script'
         '--help:Show help information'
         '--version:Show version information'
@@ -164,6 +183,25 @@ _dss() {
             case $words[2] in
                 switch|remove|edit|test|inspect)
                     _describe 'spaces' spaces
+                    ;;
+                bind)
+                    if [[ $CURRENT -eq 3 && \${words[CURRENT]} != -* ]]; then
+                        _describe 'spaces' spaces
+                    else
+                        _values 'bind options' \
+                            '--path[Bind an explicit Git repository]' \
+                            '--recursive[Bind repositories beneath a parent directory]' \
+                            '--dry-run[Preview changes without applying them]'
+                    fi
+                    ;;
+                unbind)
+                    _values 'unbind options' \
+                        '--path[Select an explicit Git repository]' \
+                        '--dry-run[Preview changes without applying them]'
+                    ;;
+                status)
+                    _values 'status options' \
+                        '--path[Select an explicit Git repository]'
                     ;;
                 completion)
                     _values 'shell' 'bash' 'zsh' 'fish'
@@ -206,6 +244,9 @@ complete -c dss -n '__fish_use_subcommand' -a 'batch' -d 'Switch between multipl
 complete -c dss -n '__fish_use_subcommand' -a 'export' -d 'Export space configuration'
 complete -c dss -n '__fish_use_subcommand' -a 'import' -d 'Import space configuration'
 complete -c dss -n '__fish_use_subcommand' -a 'bulk' -d 'Bulk update operations'
+complete -c dss -n '__fish_use_subcommand' -a 'bind' -d 'Bind a space to one or more Git repositories'
+complete -c dss -n '__fish_use_subcommand' -a 'unbind' -d 'Remove the DSS binding from a Git repository'
+complete -c dss -n '__fish_use_subcommand' -a 'status' -d 'Show repository-local DSS binding status'
 complete -c dss -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion script'
 
 # Global options
@@ -213,10 +254,16 @@ complete -c dss -n '__fish_use_subcommand' -l help -s h -d 'Show help informatio
 complete -c dss -n '__fish_use_subcommand' -l version -s v -d 'Show version information'
 
 # Space name completions for relevant commands
-complete -c dss -n '__fish_seen_subcommand_from switch remove edit test inspect' -a '(__dss_get_spaces)'
+complete -c dss -n '__fish_seen_subcommand_from switch remove edit test inspect bind' -a '(__dss_get_spaces)'
 
 # Options for specific commands
 complete -c dss -n '__fish_seen_subcommand_from switch remove bulk' -l dry-run -d 'Preview changes without applying them'
+complete -c dss -n '__fish_seen_subcommand_from bind' -l path -r -d 'Bind an explicit Git repository (--path)'
+complete -c dss -n '__fish_seen_subcommand_from bind' -l recursive -d 'Bind repositories beneath a parent directory (--recursive)'
+complete -c dss -n '__fish_seen_subcommand_from bind' -l dry-run -d 'Preview changes without applying them (--dry-run)'
+complete -c dss -n '__fish_seen_subcommand_from unbind' -l path -r -d 'Select an explicit Git repository (--path)'
+complete -c dss -n '__fish_seen_subcommand_from unbind' -l dry-run -d 'Preview changes without applying them (--dry-run)'
+complete -c dss -n '__fish_seen_subcommand_from status' -l path -r -d 'Select an explicit Git repository (--path)'
 
 # Shell completions for completion command
 complete -c dss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish' -d 'Shell type'

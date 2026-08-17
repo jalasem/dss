@@ -125,6 +125,8 @@ if (!process.argv.slice(2).length) {
   console.log(UIHelper.dim('  • ' + UIHelper.command('dss add') + ' - Create your first development space'));
   console.log(UIHelper.dim('  • ' + UIHelper.command('dss list') + ' - View all your spaces'));
   console.log(UIHelper.dim('  • ' + UIHelper.command('dss switch') + ' - Switch between spaces'));
+  console.log(UIHelper.dim('  • ' + UIHelper.command('dss bind <space>') + ' - Bind the current Git repository'));
+  console.log(UIHelper.dim('  • ' + UIHelper.command('dss status') + ' - Show this repository binding'));
   console.log(UIHelper.dim('  • ' + UIHelper.command('dss test') + ' - Test GitHub access'));
   console.log(UIHelper.dim('\n📖 For detailed help: ' + UIHelper.command('dss <command> --help')));
 }
