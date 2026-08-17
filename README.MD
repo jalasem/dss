@@ -178,7 +178,15 @@ Git worktrees can each be bound to a different DSS space.
 
 DSS registers the private file with a Git `includeIf.gitdir:` condition for the
 current worktree. Unbinding removes only that exact DSS condition and file; it
-does not change `extensions.worktreeConfig` or unrelated Git includes.
+does not change `extensions.worktreeConfig` or unrelated Git includes. The
+binding workflow requires Git 2.30 or newer.
+
+Git cannot represent a carriage return or line feed exactly in an
+`includeIf.gitdir:` subsection. DSS therefore refuses to bind the rare
+repository whose canonical Git metadata path contains either character, rather
+than using a wildcard that could match a sibling worktree. Read-only status and
+unbind retain compatibility for diagnosing and removing legacy experimental
+bindings created with that approximation.
 
 ### Advanced Features
 

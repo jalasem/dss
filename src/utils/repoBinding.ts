@@ -5,6 +5,11 @@ import { promisify } from 'util';
 import { ISpace } from './types';
 
 const execFileAsync = promisify(execFile);
+const MINIMUM_REPOSITORY_BINDING_GIT_VERSION = {
+  major: 2,
+  minor: 30,
+  patch: 0
+} as const;
 const GIT_REPOSITORY_ENVIRONMENT_VARIABLES = [
   'GIT_DIR',
   'GIT_WORK_TREE',
@@ -34,7 +39,7 @@ async function runGit(
     env: gitEnvironment()
   });
 
-  return trimOutput ? stdout.trim() : stdout;
+  return trimOutput && stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
 }
 
 const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules']);
@@ -49,6 +54,12 @@ export interface RepositoryBindingStatus {
   sshCommand?: string;
 }
 
+export interface GitVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
 interface BindingOptions {
   dryRun?: boolean;
 }
@@ -56,6 +67,7 @@ interface BindingOptions {
 interface BindingLocation {
   configPath: string;
   conditionKey: string;
+  gitDirectory: string;
 }
 
 export interface BatchBindingFailure {
@@ -123,7 +135,7 @@ async function assertBindingConfigPathContained(
 }
 
 function escapeGitdirPattern(gitDirectory: string): string {
-  // Git config subsection names cannot contain literal newlines.
+  // CR/LF substitution exists only to diagnose and remove legacy bindings.
   return gitDirectory
     .replace(/\\/g, '\\\\')
     .replace(/([*?[\]])/g, '\\$1')
@@ -138,8 +150,18 @@ async function resolveBindingLocation(repositoryRoot: string): Promise<BindingLo
   await assertBindingConfigPathContained(configPath, realGitDirectory);
   return {
     configPath,
-    conditionKey: `includeIf.gitdir:${escapeGitdirPattern(realGitDirectory)}.path`
+    conditionKey: `includeIf.gitdir:${escapeGitdirPattern(realGitDirectory)}.path`,
+    gitDirectory: realGitDirectory
   };
+}
+
+function assertBindableGitDirectory(gitDirectory: string): void {
+  if (/[\r\n]/.test(gitDirectory)) {
+    throw new Error(
+      'DSS cannot bind a repository whose canonical Git directory contains ' +
+      `a carriage return or line feed: ${JSON.stringify(gitDirectory)}`
+    );
+  }
 }
 
 async function readOptionalGitConfig(
@@ -192,35 +214,16 @@ async function addConditionalInclude(
   ]);
 }
 
-async function normalizeConditionalInclude(
+async function ensureConditionalInclude(
   repositoryRoot: string,
   conditionKey: string,
   configPath: string,
   includes: string[]
 ): Promise<void> {
   const exactCount = includes.filter(include => include === configPath).length;
-  if (exactCount === 1) return;
+  if (exactCount > 0) return;
 
-  if (exactCount > 0) {
-    await removeExactConditionalIncludes(repositoryRoot, conditionKey, configPath);
-  }
-
-  try {
-    await addConditionalInclude(repositoryRoot, conditionKey, configPath);
-  } catch (error) {
-    if (exactCount > 0) {
-      try {
-        for (let index = 0; index < exactCount; index += 1) {
-          await addConditionalInclude(repositoryRoot, conditionKey, configPath);
-        }
-      } catch (rollbackError) {
-        throw new Error(
-          `${errorMessage(error)}; failed to restore conditional includes: ${errorMessage(rollbackError)}`
-        );
-      }
-    }
-    throw error;
-  }
+  await addConditionalInclude(repositoryRoot, conditionKey, configPath);
 }
 
 async function writeBindingConfig(configPath: string, space: ISpace): Promise<void> {
@@ -272,6 +275,40 @@ async function restoreBindingConfig(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function parseGitVersion(output: string): GitVersion | undefined {
+  const match = /^git version\s+(\d+)\.(\d+)(?:\.(\d+))?(?=$|[.\s(])/.exec(output);
+  if (!match) return undefined;
+
+  const [, major, minor, patch = '0'] = match;
+  return {
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch)
+  };
+}
+
+export function isRepositoryBindingGitVersionSupported(output: string): boolean {
+  const version = parseGitVersion(output);
+  if (!version) return false;
+
+  const minimum = MINIMUM_REPOSITORY_BINDING_GIT_VERSION;
+  if (version.major !== minimum.major) return version.major > minimum.major;
+  if (version.minor !== minimum.minor) return version.minor > minimum.minor;
+  return version.patch >= minimum.patch;
+}
+
+async function assertRepositoryBindingGitVersion(
+  repositoryRoot: string
+): Promise<void> {
+  const output = await runGit(repositoryRoot, ['--version']);
+  if (!isRepositoryBindingGitVersionSupported(output)) {
+    throw new Error(
+      'DSS repository binding requires Git 2.30 or newer. ' +
+      `Found ${JSON.stringify(output)}; upgrade Git and retry.`
+    );
+  }
 }
 
 export async function resolveRepositoryRoot(startPath: string): Promise<string> {
@@ -357,7 +394,11 @@ export async function bindRepository(
   options: BindingOptions = {}
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
-  const { configPath, conditionKey } = await resolveBindingLocation(repositoryRoot);
+  const { configPath, conditionKey, gitDirectory } = await resolveBindingLocation(
+    repositoryRoot
+  );
+  assertBindableGitDirectory(gitDirectory);
+  await assertRepositoryBindingGitVersion(repositoryRoot);
 
   if (options.dryRun) {
     return {
@@ -377,7 +418,7 @@ export async function bindRepository(
     : undefined;
   await writeBindingConfig(configPath, space);
   try {
-    await normalizeConditionalInclude(
+    await ensureConditionalInclude(
       repositoryRoot,
       conditionKey,
       configPath,
@@ -419,6 +460,8 @@ export async function unbindRepository(
   if (options.dryRun) {
     return getRepositoryBindingStatus(repositoryRoot);
   }
+
+  await assertRepositoryBindingGitVersion(repositoryRoot);
 
   const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
   if (includes.includes(configPath)) {

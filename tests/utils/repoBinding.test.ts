@@ -7,17 +7,20 @@ import {
   bindRepositories,
   discoverRepositories,
   getRepositoryBindingStatus,
+  isRepositoryBindingGitVersionSupported,
+  parseGitVersion,
   unbindRepository,
   resolveRepositoryRoot
 } from '../../src/utils/repoBinding';
 import { ISpace } from '../../src/utils/types';
 
 function runGit(cwd: string, args: string[]): string {
-  return execFileSync('git', ['-C', cwd, ...args], {
+  const output = execFileSync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe']
-  }).trim();
+  });
+  return output.endsWith('\n') ? output.slice(0, -1) : output;
 }
 
 function runGitRaw(cwd: string, args: string[]): string {
@@ -87,6 +90,64 @@ async function createRepository(parent: string, name: string): Promise<string> {
   return repository;
 }
 
+async function renameWorktreeGitDirectory(
+  worktree: string,
+  newName: string
+): Promise<string> {
+  const originalGitDirectory = runGit(worktree, [
+    'rev-parse', '--absolute-git-dir'
+  ]);
+  const renamedGitDirectory = path.join(path.dirname(originalGitDirectory), newName);
+  await fs.move(originalGitDirectory, renamedGitDirectory);
+  await fs.writeFile(path.join(worktree, '.git'), `gitdir: ${renamedGitDirectory}\n`);
+  return renamedGitDirectory;
+}
+
+async function installGitVersionWrapper(
+  parent: string,
+  versionOutput: string
+): Promise<() => void> {
+  const gitWrapperDirectory = path.join(parent, 'git-wrapper-version');
+  const gitWrapper = path.join(gitWrapperDirectory, 'git');
+  const gitExecutable = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  const originalPath = process.env.PATH;
+  const originalGitExecutable = process.env.DSS_TEST_REAL_GIT;
+  const originalVersionOutput = process.env.DSS_TEST_GIT_VERSION;
+  await fs.ensureDir(gitWrapperDirectory);
+  await fs.writeFile(
+    gitWrapper,
+    [
+      '#!/usr/bin/env node',
+      "const { execFileSync } = require('child_process');",
+      'const args = process.argv.slice(2);',
+      "if (args.includes('--version')) {",
+      "  process.stdout.write(`${process.env.DSS_TEST_GIT_VERSION}\\n`);",
+      '  process.exit(0);',
+      '}',
+      "execFileSync(process.env.DSS_TEST_REAL_GIT, args, { stdio: 'inherit' });",
+      ''
+    ].join('\n')
+  );
+  await fs.chmod(gitWrapper, 0o755);
+  process.env.DSS_TEST_REAL_GIT = gitExecutable;
+  process.env.DSS_TEST_GIT_VERSION = versionOutput;
+  process.env.PATH = `${gitWrapperDirectory}${path.delimiter}${originalPath ?? ''}`;
+
+  return () => {
+    process.env.PATH = originalPath;
+    if (originalGitExecutable === undefined) {
+      delete process.env.DSS_TEST_REAL_GIT;
+    } else {
+      process.env.DSS_TEST_REAL_GIT = originalGitExecutable;
+    }
+    if (originalVersionOutput === undefined) {
+      delete process.env.DSS_TEST_GIT_VERSION;
+    } else {
+      process.env.DSS_TEST_GIT_VERSION = originalVersionOutput;
+    }
+  };
+}
+
 describe('repository targeting', () => {
   const temporaryDirectories: string[] = [];
   const personalSpace: ISpace = {
@@ -118,6 +179,26 @@ describe('repository targeting', () => {
     await Promise.all(temporaryDirectories.splice(0).map(directory => fs.remove(directory)));
   });
 
+  it.each([
+    ['git version 2.29.9', { major: 2, minor: 29, patch: 9 }, false],
+    ['git version 2.30.0', { major: 2, minor: 30, patch: 0 }, true],
+    ['git version 2.39.3 (Apple Git-146)', { major: 2, minor: 39, patch: 3 }, true],
+    ['git version 3.0.0', { major: 3, minor: 0, patch: 0 }, true]
+  ])('parses and evaluates repository-binding compatibility for %s', (
+    output,
+    parsed,
+    supported
+  ) => {
+    expect(parseGitVersion(output)).toEqual(parsed);
+    expect(isRepositoryBindingGitVersionSupported(output)).toBe(supported);
+  });
+
+  it.each(['git version', 'git version two.thirty', 'not git'])
+    ('rejects malformed Git version output %p', output => {
+      expect(parseGitVersion(output)).toBeUndefined();
+      expect(isRepositoryBindingGitVersionSupported(output)).toBe(false);
+    });
+
   it('resolves the repository root from a nested working directory', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project');
@@ -128,6 +209,38 @@ describe('repository targeting', () => {
       await fs.realpath(repository)
     );
   });
+
+  it('resolves an explicitly selected trailing-space repository without redirecting to its sibling', async () => {
+    const parent = await createTemporaryDirectory();
+    const trimmedRepository = await createRepository(parent, 'project');
+    const suffixedRepository = await createRepository(parent, 'project ');
+
+    await expect(resolveRepositoryRoot(suffixedRepository)).resolves.toBe(
+      await fs.realpath(suffixedRepository)
+    );
+    await bindRepository(suffixedRepository, personalSpace);
+
+    expect(runGit(suffixedRepository, ['config', 'user.email']))
+      .toBe('personal@example.com');
+    expect(readOptionalGitValue(trimmedRepository, ['config', 'dss.space']))
+      .toBeUndefined();
+  });
+
+  it.each([' ', '\r', '\n'])(
+    'discovers both trimmed and %p-suffixed repository paths',
+    async suffix => {
+      const parent = await createTemporaryDirectory();
+      const trimmedRepository = await createRepository(parent, 'project');
+      const suffixedRepository = await createRepository(parent, `project${suffix}`);
+
+      expect(await discoverRepositories(parent)).toEqual(
+        [
+          await fs.realpath(trimmedRepository),
+          await fs.realpath(suffixedRepository)
+        ].sort((left, right) => left.localeCompare(right))
+      );
+    }
+  );
 
   it('keeps explicit and current-directory targeting authoritative over Git environment variables', async () => {
     const parent = await createTemporaryDirectory();
@@ -449,22 +562,33 @@ describe('repository targeting', () => {
     ])).toHaveLength(1);
   });
 
-  it('normalizes only duplicate DSS conditional includes and preserves unrelated entries', async () => {
+  it('preserves duplicate DSS include ordering while rebinding and removes all on unbind', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project');
     const binding = await bindRepository(repository, personalSpace);
     const conditionKey = await bindingConditionKey(repository);
     const unrelatedKey = `includeIf.gitdir:${path.join(parent, 'unrelated.git')}.path`;
     const unrelatedPath = path.join(parent, 'unrelated.config');
+    await fs.writeFile(
+      unrelatedPath,
+      '[user]\n\tname = Precedence User\n\temail = precedence@example.com\n'
+    );
     runGit(repository, ['config', '--local', '--add', conditionKey, binding.configPath]);
     runGit(repository, ['config', '--local', '--add', conditionKey, binding.configPath]);
     runGit(repository, ['config', '--local', '--add', conditionKey, unrelatedPath]);
     runGit(repository, ['config', '--local', '--add', unrelatedKey, unrelatedPath]);
+    const includesBefore = readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', conditionKey
+    ]);
+    expect(runGit(repository, ['config', 'user.email']))
+      .toBe('precedence@example.com');
 
     await bindRepository(repository, workSpace);
     expect(readGitValues(repository, [
       'config', '-z', '--local', '--get-all', conditionKey
-    ])).toEqual([unrelatedPath, binding.configPath]);
+    ])).toEqual(includesBefore);
+    expect(runGit(repository, ['config', 'user.email']))
+      .toBe('precedence@example.com');
     expect(readGitValues(repository, [
       'config', '-z', '--local', '--get-all', unrelatedKey
     ])).toEqual([unrelatedPath]);
@@ -476,6 +600,78 @@ describe('repository targeting', () => {
     expect(readGitValues(repository, [
       'config', '-z', '--local', '--get-all', unrelatedKey
     ])).toEqual([unrelatedPath]);
+  });
+
+  it('preserves interleaved include ordering when a rebound status read fails', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const binding = await bindRepository(repository, personalSpace);
+    const conditionKey = await bindingConditionKey(repository);
+    const unrelatedPath = path.join(parent, 'precedence.config');
+    await fs.writeFile(
+      unrelatedPath,
+      '[user]\n\temail = precedence@example.com\n'
+    );
+    runGit(repository, ['config', '--local', '--add', conditionKey, binding.configPath]);
+    runGit(repository, ['config', '--local', '--add', conditionKey, binding.configPath]);
+    runGit(repository, ['config', '--local', '--add', conditionKey, unrelatedPath]);
+    const localConfigPath = path.join(repository, '.git', 'config');
+    const localConfigBefore = await fs.readFile(localConfigPath);
+    const includesBefore = readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', conditionKey
+    ]);
+    const gitWrapperDirectory = path.join(parent, 'git-wrapper-status-failure');
+    const gitWrapper = path.join(gitWrapperDirectory, 'git');
+    const gitExecutable = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    const originalPath = process.env.PATH;
+    const originalGitExecutable = process.env.DSS_TEST_REAL_GIT;
+    const originalConfigPath = process.env.DSS_TEST_CONFIG_PATH;
+    await fs.ensureDir(gitWrapperDirectory);
+    await fs.writeFile(
+      gitWrapper,
+      [
+        '#!/usr/bin/env node',
+        "const { execFileSync } = require('child_process');",
+        'const args = process.argv.slice(2);',
+        "const configIndex = args.indexOf('config');",
+        "if (args[configIndex + 1] === '--file' &&",
+        '    args[configIndex + 2] === process.env.DSS_TEST_CONFIG_PATH &&',
+        "    args[configIndex + 3] === 'dss.space') {",
+        "  process.stderr.write('simulated status failure\\n');",
+        '  process.exit(2);',
+        '}',
+        "execFileSync(process.env.DSS_TEST_REAL_GIT, args, { stdio: 'inherit' });",
+        ''
+      ].join('\n')
+    );
+    await fs.chmod(gitWrapper, 0o755);
+    process.env.DSS_TEST_REAL_GIT = gitExecutable;
+    process.env.DSS_TEST_CONFIG_PATH = binding.configPath;
+    process.env.PATH = `${gitWrapperDirectory}${path.delimiter}${originalPath ?? ''}`;
+
+    try {
+      await expect(bindRepository(repository, workSpace))
+        .rejects.toThrow('simulated status failure');
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalGitExecutable === undefined) {
+        delete process.env.DSS_TEST_REAL_GIT;
+      } else {
+        process.env.DSS_TEST_REAL_GIT = originalGitExecutable;
+      }
+      if (originalConfigPath === undefined) {
+        delete process.env.DSS_TEST_CONFIG_PATH;
+      } else {
+        process.env.DSS_TEST_CONFIG_PATH = originalConfigPath;
+      }
+    }
+
+    await expect(fs.readFile(localConfigPath)).resolves.toEqual(localConfigBefore);
+    expect(readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', conditionKey
+    ])).toEqual(includesBefore);
+    expect(runGit(repository, ['config', 'user.email']))
+      .toBe('precedence@example.com');
   });
 
   it('escapes glob metacharacters in an exact gitdir condition', async () => {
@@ -495,34 +691,90 @@ describe('repository targeting', () => {
     await expect(unbindRepository(repository)).resolves.toMatchObject({ bound: false });
   });
 
-  it('binds, rebinds, reports, and unbinds a repository whose path contains a newline', async () => {
+  it.each([
+    ['line feed', '\n'],
+    ['carriage return', '\r']
+  ])('rejects an explicitly selected repository whose gitdir contains a %s', async (
+    _label,
+    separator
+  ) => {
+    const parent = await createTemporaryDirectory();
+    const sibling = await createRepository(parent, 'projectline');
+    const repository = await createRepository(parent, `project${separator}line`);
+    const gitDirectory = runGit(repository, ['rev-parse', '--absolute-git-dir']);
+    const sharedConfigBefore = await fs.readFile(path.join(repository, '.git', 'config'));
+
+    await expect(bindRepository(repository, personalSpace, { dryRun: true }))
+      .rejects.toThrow(/carriage return or line feed/i);
+    await expect(bindRepository(repository, personalSpace))
+      .rejects.toThrow(/carriage return or line feed/i);
+
+    await expect(fs.pathExists(path.join(gitDirectory, 'dss'))).resolves.toBe(false);
+    await expect(fs.readFile(path.join(repository, '.git', 'config')))
+      .resolves.toEqual(sharedConfigBefore);
+    expect(readOptionalGitValue(sibling, ['config', 'dss.space'])).toBeUndefined();
+  });
+
+  it.each([
+    ['line feed', '\n'],
+    ['carriage return', '\r']
+  ])('rejects a linked-worktree admin dir containing a %s without leaking to a wildcard sibling', async (
+    _label,
+    separator
+  ) => {
+    const parent = await createTemporaryDirectory();
+    const source = await createRepository(parent, 'source');
+    await commitFixture(source);
+    const repository = path.join(parent, 'target-worktree');
+    const sibling = path.join(parent, 'sibling-worktree');
+    runGit(source, ['worktree', 'add', '-b', 'target-fixture', repository]);
+    runGit(source, ['worktree', 'add', '-b', 'sibling-fixture', sibling]);
+    const gitDirectory = await renameWorktreeGitDirectory(
+      repository,
+      `slot${separator}line`
+    );
+    const siblingGitDirectory = await renameWorktreeGitDirectory(sibling, 'slotXline');
+    const sharedConfig = path.join(source, '.git', 'config');
+    const sharedConfigBefore = await fs.readFile(sharedConfig);
+
+    await expect(bindRepository(repository, personalSpace, { dryRun: true }))
+      .rejects.toThrow(/carriage return or line feed/i);
+    await expect(bindRepository(repository, personalSpace))
+      .rejects.toThrow(/carriage return or line feed/i);
+
+    await expect(fs.readFile(sharedConfig)).resolves.toEqual(sharedConfigBefore);
+    await expect(fs.pathExists(path.join(gitDirectory, 'dss'))).resolves.toBe(false);
+    await expect(fs.pathExists(path.join(siblingGitDirectory, 'dss'))).resolves.toBe(false);
+    expect(runGit(sibling, ['config', 'user.email'])).toBe('fixture@example.com');
+    expect(readOptionalGitValue(sibling, ['config', 'dss.space'])).toBeUndefined();
+  });
+
+  it('reports and removes an exact legacy wildcard binding for a newline gitdir', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project\nline');
+    const gitDirectory = runGit(repository, ['rev-parse', '--absolute-git-dir']);
+    const configPath = path.join(gitDirectory, 'dss', 'config');
+    const conditionKey = await bindingConditionKey(repository);
+    await fs.ensureDir(path.dirname(configPath));
+    await fs.writeFile(
+      configPath,
+      '[user]\n\tname = Legacy User\n\temail = legacy@example.com\n' +
+      '[dss]\n\tspace = legacy\n'
+    );
+    runGit(repository, [
+      'config', '--local', '--add', conditionKey, configPath
+    ]);
 
-    const first = await bindRepository(repository, personalSpace);
-    expect(first).toMatchObject({ bound: true, spaceName: 'personal' });
-
-    const rebound = await bindRepository(repository, workSpace);
-    expect(rebound).toMatchObject({ bound: true, spaceName: 'work' });
-    expect(runGit(repository, ['config', 'user.email'])).toBe('work@example.com');
+    await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({
+      bound: true,
+      spaceName: 'legacy',
+      email: 'legacy@example.com'
+    });
+    await expect(unbindRepository(repository)).resolves.toMatchObject({ bound: false });
     expect(readGitValues(repository, [
-      'config',
-      '-z',
-      '--local',
-      '--get-all',
-      await bindingConditionKey(repository)
-    ])).toEqual([rebound.configPath]);
-
-    const unbound = await unbindRepository(repository);
-    expect(unbound.bound).toBe(false);
-    expect(readGitValues(repository, [
-      'config',
-      '-z',
-      '--local',
-      '--get-all',
-      await bindingConditionKey(repository)
+      'config', '-z', '--local', '--get-all', conditionKey
     ])).toEqual([]);
-    await expect(fs.pathExists(rebound.configPath)).resolves.toBe(false);
+    await expect(fs.pathExists(configPath)).resolves.toBe(false);
   });
 
   it('unbinds DSS while preserving prior local values and unrelated includes', async () => {
@@ -578,6 +830,60 @@ describe('repository targeting', () => {
     await expect(fs.pathExists(status.configPath)).resolves.toBe(false);
     await expect(fs.pathExists(path.dirname(status.configPath))).resolves.toBe(false);
     await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({ bound: false });
+  });
+
+  it('rejects bind on unsupported Git without leaving file or config state', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const gitDirectory = runGit(repository, ['rev-parse', '--absolute-git-dir']);
+    const configPath = path.join(gitDirectory, 'dss', 'config');
+    const localConfigPath = path.join(gitDirectory, 'config');
+    const localConfigBefore = await fs.readFile(localConfigPath);
+    const restoreGit = await installGitVersionWrapper(parent, 'git version 2.29.9');
+
+    try {
+      await expect(bindRepository(repository, personalSpace, { dryRun: true }))
+        .rejects.toThrow(/Git 2\.30 or newer/i);
+      await expect(bindRepository(repository, personalSpace))
+        .rejects.toThrow(/Git 2\.30 or newer/i);
+      await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({
+        bound: false
+      });
+    } finally {
+      restoreGit();
+    }
+
+    await expect(fs.readFile(localConfigPath)).resolves.toEqual(localConfigBefore);
+    await expect(fs.pathExists(configPath)).resolves.toBe(false);
+    await expect(fs.pathExists(path.dirname(configPath))).resolves.toBe(false);
+  });
+
+  it('rejects unbind on unsupported Git without changing an existing binding', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const binding = await bindRepository(repository, personalSpace);
+    const localConfigPath = path.join(repository, '.git', 'config');
+    const localConfigBefore = await fs.readFile(localConfigPath);
+    const bindingConfigBefore = await fs.readFile(binding.configPath);
+    const restoreGit = await installGitVersionWrapper(parent, 'git version 2.29.9');
+
+    try {
+      await expect(unbindRepository(repository, { dryRun: true })).resolves.toMatchObject({
+        bound: true,
+        spaceName: 'personal'
+      });
+      await expect(unbindRepository(repository))
+        .rejects.toThrow(/Git 2\.30 or newer/i);
+      await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({
+        bound: true,
+        spaceName: 'personal'
+      });
+    } finally {
+      restoreGit();
+    }
+
+    await expect(fs.readFile(localConfigPath)).resolves.toEqual(localConfigBefore);
+    await expect(fs.readFile(binding.configPath)).resolves.toEqual(bindingConfigBefore);
   });
 
   it('keeps the DSS config outside the repository index', async () => {

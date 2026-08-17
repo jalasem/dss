@@ -125,10 +125,12 @@ overwriting one another. The included file remains under that worktree's Git
 metadata and therefore cannot be staged or pushed.
 
 Git treats `gitdir:` conditions as glob patterns. DSS escapes glob
-metacharacters in the canonical path. Git config subsection names cannot
-contain literal newlines, so newline bytes are represented by a single-character
-matcher; the rest of the canonical path, including the worktree-specific Git
-directory suffix, remains anchored exactly.
+metacharacters in the canonical path. Git config subsection names cannot encode
+a carriage return or line feed exactly, and replacing either with a wildcard
+can match a sibling Git directory. DSS rejects bind and bind dry-run for these
+rare canonical Git metadata paths before writing. Status and unbind derive the
+former deterministic wildcard condition only to diagnose and remove legacy
+experimental bindings.
 
 The include-file approach preserves existing local values rather than
 overwriting them. `dss unbind` removes only the exact conditional key and DSS
@@ -138,9 +140,18 @@ to copy or restore them. DSS never changes `extensions.worktreeConfig`, so
 shared `core.worktree`/`core.bare` behavior and dormant `config.worktree` files
 remain untouched.
 
-Binding the same repository again updates the DSS-owned file and does not add a
-duplicate include. A repository may have unrelated Git include files; DSS must
-not modify or remove them.
+Binding the same repository again atomically updates the DSS-owned file and does
+not add a duplicate include. If one or more exact DSS values already exist, DSS
+leaves their ordering untouched so interleaved unrelated includes retain their
+precedence. Unbind removes every exact DSS value without removing other values
+under the same condition. A repository may have unrelated Git include files;
+DSS must not modify or remove them.
+
+Bind and mutating unbind operations require Git 2.30 or newer because the
+implementation relies on `includeIf.gitdir` and literal `--fixed-value`
+removal. DSS parses standard and vendor-suffixed `git --version` output and
+fails with an upgrade instruction before any write on unsupported Git. Status
+and unbind dry-run remain read-only.
 
 ## Components
 
@@ -194,7 +205,10 @@ configuration changes.
 For a single repository, validation or write failure stops that command and
 sets a non-zero exit code. Configuration-file replacement is atomic: write a
 temporary file in the same Git directory, rename it into place, then ensure the
-include entry exists.
+include entry exists. If include registration fails, DSS restores the previous
+private file or removes the newly created file. Existing exact include entries
+are never removed and re-added during bind, avoiding shared-config reordering
+on either success or failure.
 
 ## Security and Privacy
 
@@ -206,6 +220,9 @@ include entry exists.
 - Child-process calls pass arguments without a shell.
 - Generated config values are escaped using Git's configuration-file quoting
   rules so names, emails, and paths cannot create additional config entries.
+- The shared local config stores only a worktree-specific conditional path to
+  the private DSS file. Unbind reverses DSS-owned state without enabling or
+  disabling repository extensions.
 
 ## Testing
 
@@ -226,6 +243,11 @@ Unit and integration tests will use temporary real Git repositories to verify:
   as data, not executed.
 - Global Git identity remains unchanged through bind and unbind.
 - Existing unrelated `include.path` entries remain unchanged.
+- Git output preserves path whitespace while removing only Git's final record
+  terminator; raw config reads remain NUL-delimited.
+- CR/LF Git metadata paths are rejected without writes or sibling identity
+  leakage, while legacy status/unbind cleanup remains available.
+- Git versions below 2.30 are rejected before bind/unbind writes.
 - CLI help exposes all three commands and their options.
 
 The full existing Jest suite, TypeScript build, lint check, and a manual smoke
