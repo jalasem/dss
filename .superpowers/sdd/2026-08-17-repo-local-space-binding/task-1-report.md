@@ -9,7 +9,7 @@ I added `src/utils/repoBinding.ts` with two exported async functions:
 
 `resolveRepositoryRoot` resolves the input path, runs `git rev-parse --show-toplevel` with `execFile` argument arrays, and returns the real path of the repository root. This keeps Git execution shell-safe and local to the filesystem.
 
-`discoverRepositories` resolves and validates the parent path, recursively walks descendants, skips `.git` and `node_modules`, ignores symbolic links, detects normal repositories and linked worktrees via `.git` markers, and returns a deterministically sorted list of real repository paths.
+`discoverRepositories` resolves and validates the parent path, rejects a symbolic-link root, recursively walks descendants from the real directory, skips `.git` and `node_modules`, ignores symbolic links, detects normal repositories and linked worktrees via `.git` markers, and returns a deterministically sorted list of real repository paths.
 
 I added `tests/utils/repoBinding.test.ts` with real temporary Git repositories, a committed linked worktree, an excluded `node_modules` repo, and a symbolic-link fixture.
 
@@ -101,5 +101,72 @@ Tests:       67 passed, 67 total
 
 ## Concerns
 
-- `discoverRepositories` follows the brief literally and scans descendants only; it does not add `parentPath` itself unless the traversal encounters it as a child repository.
 - The repo-wide test run emitted no failures, but the shell did show some existing CLI/test console output while fixtures ran.
+
+## Fix Round 1
+
+### Finding
+
+- `src/utils/repoBinding.ts:25` dereferenced a symlink passed as the recursive root with `fs.stat()`, which allowed discovery to proceed through the symlink target.
+
+### Files Changed
+
+- `src/utils/repoBinding.ts`
+- `tests/utils/repoBinding.test.ts`
+- `.superpowers/sdd/2026-08-17-repo-local-space-binding/task-1-report.md`
+
+### Covering Test Commands
+
+RED:
+
+```bash
+npm test -- --watchman=false --runInBand tests/utils/repoBinding.test.ts -t "rejects a symbolic link passed as the discovery root"
+```
+
+Relevant output:
+
+```text
+FAIL tests/utils/repoBinding.test.ts
+  repository targeting
+    ✕ rejects a symbolic link passed as the discovery root
+
+    expect(received).rejects.toThrow()
+
+    Received promise resolved instead of rejected
+    Resolved to value: ["/private/var/folders/.../external"]
+```
+
+GREEN:
+
+```bash
+npm test -- --watchman=false --runInBand tests/utils/repoBinding.test.ts -t "rejects a symbolic link passed as the discovery root"
+```
+
+Relevant output:
+
+```text
+PASS tests/utils/repoBinding.test.ts
+  repository targeting
+    ✓ rejects a symbolic link passed as the discovery root
+```
+
+Focused file verification:
+
+```bash
+npm test -- --watchman=false --runInBand tests/utils/repoBinding.test.ts
+```
+
+Relevant output:
+
+```text
+PASS tests/utils/repoBinding.test.ts
+  repository targeting
+    ✓ resolves the repository root from a nested working directory
+    ✓ discovers repositories deterministically without traversing excluded or symbolic-link directories
+    ✓ rejects a symbolic link passed as the discovery root
+```
+
+### Notes
+
+- The fix changed the root check to `fs.lstat()` and rejects symbolic links before any walk begins.
+- The report correction above now matches the actual implementation: a real root repository is included when `walk(parent)` inspects the root itself.

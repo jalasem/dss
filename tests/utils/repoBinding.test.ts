@@ -71,4 +71,14 @@ describe('repository targeting', () => {
     expect(repositories).not.toContain(await fs.realpath(ignored));
     expect(repositories).not.toContain(await fs.realpath(external));
   });
+
+  it('rejects a symbolic link passed as the discovery root', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'external');
+    const symbolicLink = path.join(parent, 'external-link');
+
+    await fs.symlink(repository, symbolicLink);
+
+    await expect(discoverRepositories(symbolicLink)).rejects.toThrow(/symbolic link/i);
+  });
 });

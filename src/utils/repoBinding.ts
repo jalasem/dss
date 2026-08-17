@@ -24,7 +24,11 @@ export async function resolveRepositoryRoot(startPath: string): Promise<string> 
 
 export async function discoverRepositories(_parentPath: string): Promise<string[]> {
   const parent = path.resolve(_parentPath);
-  const parentStats = await fs.stat(parent);
+  const parentStats = await fs.lstat(parent);
+
+  if (parentStats.isSymbolicLink()) {
+    throw new Error(`Recursive path is a symbolic link: ${parent}`);
+  }
 
   if (!parentStats.isDirectory()) {
     throw new Error(`Recursive path is not a directory: ${parent}`);
