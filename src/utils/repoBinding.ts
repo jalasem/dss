@@ -8,7 +8,8 @@ const execFileAsync = promisify(execFile);
 
 async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
-    encoding: 'utf8'
+    encoding: 'utf8',
+    env: process.env
   });
 
   return stdout.trim();
@@ -38,9 +39,59 @@ function buildSshCommand(sshKeyPath: string): string {
   return `ssh -i ${shellQuote(sshKeyPath)} -o IdentitiesOnly=yes`;
 }
 
+function isPathWithin(directory: string, candidate: string): boolean {
+  const relativePath = path.relative(directory, candidate);
+  return relativePath !== ''
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath);
+}
+
+async function assertBindingConfigPathContained(
+  configPath: string,
+  realGitDirectory: string
+): Promise<void> {
+  if (!isPathWithin(realGitDirectory, configPath)) {
+    throw new Error(`DSS config path escapes Git directory: ${configPath}`);
+  }
+
+  const pathComponents = path.relative(realGitDirectory, configPath).split(path.sep);
+  let existingAncestor = realGitDirectory;
+
+  for (const component of pathComponents) {
+    const candidate = path.join(existingAncestor, component);
+
+    try {
+      const stats = await fs.lstat(candidate);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`DSS config path contains a symbolic link: ${candidate}`);
+      }
+      existingAncestor = candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        break;
+      }
+      throw error;
+    }
+  }
+
+  const realAncestor = await fs.realpath(existingAncestor);
+  const realConfigPath = path.resolve(
+    realAncestor,
+    path.relative(existingAncestor, configPath)
+  );
+  if (!isPathWithin(realGitDirectory, realConfigPath)) {
+    throw new Error(`DSS config path escapes Git directory: ${configPath}`);
+  }
+}
+
 async function resolveBindingConfigPath(repositoryRoot: string): Promise<string> {
+  const gitDirectory = await runGit(repositoryRoot, ['rev-parse', '--absolute-git-dir']);
+  const realGitDirectory = await fs.realpath(gitDirectory);
   const gitPath = await runGit(repositoryRoot, ['rev-parse', '--git-path', 'dss/config']);
-  return path.resolve(repositoryRoot, gitPath);
+  const configPath = path.resolve(repositoryRoot, gitPath);
+  await assertBindingConfigPathContained(configPath, realGitDirectory);
+  return configPath;
 }
 
 async function readOptionalGitConfig(
@@ -49,8 +100,11 @@ async function readOptionalGitConfig(
 ): Promise<string | undefined> {
   try {
     return await runGit(repositoryRoot, args);
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) {
+      return undefined;
+    }
+    throw error;
   }
 }
 

@@ -14,6 +14,7 @@ import { ISpace } from '../../src/utils/types';
 function runGit(cwd: string, args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
+    env: process.env,
     stdio: ['ignore', 'pipe', 'pipe']
   }).trim();
 }
@@ -203,5 +204,72 @@ describe('repository targeting', () => {
 
     expect(readOptionalGlobalGitConfig('user.name')).toBe(beforeName);
     expect(readOptionalGlobalGitConfig('user.email')).toBe(beforeEmail);
+  });
+
+  it('rejects a symlinked DSS directory without writing or deleting external config', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const externalDirectory = path.join(parent, 'external-dss');
+    const externalConfig = path.join(externalDirectory, 'config');
+    const dssDirectory = path.join(repository, '.git', 'dss');
+    const expectedConfigPath = path.join(dssDirectory, 'config');
+    await fs.ensureDir(externalDirectory);
+    await fs.symlink(externalDirectory, dssDirectory);
+
+    await expect(bindRepository(repository, personalSpace)).rejects.toThrow(/symbolic link/i);
+    await expect(fs.pathExists(externalConfig)).resolves.toBe(false);
+
+    await fs.writeFile(externalConfig, '[dss]\n    space = external\n');
+    runGit(repository, ['config', '--local', '--add', 'include.path', expectedConfigPath]);
+
+    await expect(unbindRepository(repository)).rejects.toThrow(/symbolic link/i);
+    await expect(fs.readFile(externalConfig, 'utf8')).resolves.toBe(
+      '[dss]\n    space = external\n'
+    );
+  });
+
+  it('preserves the DSS config when the local include read fails', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const binding = await bindRepository(repository, personalSpace);
+    const gitWrapperDirectory = path.join(parent, 'git-wrapper');
+    const gitWrapper = path.join(gitWrapperDirectory, 'git');
+    const gitExecutable = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    const originalPath = process.env.PATH;
+    const originalGitExecutable = process.env.DSS_TEST_REAL_GIT;
+    await fs.ensureDir(gitWrapperDirectory);
+    await fs.writeFile(
+      gitWrapper,
+      [
+        '#!/usr/bin/env node',
+        "const { execFileSync } = require('child_process');",
+        'const args = process.argv.slice(2);',
+        "if (args.slice(-4).join(' ') === 'config --local --get-all include.path') {",
+        "  process.stderr.write('simulated config failure\\n');",
+        '  process.exit(2);',
+        '}',
+        "execFileSync(process.env.DSS_TEST_REAL_GIT, args, { stdio: 'inherit' });",
+        ''
+      ].join('\n')
+    );
+    await fs.chmod(gitWrapper, 0o755);
+    process.env.DSS_TEST_REAL_GIT = gitExecutable;
+    process.env.PATH = `${gitWrapperDirectory}${path.delimiter}${originalPath ?? ''}`;
+
+    try {
+      expect(execFileSync('which', ['git'], { encoding: 'utf8', env: process.env }).trim())
+        .toBe(gitWrapper);
+      expect(() => runGit(repository, ['config', '--local', '--get-all', 'include.path']))
+        .toThrow('simulated config failure');
+      await expect(unbindRepository(repository)).rejects.toThrow('simulated config failure');
+      await expect(fs.pathExists(binding.configPath)).resolves.toBe(true);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalGitExecutable === undefined) {
+        delete process.env.DSS_TEST_REAL_GIT;
+      } else {
+        process.env.DSS_TEST_REAL_GIT = originalGitExecutable;
+      }
+    }
   });
 });
