@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import {
   bindRepository,
+  bindRepositories,
   discoverRepositories,
   getRepositoryBindingStatus,
   unbindRepository,
@@ -123,6 +124,53 @@ describe('repository targeting', () => {
     );
     expect(includes).toEqual([status.configPath]);
     expect(status.configPath.startsWith(path.join(repository, '.git'))).toBe(true);
+  });
+
+  it('continues recursive binding after an individual repository fails', async () => {
+    const parent = await createTemporaryDirectory();
+    const validRepository = await createRepository(parent, 'valid');
+    const invalidRepository = path.join(parent, 'not-a-repository');
+    await fs.ensureDir(invalidRepository);
+
+    const result = await bindRepositories(
+      [invalidRepository, validRepository],
+      personalSpace
+    );
+
+    expect(result.successful.map(item => item.repositoryRoot)).toEqual([
+      await fs.realpath(validRepository)
+    ]);
+    expect(result.failed).toEqual([{
+      repositoryPath: invalidRepository,
+      message: expect.stringContaining('not a git repository')
+    }]);
+    expect(runGit(validRepository, ['config', 'dss.space'])).toBe('personal');
+  });
+
+  it('previews each repository without writing during a dry run', async () => {
+    const parent = await createTemporaryDirectory();
+    const firstRepository = await createRepository(parent, 'first');
+    const secondRepository = await createRepository(parent, 'second');
+
+    const result = await bindRepositories(
+      [firstRepository, secondRepository],
+      personalSpace,
+      { dryRun: true }
+    );
+
+    expect(result.successful.map(item => item.repositoryRoot)).toEqual([
+      await fs.realpath(firstRepository),
+      await fs.realpath(secondRepository)
+    ]);
+    expect(result.successful).toHaveLength(2);
+    expect(result.successful.every(item => item.bound === false)).toBe(true);
+    expect(result.failed).toEqual([]);
+    await expect(getRepositoryBindingStatus(firstRepository)).resolves.toMatchObject({
+      bound: false
+    });
+    await expect(getRepositoryBindingStatus(secondRepository)).resolves.toMatchObject({
+      bound: false
+    });
   });
 
   it('rebinds without duplicating the DSS include', async () => {

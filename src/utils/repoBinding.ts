@@ -31,6 +31,16 @@ interface BindingOptions {
   dryRun?: boolean;
 }
 
+export interface BatchBindingFailure {
+  repositoryPath: string;
+  message: string;
+}
+
+export interface BatchBindingResult {
+  successful: RepositoryBindingStatus[];
+  failed: BatchBindingFailure[];
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -139,6 +149,10 @@ async function writeBindingConfig(configPath: string, space: ISpace): Promise<vo
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function resolveRepositoryRoot(startPath: string): Promise<string> {
   const requestedPath = path.resolve(startPath);
   const repositoryRoot = await runGit(requestedPath, ['rev-parse', '--show-toplevel']);
@@ -239,6 +253,24 @@ export async function bindRepository(
   }
 
   return getRepositoryBindingStatus(repositoryRoot);
+}
+
+export async function bindRepositories(
+  repositoryPaths: string[],
+  space: ISpace,
+  options: BindingOptions = {}
+): Promise<BatchBindingResult> {
+  const result: BatchBindingResult = { successful: [], failed: [] };
+
+  for (const repositoryPath of repositoryPaths) {
+    try {
+      result.successful.push(await bindRepository(repositoryPath, space, options));
+    } catch (error) {
+      result.failed.push({ repositoryPath, message: errorMessage(error) });
+    }
+  }
+
+  return result;
 }
 
 export async function unbindRepository(
