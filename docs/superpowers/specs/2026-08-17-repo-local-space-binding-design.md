@@ -55,17 +55,21 @@ The supplied path may be the repository root or a directory beneath it.
 ### Bind repositories beneath a parent directory
 
 ```bash
-dss bind [spaceName] --recursive <parentPath>
+dss bind [spaceName] --recursive [parentPath]
+dss bind [spaceName] -r [parentPath]
 ```
 
-DSS discovers Git repositories beneath `parentPath`, prints the sorted list,
+When `parentPath` is omitted, DSS searches beneath the current working
+directory. This makes `dss bind <space> -r` the normal workflow from a VS Code
+integrated terminal opened at the parent folder. When a path is supplied, DSS
+searches beneath that directory instead. It prints the sorted repository list
 and asks for confirmation before changing any repository. A recursive dry run
 prints the same list and intended configuration without prompting or writing.
 
 ### Preview binding
 
 ```bash
-dss bind [spaceName] [--path <repositoryPath> | --recursive <parentPath>] --dry-run
+dss bind [spaceName] [--path <repositoryPath> | --recursive [parentPath]] --dry-run
 ```
 
 ### Remove a binding
@@ -87,9 +91,10 @@ Status reports the repository root, bound DSS space, configured SSH key, and
 effective repository `user.name` and `user.email`. An unbound repository is a
 normal successful status, not an error.
 
-`--path` and `--recursive` are mutually exclusive. Invalid paths, non-Git
-directories, empty recursive results, missing spaces, and spaces without an SSH
-key produce clear errors and a non-zero process exit status.
+`--path` and `--recursive` are mutually exclusive. `-r` is the short form of
+`--recursive`. Invalid paths, non-Git directories, empty recursive results,
+missing spaces, and spaces without an SSH key produce clear errors and a
+non-zero process exit status.
 
 ## Storage Model
 
@@ -222,8 +227,8 @@ The README will add a repository-local workflow section covering:
 
 - Binding from a VS Code integrated terminal.
 - Binding an explicitly selected repository.
-- Binding several child repositories from a parent directory.
+- Binding several child repositories from the current parent directory with
+  `dss bind <space> -r`, plus the optional explicit parent-path form.
 - Checking and removing a binding.
 - The guarantee that binding data lives under `.git/` and is never pushed.
 - The distinction between persistent repository binding and global switching.
-
