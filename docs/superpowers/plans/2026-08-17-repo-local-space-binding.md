@@ -185,7 +185,10 @@ const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules']);
 
 export async function discoverRepositories(parentPath: string): Promise<string[]> {
   const parent = path.resolve(parentPath);
-  const parentStats = await fs.stat(parent);
+  const parentStats = await fs.lstat(parent);
+  if (parentStats.isSymbolicLink()) {
+    throw new Error(`Recursive path is a symbolic link: ${parent}`);
+  }
   if (!parentStats.isDirectory()) {
     throw new Error(`Recursive path is not a directory: ${parent}`);
   }
