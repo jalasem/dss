@@ -24,10 +24,31 @@ describe('repository binding CLI commands', () => {
     return directory;
   }
 
+  function cliEnvironment(): NodeJS.ProcessEnv {
+    const environment = { ...process.env };
+    for (const variable of [
+      'GIT_DIR',
+      'GIT_WORK_TREE',
+      'GIT_COMMON_DIR',
+      'GIT_INDEX_FILE',
+      'GIT_OBJECT_DIRECTORY',
+      'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+      'GIT_CEILING_DIRECTORIES',
+      'GIT_PREFIX'
+    ]) {
+      delete environment[variable];
+    }
+    environment.GIT_CONFIG_GLOBAL = path.join(temporaryHome, 'empty-global.gitconfig');
+    environment.GIT_CONFIG_NOSYSTEM = '1';
+    environment.XDG_CONFIG_HOME = path.join(temporaryHome, '.config');
+    return environment;
+  }
+
   function runCli(args: string[], cwd: string = temporaryHome): string {
     return execFileSync(process.execPath, ['--require', homedirPreloadPath, CLI_PATH, ...args], {
       cwd,
-      encoding: 'utf8'
+      encoding: 'utf8',
+      env: cliEnvironment()
     });
   }
 
@@ -35,13 +56,22 @@ describe('repository binding CLI commands', () => {
     return execFileSync(process.execPath, ['--require', homedirPreloadPath, CLI_PATH, ...args], {
       cwd,
       encoding: 'utf8',
+      env: cliEnvironment(),
       input
     });
   }
 
-  function runCliFailure(args: string[], cwd: string = temporaryHome): { output: string; status: number | null } {
+  function runCliFailure(
+    args: string[],
+    cwd: string = temporaryHome,
+    input?: string
+  ): { output: string; status: number | null } {
     try {
-      runCli(args, cwd);
+      if (input === undefined) {
+        runCli(args, cwd);
+      } else {
+        runCliWithInput(args, input, cwd);
+      }
     } catch (error) {
       const childProcessError = error as { stdout?: string; stderr?: string; status?: number };
       return {
@@ -84,6 +114,8 @@ describe('repository binding CLI commands', () => {
       homedirPreloadPath,
       `const os = require('os'); os.homedir = () => ${JSON.stringify(temporaryHome)};\n`
     );
+    await fs.writeFile(path.join(temporaryHome, 'empty-global.gitconfig'), '');
+    await fs.ensureDir(path.join(temporaryHome, '.config'));
     await fs.ensureDir(repository);
     runGit(repository, ['init']);
   });
@@ -144,6 +176,22 @@ describe('repository binding CLI commands', () => {
     expect(output).toContain('Bind 2 repositories to "personal"?');
     expect(runGit(alpha, ['config', 'dss.space'])).toBe('personal');
     expect(runGit(beta, ['config', 'dss.space'])).toBe('personal');
+  });
+
+  it('continues recursive binding after a repository fails and exits nonzero', async () => {
+    const recursiveParent = path.join(temporaryHome, 'repositories');
+    const unsafeRepository = await createRepository(recursiveParent, 'alpha-unsafe');
+    const validRepository = await createRepository(recursiveParent, 'omega-valid');
+    const externalDssDirectory = path.join(temporaryHome, 'external-dss');
+    await fs.ensureDir(externalDssDirectory);
+    await fs.symlink(externalDssDirectory, path.join(unsafeRepository, '.git', 'dss'));
+
+    const result = runCliFailure(['bind', 'personal', '-r'], recursiveParent, 'y\n');
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('1 succeeded, 1 failed');
+    expect(result.output).toContain(unsafeRepository);
+    expect(runGit(validRepository, ['config', 'dss.space'])).toBe('personal');
   });
 
   it('shows binding status for a bound repository', () => {

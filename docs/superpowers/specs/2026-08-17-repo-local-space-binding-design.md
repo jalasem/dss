@@ -117,15 +117,19 @@ The file contains:
     space = <space name>
 ```
 
-DSS adds that file to the repository's local Git config using an
-`include.path` entry. Git reads the included values for command-line and editor
-operations. The file is under the Git directory and therefore cannot be staged
-or pushed.
+DSS enables Git's `extensions.worktreeConfig` setting and adds that file to the
+current worktree's config using a worktree-scoped `include.path` entry. Git
+reads the included values for command-line and editor operations. The file is
+under the Git directory and therefore cannot be staged or pushed. Worktree
+scope allows a main checkout and its linked worktrees to use different DSS
+spaces without overwriting one another.
 
 The include-file approach preserves existing local values rather than
-overwriting them. `dss unbind` removes the exact DSS `include.path` value and
-then removes the DSS-owned file. Previously configured local or global values
-become effective again without DSS needing to copy or restore them.
+overwriting them. `dss unbind` removes the exact DSS `include.path` value from
+the current worktree and then removes the DSS-owned file. Previously configured
+local or global values become effective again without DSS needing to copy or
+restore them. The repository's worktree-config extension remains enabled after
+unbind because other tools or worktrees may rely on it.
 
 Binding the same repository again updates the DSS-owned file and does not add a
 duplicate include. A repository may have unrelated Git include files; DSS must
@@ -140,7 +144,7 @@ A focused utility module will:
 - Resolve a repository root from a path.
 - Resolve the repository-specific DSS config path.
 - Build and safely serialize the identity configuration.
-- Add or remove the exact local `include.path` entry.
+- Add or remove the exact worktree-scoped `include.path` entry.
 - Read effective binding status.
 - Discover repositories recursively without following symbolic links or
   descending into `.git` and `node_modules` directories.

@@ -5,14 +5,36 @@ import { promisify } from 'util';
 import { ISpace } from './types';
 
 const execFileAsync = promisify(execFile);
+const GIT_REPOSITORY_ENVIRONMENT_VARIABLES = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_COMMON_DIR',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_PREFIX'
+] as const;
 
-async function runGit(cwd: string, args: string[]): Promise<string> {
+function gitEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  for (const variable of GIT_REPOSITORY_ENVIRONMENT_VARIABLES) {
+    delete environment[variable];
+  }
+  return environment;
+}
+
+async function runGit(
+  cwd: string,
+  args: string[],
+  trimOutput: boolean = true
+): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
-    env: process.env
+    env: gitEnvironment()
   });
 
-  return stdout.trim();
+  return trimOutput ? stdout.trim() : stdout;
 }
 
 const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules']);
@@ -106,10 +128,11 @@ async function resolveBindingConfigPath(repositoryRoot: string): Promise<string>
 
 async function readOptionalGitConfig(
   repositoryRoot: string,
-  args: string[]
+  args: string[],
+  trimOutput: boolean = true
 ): Promise<string | undefined> {
   try {
-    return await runGit(repositoryRoot, args);
+    return await runGit(repositoryRoot, args, trimOutput);
   } catch (error) {
     if ((error as { code?: unknown }).code === 1) {
       return undefined;
@@ -118,11 +141,20 @@ async function readOptionalGitConfig(
   }
 }
 
-async function getLocalIncludes(repositoryRoot: string): Promise<string[]> {
+async function getWorktreeIncludes(repositoryRoot: string): Promise<string[]> {
   const output = await readOptionalGitConfig(repositoryRoot, [
-    'config', '--local', '--get-all', 'include.path'
+    'config', '-z', '--worktree', '--get-all', 'include.path'
+  ], false);
+  return output ? output.split('\0').filter(Boolean) : [];
+}
+
+async function enableWorktreeConfig(repositoryRoot: string): Promise<void> {
+  await runGit(repositoryRoot, [
+    'config',
+    '--local',
+    'extensions.worktreeConfig',
+    'true'
   ]);
-  return output ? output.split('\n').filter(Boolean) : [];
 }
 
 async function writeBindingConfig(configPath: string, space: ISpace): Promise<void> {
@@ -208,21 +240,25 @@ export async function getRepositoryBindingStatus(
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
   const configPath = await resolveBindingConfigPath(repositoryRoot);
-  const includes = await getLocalIncludes(repositoryRoot);
+  const includes = await getWorktreeIncludes(repositoryRoot);
   const bound = includes.includes(configPath) && await fs.pathExists(configPath);
-
-  if (!bound) {
-    return { repositoryRoot, configPath, bound: false };
-  }
+  const [spaceName, userName, email, sshCommand] = await Promise.all([
+    bound
+      ? readOptionalGitConfig(repositoryRoot, ['config', '--file', configPath, 'dss.space'])
+      : undefined,
+    readOptionalGitConfig(repositoryRoot, ['config', 'user.name']),
+    readOptionalGitConfig(repositoryRoot, ['config', 'user.email']),
+    readOptionalGitConfig(repositoryRoot, ['config', 'core.sshCommand'])
+  ]);
 
   return {
     repositoryRoot,
     configPath,
-    bound: true,
-    spaceName: await readOptionalGitConfig(repositoryRoot, ['config', '--file', configPath, 'dss.space']),
-    userName: await readOptionalGitConfig(repositoryRoot, ['config', 'user.name']),
-    email: await readOptionalGitConfig(repositoryRoot, ['config', 'user.email']),
-    sshCommand: await readOptionalGitConfig(repositoryRoot, ['config', 'core.sshCommand'])
+    bound,
+    spaceName,
+    userName,
+    email,
+    sshCommand
   };
 }
 
@@ -246,10 +282,11 @@ export async function bindRepository(
     };
   }
 
+  await enableWorktreeConfig(repositoryRoot);
   await writeBindingConfig(configPath, space);
-  const includes = await getLocalIncludes(repositoryRoot);
+  const includes = await getWorktreeIncludes(repositoryRoot);
   if (!includes.includes(configPath)) {
-    await runGit(repositoryRoot, ['config', '--local', '--add', 'include.path', configPath]);
+    await runGit(repositoryRoot, ['config', '--worktree', '--add', 'include.path', configPath]);
   }
 
   return getRepositoryBindingStatus(repositoryRoot);
@@ -284,11 +321,11 @@ export async function unbindRepository(
     return getRepositoryBindingStatus(repositoryRoot);
   }
 
-  const includes = await getLocalIncludes(repositoryRoot);
+  const includes = await getWorktreeIncludes(repositoryRoot);
   if (includes.includes(configPath)) {
     await runGit(repositoryRoot, [
       'config',
-      '--local',
+      '--worktree',
       '--fixed-value',
       '--unset-all',
       'include.path',

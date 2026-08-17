@@ -20,6 +20,25 @@ function runGit(cwd: string, args: string[]): string {
   }).trim();
 }
 
+function runGitRaw(cwd: string, args: string[]): string {
+  return execFileSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+}
+
+function readGitValues(cwd: string, args: string[]): string[] {
+  try {
+    return runGitRaw(cwd, args).split('\0').filter(Boolean);
+  } catch (error) {
+    if ((error as { status?: unknown }).status === 1) {
+      return [];
+    }
+    throw error;
+  }
+}
+
 function readOptionalGlobalGitConfig(key: string): string | undefined {
   try {
     return execFileSync('git', ['config', '--global', '--get', key], {
@@ -46,6 +65,18 @@ describe('repository targeting', () => {
     userName: 'Personal User',
     sshKeyPath: "/tmp/DSS keys/key '$HOME; touch blocked'"
   };
+  const workSpace: ISpace = {
+    name: 'work',
+    email: 'work@example.com',
+    userName: 'Work User',
+    sshKeyPath: '/tmp/work-key'
+  };
+  const clientSpace: ISpace = {
+    name: 'client',
+    email: 'client@example.com',
+    userName: 'Client User',
+    sshKeyPath: '/tmp/client-key'
+  };
 
   async function createTemporaryDirectory(): Promise<string> {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dss-binding-'));
@@ -66,6 +97,48 @@ describe('repository targeting', () => {
     await expect(resolveRepositoryRoot(nestedDirectory)).resolves.toBe(
       await fs.realpath(repository)
     );
+  });
+
+  it('keeps explicit and current-directory targeting authoritative over Git environment variables', async () => {
+    const parent = await createTemporaryDirectory();
+    const requestedRepository = await createRepository(parent, 'requested');
+    const poisonedRepository = await createRepository(parent, 'poisoned');
+    const originalDirectory = process.cwd();
+    const poisonedKeys = [
+      'GIT_DIR',
+      'GIT_WORK_TREE',
+      'GIT_COMMON_DIR',
+      'GIT_INDEX_FILE'
+    ] as const;
+    const originalValues = Object.fromEntries(
+      poisonedKeys.map(key => [key, process.env[key]])
+    );
+
+    process.env.GIT_DIR = path.join(poisonedRepository, '.git');
+    process.env.GIT_WORK_TREE = poisonedRepository;
+    process.env.GIT_COMMON_DIR = path.join(poisonedRepository, '.git');
+    process.env.GIT_INDEX_FILE = path.join(poisonedRepository, '.git', 'index');
+
+    try {
+      await expect(resolveRepositoryRoot(requestedRepository)).resolves.toBe(
+        await fs.realpath(requestedRepository)
+      );
+
+      process.chdir(requestedRepository);
+      await expect(resolveRepositoryRoot('.')).resolves.toBe(
+        await fs.realpath(requestedRepository)
+      );
+    } finally {
+      process.chdir(originalDirectory);
+      for (const key of poisonedKeys) {
+        const value = originalValues[key];
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 
   it('discovers repositories deterministically without traversing excluded or symbolic-link directories', async () => {
@@ -110,7 +183,7 @@ describe('repository targeting', () => {
     const repository = await createRepository(parent, 'project');
 
     const status = await bindRepository(repository, personalSpace);
-    const includes = runGit(repository, ['config', '--local', '--get-all', 'include.path'])
+    const includes = runGit(repository, ['config', '--worktree', '--get-all', 'include.path'])
       .split('\n')
       .filter(Boolean);
 
@@ -124,6 +197,61 @@ describe('repository targeting', () => {
     );
     expect(includes).toEqual([status.configPath]);
     expect(status.configPath.startsWith(path.join(repository, '.git'))).toBe(true);
+  });
+
+  it('keeps linked worktree bindings independent through rebind and unbind', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    runGit(repository, ['config', 'user.name', 'Fixture User']);
+    runGit(repository, ['config', 'user.email', 'fixture@example.com']);
+    await fs.writeFile(path.join(repository, 'README.md'), 'fixture\n');
+    runGit(repository, ['add', 'README.md']);
+    runGit(repository, ['commit', '-m', 'fixture']);
+    const linkedWorktree = path.join(parent, 'linked');
+    runGit(repository, ['worktree', 'add', '-b', 'linked-fixture', linkedWorktree]);
+
+    await bindRepository(repository, personalSpace);
+    await bindRepository(linkedWorktree, workSpace);
+
+    expect(runGit(repository, ['config', 'user.name'])).toBe('Personal User');
+    expect(runGit(repository, ['config', 'user.email'])).toBe('personal@example.com');
+    expect(runGit(repository, ['config', 'core.sshCommand'])).toBe(
+      "ssh -i '/tmp/DSS keys/key '\\''$HOME; touch blocked'\\''' -o IdentitiesOnly=yes"
+    );
+    await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({
+      bound: true,
+      spaceName: 'personal'
+    });
+    expect(runGit(linkedWorktree, ['config', 'user.name'])).toBe('Work User');
+    expect(runGit(linkedWorktree, ['config', 'user.email'])).toBe('work@example.com');
+    expect(runGit(linkedWorktree, ['config', 'core.sshCommand']))
+      .toBe("ssh -i '/tmp/work-key' -o IdentitiesOnly=yes");
+    await expect(getRepositoryBindingStatus(linkedWorktree)).resolves.toMatchObject({
+      bound: true,
+      spaceName: 'work'
+    });
+
+    await bindRepository(repository, clientSpace);
+    expect(runGit(repository, ['config', 'user.email'])).toBe('client@example.com');
+    expect(runGit(linkedWorktree, ['config', 'user.email'])).toBe('work@example.com');
+
+    await unbindRepository(repository);
+    await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({
+      bound: false,
+      userName: 'Fixture User',
+      email: 'fixture@example.com'
+    });
+    await expect(getRepositoryBindingStatus(linkedWorktree)).resolves.toMatchObject({
+      bound: true,
+      spaceName: 'work'
+    });
+
+    await unbindRepository(linkedWorktree);
+    await expect(getRepositoryBindingStatus(linkedWorktree)).resolves.toMatchObject({
+      bound: false,
+      userName: 'Fixture User',
+      email: 'fixture@example.com'
+    });
   });
 
   it('continues recursive binding after an individual repository fails', async () => {
@@ -176,19 +304,42 @@ describe('repository targeting', () => {
   it('rebinds without duplicating the DSS include', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project');
-    const workSpace: ISpace = {
-      name: 'work',
-      email: 'work@example.com',
-      userName: 'Work User',
-      sshKeyPath: '/tmp/work-key'
-    };
-
     await bindRepository(repository, personalSpace);
     await bindRepository(repository, workSpace);
 
     expect(runGit(repository, ['config', 'dss.space'])).toBe('work');
-    expect(runGit(repository, ['config', '--local', '--get-all', 'include.path']).split('\n'))
+    expect(runGit(repository, ['config', '--worktree', '--get-all', 'include.path']).split('\n'))
       .toHaveLength(1);
+  });
+
+  it('binds, rebinds, reports, and unbinds a repository whose path contains a newline', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project\nline');
+
+    const first = await bindRepository(repository, personalSpace);
+    expect(first).toMatchObject({ bound: true, spaceName: 'personal' });
+
+    const rebound = await bindRepository(repository, workSpace);
+    expect(rebound).toMatchObject({ bound: true, spaceName: 'work' });
+    expect(runGit(repository, ['config', 'user.email'])).toBe('work@example.com');
+    expect(readGitValues(repository, [
+      'config',
+      '-z',
+      '--worktree',
+      '--get-all',
+      'include.path'
+    ])).toEqual([rebound.configPath]);
+
+    const unbound = await unbindRepository(repository);
+    expect(unbound.bound).toBe(false);
+    expect(readGitValues(repository, [
+      'config',
+      '-z',
+      '--worktree',
+      '--get-all',
+      'include.path'
+    ])).toEqual([]);
+    await expect(fs.pathExists(rebound.configPath)).resolves.toBe(false);
   });
 
   it('unbinds DSS while preserving prior local values and unrelated includes', async () => {
@@ -211,6 +362,21 @@ describe('repository targeting', () => {
       .toBe(unrelatedInclude);
   });
 
+  it('reports effective Git identity for an unbound repository', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    runGit(repository, ['config', '--local', 'user.name', 'Existing User']);
+    runGit(repository, ['config', '--local', 'user.email', 'existing@example.com']);
+    runGit(repository, ['config', '--local', 'core.sshCommand', 'ssh -i /tmp/existing-key']);
+
+    await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({
+      bound: false,
+      userName: 'Existing User',
+      email: 'existing@example.com',
+      sshCommand: 'ssh -i /tmp/existing-key'
+    });
+  });
+
   it('does not mutate repository config during a dry run', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project');
@@ -226,7 +392,21 @@ describe('repository targeting', () => {
       sshCommand: "ssh -i '/tmp/DSS keys/key '\\''$HOME; touch blocked'\\''' -o IdentitiesOnly=yes"
     });
     expect(await fs.readFile(path.join(repository, '.git', 'config'), 'utf8')).toBe(before);
+    await expect(fs.pathExists(status.configPath)).resolves.toBe(false);
+    await expect(fs.pathExists(path.dirname(status.configPath))).resolves.toBe(false);
     await expect(getRepositoryBindingStatus(repository)).resolves.toMatchObject({ bound: false });
+  });
+
+  it('keeps the DSS config outside the repository index', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    await fs.writeFile(path.join(repository, 'README.md'), 'tracked fixture\n');
+
+    const binding = await bindRepository(repository, personalSpace);
+    runGit(repository, ['add', '--all']);
+
+    expect(await fs.pathExists(binding.configPath)).toBe(true);
+    expect(runGit(repository, ['ls-files']).split('\n')).toEqual(['README.md']);
   });
 
   it('unbinds idempotently', async () => {
@@ -292,7 +472,7 @@ describe('repository targeting', () => {
         '#!/usr/bin/env node',
         "const { execFileSync } = require('child_process');",
         'const args = process.argv.slice(2);',
-        "if (args.slice(-4).join(' ') === 'config --local --get-all include.path') {",
+        "if (args.slice(-5).join(' ') === 'config -z --worktree --get-all include.path') {",
         "  process.stderr.write('simulated config failure\\n');",
         '  process.exit(2);',
         '}',
@@ -307,7 +487,13 @@ describe('repository targeting', () => {
     try {
       expect(execFileSync('which', ['git'], { encoding: 'utf8', env: process.env }).trim())
         .toBe(gitWrapper);
-      expect(() => runGit(repository, ['config', '--local', '--get-all', 'include.path']))
+      expect(() => runGit(repository, [
+        'config',
+        '-z',
+        '--worktree',
+        '--get-all',
+        'include.path'
+      ]))
         .toThrow('simulated config failure');
       await expect(unbindRepository(repository)).rejects.toThrow('simulated config failure');
       await expect(fs.pathExists(binding.configPath)).resolves.toBe(true);

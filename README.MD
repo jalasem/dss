@@ -173,7 +173,8 @@ dss unbind
 DSS stores each repository binding under `.git/`, so no binding file can be
 committed or pushed. Editor Git integrations inherit the binding because they
 run Git inside that repository, while `dss switch` remains the separate global
-mode for changing your active DSS space everywhere else.
+mode for changing your active DSS space everywhere else. A repository's linked
+Git worktrees can each be bound to a different DSS space.
 
 ### Advanced Features
 

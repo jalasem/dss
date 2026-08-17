@@ -30,6 +30,35 @@ function hasZsh(): boolean {
   }
 }
 
+function hasFish(): boolean {
+  try {
+    execFileSync('fish', ['--no-config', '-c', 'exit 0'], {
+      stdio: 'pipe',
+      env: { PATH: process.env.PATH }
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createCompletionHome(prefix: string): {
+  temporaryDirectory: string;
+  homeDirectory: string;
+  scriptDirectory: string;
+} {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const homeDirectory = path.join(temporaryDirectory, 'home');
+  const scriptDirectory = path.join(temporaryDirectory, 'scripts');
+  fs.mkdirSync(path.join(homeDirectory, '.dss', 'spaces'), { recursive: true });
+  fs.mkdirSync(scriptDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(homeDirectory, '.dss', 'spaces', 'config.json'),
+    JSON.stringify({ spaces: [{ name: 'aweds-personal' }, { name: 'client-work' }] })
+  );
+  return { temporaryDirectory, homeDirectory, scriptDirectory };
+}
+
 function createZshEnvironment(prefix: string, poisonStartupFiles: boolean): {
   temporaryDirectory: string;
   homeDirectory: string;
@@ -59,6 +88,7 @@ function createZshEnvironment(prefix: string, poisonStartupFiles: boolean): {
 describe('completion script generation', () => {
   const mockedConfirm = confirm as jest.MockedFunction<typeof confirm>;
   const zshIt = hasZsh() ? it : it.skip;
+  const fishIt = hasFish() ? it : it.skip;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -137,6 +167,85 @@ describe('completion script generation', () => {
     expect(script).toContain("-s p -l path -r");
     expect(script).toContain("-s r -l recursive");
     expect(script).toContain("-s p -l path -r -d 'Select an explicit Git repository");
+  });
+
+  it('sources bash completions and completes configured spaces and bind options', async () => {
+    const script = extractGeneratedScript(await captureCompletionOutput('bash'));
+    const environment = createCompletionHome('dss-bash-completion-');
+    const scriptPath = path.join(environment.scriptDirectory, 'dss-completion.bash');
+    fs.writeFileSync(scriptPath, script);
+    const childEnvironment = {
+      HOME: environment.homeDirectory,
+      PATH: process.env.PATH,
+      BASH_ENV: '/dev/null'
+    };
+
+    try {
+      expect(() => execFileSync('bash', ['--noprofile', '--norc', '-n', scriptPath], {
+        stdio: 'pipe',
+        env: childEnvironment
+      })).not.toThrow();
+
+      const runtimeOutput = execFileSync('bash', [
+        '--noprofile',
+        '--norc',
+        '-c',
+        [
+          `source ${JSON.stringify(scriptPath)}`,
+          'COMP_WORDS=(dss bind aw)',
+          'COMP_CWORD=2',
+          '_dss_completion',
+          'printf "space:%s\\n" "${COMPREPLY[@]}"',
+          'COMP_WORDS=(dss bind --r)',
+          'COMP_CWORD=2',
+          '_dss_completion',
+          'printf "option:%s\\n" "${COMPREPLY[@]}"'
+        ].join('; ')
+      ], {
+        encoding: 'utf8',
+        env: childEnvironment,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      expect(runtimeOutput).toContain('space:aweds-personal');
+      expect(runtimeOutput).toContain('option:--recursive');
+    } finally {
+      fs.rmSync(environment.temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  fishIt('parses and sources fish completions with configured spaces', async () => {
+    const script = extractGeneratedScript(await captureCompletionOutput('fish'));
+    const environment = createCompletionHome('dss-fish-completion-');
+    const scriptPath = path.join(environment.scriptDirectory, 'dss-completion.fish');
+    fs.writeFileSync(scriptPath, script);
+    const childEnvironment = {
+      HOME: environment.homeDirectory,
+      PATH: process.env.PATH,
+      XDG_CONFIG_HOME: path.join(environment.homeDirectory, '.config')
+    };
+
+    try {
+      expect(() => execFileSync('fish', ['--no-config', '-n', scriptPath], {
+        stdio: 'pipe',
+        env: childEnvironment
+      })).not.toThrow();
+
+      const runtimeOutput = execFileSync('fish', [
+        '--no-config',
+        '-c',
+        `source ${JSON.stringify(scriptPath)}; __dss_get_spaces; complete -C 'dss bind --r'`
+      ], {
+        encoding: 'utf8',
+        env: childEnvironment,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      expect(runtimeOutput).toContain('aweds-personal');
+      expect(runtimeOutput).toContain('--recursive');
+    } finally {
+      fs.rmSync(environment.temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   zshIt('generates parseable zsh completions that extract configured space names', async () => {
