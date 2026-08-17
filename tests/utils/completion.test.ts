@@ -10,8 +10,18 @@ jest.mock('@inquirer/prompts', () => ({
   select: jest.fn()
 }));
 
+function hasZsh(): boolean {
+  try {
+    execFileSync('zsh', ['-lc', 'exit 0'], { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe('completion script generation', () => {
   const mockedConfirm = confirm as jest.MockedFunction<typeof confirm>;
+  const zshIt = hasZsh() ? it : it.skip;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -92,7 +102,7 @@ describe('completion script generation', () => {
     expect(script).toContain("-s p -l path -r -d 'Select an explicit Git repository");
   });
 
-  it('generates parseable zsh completions that extract configured space names', async () => {
+  zshIt('generates parseable zsh completions that extract configured space names', async () => {
     const output = await captureCompletionOutput('zsh');
     const script = extractGeneratedScript(output);
     const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'dss-zsh-completion-'));
@@ -107,6 +117,69 @@ describe('completion script generation', () => {
       expect(() => {
         execFileSync('zsh', ['-n', scriptPath], { stdio: 'pipe' });
       }).not.toThrow();
+    } finally {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  zshIt('sources zsh completions and offers configured spaces for bind', async () => {
+    const output = await captureCompletionOutput('zsh');
+    const script = extractGeneratedScript(output);
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'dss-zsh-runtime-'));
+    const scriptPath = path.join(temporaryDirectory, '_dss');
+    const spacesDirectory = path.join(temporaryDirectory, '.dss', 'spaces');
+    const harnessPath = path.join(temporaryDirectory, 'harness.zsh');
+
+    fs.mkdirSync(spacesDirectory, { recursive: true });
+    fs.writeFileSync(scriptPath, script);
+    fs.writeFileSync(
+      path.join(spacesDirectory, 'config.json'),
+      JSON.stringify({
+        spaces: [
+          { name: 'aweds-personal' },
+          { name: 'client-work' }
+        ]
+      })
+    );
+    fs.writeFileSync(
+      harnessPath,
+      [
+        '#!/bin/zsh',
+        'compdef() { return 0; }',
+        '_arguments() {',
+        '  state=args',
+        '  return 1',
+        '}',
+        '_describe() {',
+        '  local label="$1"',
+        '  local array_name="$2"',
+        '  print -r -- "$label:${(j:,:)${(P)array_name}}"',
+        '  return 0',
+        '}',
+        '_values() {',
+        '  print -r -- "unexpected-values:$*"',
+        '  return 0',
+        '}',
+        `source ${JSON.stringify(scriptPath)}`,
+        'words=(dss bind aw)',
+        'CURRENT=3',
+        '_dss',
+        ''
+      ].join('\n')
+    );
+
+    try {
+      const runtimeOutput = execFileSync('zsh', [harnessPath], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: temporaryDirectory
+        },
+        stdio: ['ignore', 'pipe', 'pipe']
+      }).trim();
+
+      expect(runtimeOutput).toContain('spaces:aweds-personal,client-work');
+      expect(runtimeOutput).not.toContain('unexpected-values');
     } finally {
       fs.rmSync(temporaryDirectory, { recursive: true, force: true });
     }
