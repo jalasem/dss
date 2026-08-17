@@ -106,17 +106,17 @@ _dss_completion() {
     case \$command in
         bind)
             if [[ \$cur == -* ]]; then
-                opts="--path --recursive --dry-run"
+                opts="-p --path -r --recursive --dry-run"
             fi
             ;;
         unbind)
             if [[ \$cur == -* ]]; then
-                opts="--path --dry-run"
+                opts="-p --path --dry-run"
             fi
             ;;
         status)
             if [[ \$cur == -* ]]; then
-                opts="--path"
+                opts="-p --path"
             fi
             ;;
         switch|remove|bulk)
@@ -168,7 +168,7 @@ _dss() {
     
     # Get space names
     if [[ -f ~/.dss/spaces/config.json ]]; then
-        spaces=(\\$(echo "dummy"))
+        spaces=($(grep -o '"name":"[^"]*"' ~/.dss/spaces/config.json | cut -d'"' -f4))
     fi
     
     _arguments -C \\
@@ -189,18 +189,22 @@ _dss() {
                         _describe 'spaces' spaces
                     else
                         _values 'bind options' \
+                            '-p[Bind an explicit Git repository]' \
                             '--path[Bind an explicit Git repository]' \
+                            '-r[Bind repositories beneath a parent directory]' \
                             '--recursive[Bind repositories beneath a parent directory]' \
                             '--dry-run[Preview changes without applying them]'
                     fi
                     ;;
                 unbind)
                     _values 'unbind options' \
+                        '-p[Select an explicit Git repository]' \
                         '--path[Select an explicit Git repository]' \
                         '--dry-run[Preview changes without applying them]'
                     ;;
                 status)
                     _values 'status options' \
+                        '-p[Select an explicit Git repository]' \
                         '--path[Select an explicit Git repository]'
                     ;;
                 completion)
@@ -258,12 +262,12 @@ complete -c dss -n '__fish_seen_subcommand_from switch remove edit test inspect 
 
 # Options for specific commands
 complete -c dss -n '__fish_seen_subcommand_from switch remove bulk' -l dry-run -d 'Preview changes without applying them'
-complete -c dss -n '__fish_seen_subcommand_from bind' -l path -r -d 'Bind an explicit Git repository (--path)'
-complete -c dss -n '__fish_seen_subcommand_from bind' -l recursive -d 'Bind repositories beneath a parent directory (--recursive)'
+complete -c dss -n '__fish_seen_subcommand_from bind' -s p -l path -r -d 'Bind an explicit Git repository (--path)'
+complete -c dss -n '__fish_seen_subcommand_from bind' -s r -l recursive -d 'Bind repositories beneath a parent directory (--recursive)'
 complete -c dss -n '__fish_seen_subcommand_from bind' -l dry-run -d 'Preview changes without applying them (--dry-run)'
-complete -c dss -n '__fish_seen_subcommand_from unbind' -l path -r -d 'Select an explicit Git repository (--path)'
+complete -c dss -n '__fish_seen_subcommand_from unbind' -s p -l path -r -d 'Select an explicit Git repository (--path)'
 complete -c dss -n '__fish_seen_subcommand_from unbind' -l dry-run -d 'Preview changes without applying them (--dry-run)'
-complete -c dss -n '__fish_seen_subcommand_from status' -l path -r -d 'Select an explicit Git repository (--path)'
+complete -c dss -n '__fish_seen_subcommand_from status' -s p -l path -r -d 'Select an explicit Git repository (--path)'
 
 # Shell completions for completion command
 complete -c dss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish' -d 'Shell type'
