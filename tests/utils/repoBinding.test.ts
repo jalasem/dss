@@ -148,6 +148,67 @@ async function installGitVersionWrapper(
   };
 }
 
+async function installFinalStatusFailureWrapper(
+  parent: string,
+  configPath: string,
+  failRollback: boolean = false
+): Promise<() => void> {
+  const gitWrapperDirectory = path.join(parent, 'git-wrapper-status-failure');
+  const gitWrapper = path.join(gitWrapperDirectory, 'git');
+  const gitExecutable = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  const originalPath = process.env.PATH;
+  const originalGitExecutable = process.env.DSS_TEST_REAL_GIT;
+  const originalConfigPath = process.env.DSS_TEST_CONFIG_PATH;
+  const originalFailRollback = process.env.DSS_TEST_FAIL_ROLLBACK;
+  await fs.ensureDir(gitWrapperDirectory);
+  await fs.writeFile(
+    gitWrapper,
+    [
+      '#!/usr/bin/env node',
+      "const { execFileSync } = require('child_process');",
+      'const args = process.argv.slice(2);',
+      "const configIndex = args.indexOf('config');",
+      "if (process.env.DSS_TEST_FAIL_ROLLBACK === 'true' &&",
+      "    args.includes('--unset-all')) {",
+      "  process.stderr.write('simulated rollback failure\\n');",
+      '  process.exit(2);',
+      '}',
+      "if (args[configIndex + 1] === '--file' &&",
+      '    args[configIndex + 2] === process.env.DSS_TEST_CONFIG_PATH &&',
+      "    args[configIndex + 3] === 'dss.space') {",
+      "  process.stderr.write('simulated status failure\\n');",
+      '  process.exit(2);',
+      '}',
+      "execFileSync(process.env.DSS_TEST_REAL_GIT, args, { stdio: 'inherit' });",
+      ''
+    ].join('\n')
+  );
+  await fs.chmod(gitWrapper, 0o755);
+  process.env.DSS_TEST_REAL_GIT = gitExecutable;
+  process.env.DSS_TEST_CONFIG_PATH = configPath;
+  process.env.DSS_TEST_FAIL_ROLLBACK = String(failRollback);
+  process.env.PATH = `${gitWrapperDirectory}${path.delimiter}${originalPath ?? ''}`;
+
+  return () => {
+    process.env.PATH = originalPath;
+    if (originalGitExecutable === undefined) {
+      delete process.env.DSS_TEST_REAL_GIT;
+    } else {
+      process.env.DSS_TEST_REAL_GIT = originalGitExecutable;
+    }
+    if (originalConfigPath === undefined) {
+      delete process.env.DSS_TEST_CONFIG_PATH;
+    } else {
+      process.env.DSS_TEST_CONFIG_PATH = originalConfigPath;
+    }
+    if (originalFailRollback === undefined) {
+      delete process.env.DSS_TEST_FAIL_ROLLBACK;
+    } else {
+      process.env.DSS_TEST_FAIL_ROLLBACK = originalFailRollback;
+    }
+  };
+}
+
 describe('repository targeting', () => {
   const temporaryDirectories: string[] = [];
   const personalSpace: ISpace = {
@@ -602,7 +663,34 @@ describe('repository targeting', () => {
     ])).toEqual([unrelatedPath]);
   });
 
-  it('preserves interleaved include ordering when a rebound status read fails', async () => {
+  it('rolls back a first bind when final status retrieval fails', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const preview = await bindRepository(repository, personalSpace, { dryRun: true });
+    const conditionKey = await bindingConditionKey(repository);
+    const localConfigPath = path.join(repository, '.git', 'config');
+    const localConfigBefore = await fs.readFile(localConfigPath);
+    const restoreGit = await installFinalStatusFailureWrapper(
+      parent,
+      preview.configPath
+    );
+
+    try {
+      await expect(bindRepository(repository, personalSpace))
+        .rejects.toThrow('simulated status failure');
+    } finally {
+      restoreGit();
+    }
+
+    await expect(fs.readFile(localConfigPath)).resolves.toEqual(localConfigBefore);
+    await expect(fs.pathExists(preview.configPath)).resolves.toBe(false);
+    await expect(fs.pathExists(path.dirname(preview.configPath))).resolves.toBe(false);
+    expect(readGitValues(repository, [
+      'config', '-z', '--local', '--get-all', conditionKey
+    ])).toEqual([]);
+  });
+
+  it('restores an existing binding and interleaved include ordering when final status fails', async () => {
     const parent = await createTemporaryDirectory();
     const repository = await createRepository(parent, 'project');
     const binding = await bindRepository(repository, personalSpace);
@@ -617,61 +705,50 @@ describe('repository targeting', () => {
     runGit(repository, ['config', '--local', '--add', conditionKey, unrelatedPath]);
     const localConfigPath = path.join(repository, '.git', 'config');
     const localConfigBefore = await fs.readFile(localConfigPath);
+    const bindingConfigBefore = await fs.readFile(binding.configPath);
     const includesBefore = readGitValues(repository, [
       'config', '-z', '--local', '--get-all', conditionKey
     ]);
-    const gitWrapperDirectory = path.join(parent, 'git-wrapper-status-failure');
-    const gitWrapper = path.join(gitWrapperDirectory, 'git');
-    const gitExecutable = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
-    const originalPath = process.env.PATH;
-    const originalGitExecutable = process.env.DSS_TEST_REAL_GIT;
-    const originalConfigPath = process.env.DSS_TEST_CONFIG_PATH;
-    await fs.ensureDir(gitWrapperDirectory);
-    await fs.writeFile(
-      gitWrapper,
-      [
-        '#!/usr/bin/env node',
-        "const { execFileSync } = require('child_process');",
-        'const args = process.argv.slice(2);',
-        "const configIndex = args.indexOf('config');",
-        "if (args[configIndex + 1] === '--file' &&",
-        '    args[configIndex + 2] === process.env.DSS_TEST_CONFIG_PATH &&',
-        "    args[configIndex + 3] === 'dss.space') {",
-        "  process.stderr.write('simulated status failure\\n');",
-        '  process.exit(2);',
-        '}',
-        "execFileSync(process.env.DSS_TEST_REAL_GIT, args, { stdio: 'inherit' });",
-        ''
-      ].join('\n')
+    const restoreGit = await installFinalStatusFailureWrapper(
+      parent,
+      binding.configPath
     );
-    await fs.chmod(gitWrapper, 0o755);
-    process.env.DSS_TEST_REAL_GIT = gitExecutable;
-    process.env.DSS_TEST_CONFIG_PATH = binding.configPath;
-    process.env.PATH = `${gitWrapperDirectory}${path.delimiter}${originalPath ?? ''}`;
 
     try {
       await expect(bindRepository(repository, workSpace))
         .rejects.toThrow('simulated status failure');
     } finally {
-      process.env.PATH = originalPath;
-      if (originalGitExecutable === undefined) {
-        delete process.env.DSS_TEST_REAL_GIT;
-      } else {
-        process.env.DSS_TEST_REAL_GIT = originalGitExecutable;
-      }
-      if (originalConfigPath === undefined) {
-        delete process.env.DSS_TEST_CONFIG_PATH;
-      } else {
-        process.env.DSS_TEST_CONFIG_PATH = originalConfigPath;
-      }
+      restoreGit();
     }
 
     await expect(fs.readFile(localConfigPath)).resolves.toEqual(localConfigBefore);
+    await expect(fs.readFile(binding.configPath)).resolves.toEqual(bindingConfigBefore);
     expect(readGitValues(repository, [
       'config', '-z', '--local', '--get-all', conditionKey
     ])).toEqual(includesBefore);
     expect(runGit(repository, ['config', 'user.email']))
       .toBe('precedence@example.com');
+  });
+
+  it('reports the original status error together with a rollback failure', async () => {
+    const parent = await createTemporaryDirectory();
+    const repository = await createRepository(parent, 'project');
+    const preview = await bindRepository(repository, personalSpace, { dryRun: true });
+    const restoreGit = await installFinalStatusFailureWrapper(
+      parent,
+      preview.configPath,
+      true
+    );
+
+    try {
+      await expect(bindRepository(repository, personalSpace)).rejects.toThrow(
+        /simulated status failure.*binding rollback failed.*simulated rollback failure/s
+      );
+    } finally {
+      restoreGit();
+    }
+
+    await expect(fs.pathExists(preview.configPath)).resolves.toBe(false);
   });
 
   it('escapes glob metacharacters in an exact gitdir condition', async () => {

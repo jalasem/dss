@@ -219,11 +219,12 @@ async function ensureConditionalInclude(
   conditionKey: string,
   configPath: string,
   includes: string[]
-): Promise<void> {
+): Promise<boolean> {
   const exactCount = includes.filter(include => include === configPath).length;
-  if (exactCount > 0) return;
+  if (exactCount > 0) return false;
 
   await addConditionalInclude(repositoryRoot, conditionKey, configPath);
+  return true;
 }
 
 async function writeBindingConfig(configPath: string, space: ISpace): Promise<void> {
@@ -416,20 +417,45 @@ export async function bindRepository(
   const previousContents = await fs.pathExists(configPath)
     ? await fs.readFile(configPath)
     : undefined;
-  await writeBindingConfig(configPath, space);
+  let configWritten = false;
+  let includeAdded = false;
   try {
-    await ensureConditionalInclude(
+    await writeBindingConfig(configPath, space);
+    configWritten = true;
+    includeAdded = await ensureConditionalInclude(
       repositoryRoot,
       conditionKey,
       configPath,
       includes
     );
+    return await getRepositoryBindingStatus(repositoryRoot);
   } catch (error) {
-    await restoreBindingConfig(configPath, previousContents);
+    if (!configWritten) throw error;
+
+    const rollbackErrors: unknown[] = [];
+    if (includeAdded) {
+      try {
+        await removeExactConditionalIncludes(repositoryRoot, conditionKey, configPath);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    try {
+      await restoreBindingConfig(configPath, previousContents);
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError);
+    }
+
+    if (rollbackErrors.length > 0) {
+      const combinedError = new Error(
+        `${errorMessage(error)}; binding rollback failed: ` +
+        rollbackErrors.map(errorMessage).join('; ')
+      );
+      (combinedError as Error & { cause?: unknown }).cause = error;
+      throw combinedError;
+    }
     throw error;
   }
-
-  return getRepositoryBindingStatus(repositoryRoot);
 }
 
 export async function bindRepositories(

@@ -205,10 +205,14 @@ configuration changes.
 For a single repository, validation or write failure stops that command and
 sets a non-zero exit code. Configuration-file replacement is atomic: write a
 temporary file in the same Git directory, rename it into place, then ensure the
-include entry exists. If include registration fails, DSS restores the previous
-private file or removes the newly created file. Existing exact include entries
-are never removed and re-added during bind, avoiding shared-config reordering
-on either success or failure.
+include entry exists and retrieve the final effective status. Any failure after
+the private file is replaced rolls back the complete invocation before the
+error is returned. A newly added exact include is removed, then the previous
+private bytes are restored or the newly created file and empty directory are
+removed. If the include pre-existed, shared config is not touched. Existing
+exact include entries are never removed and re-added during bind, avoiding
+shared-config reordering on either success or failure. If rollback itself
+fails, DSS reports both the original and rollback errors.
 
 ## Security and Privacy
 
