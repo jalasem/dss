@@ -18,7 +18,7 @@
 - Git commands must use `execFile` argument arrays with no shell interpolation.
 - `--recursive [parentPath]` and `-r [parentPath]` default to `process.cwd()` when the path is omitted.
 - `--path` and `--recursive` are mutually exclusive.
-- Existing unrelated local Git configuration and `include.path` entries must survive bind and unbind.
+- Existing unrelated local Git configuration, generic `include.path` entries, and conditional includes must survive bind and unbind.
 - Every production behavior is implemented only after its focused test has failed for the expected reason.
 
 ---
@@ -49,10 +49,11 @@ import {
 } from '../../src/utils/repoBinding';
 
 function runGit(cwd: string, args: string[]): string {
-  return execFileSync('git', ['-C', cwd, ...args], {
+  const output = execFileSync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe']
-  }).trim();
+  });
+  return output.endsWith('\n') ? output.slice(0, -1) : output;
 }
 
 async function createRepository(parent: string, name: string): Promise<string> {
@@ -65,10 +66,10 @@ async function createRepository(parent: string, name: string): Promise<string> {
 describe('repository targeting', () => {
   const temporaryDirectories: string[] = [];
 
-  async function createTemporaryDirectory(): Promise<string> {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dss-binding-'));
-    temporaryDirectories.push(directory);
-    return directory;
+async function createTemporaryDirectory(): Promise<string> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dss-binding-'));
+  temporaryDirectories.push(directory);
+  return fs.realpath(directory);
   }
 
   afterEach(async () => {
@@ -116,7 +117,7 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
     encoding: 'utf8'
   });
-  return stdout.trim();
+  return stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
 }
 
 export async function resolveRepositoryRoot(startPath: string): Promise<string> {
@@ -263,8 +264,9 @@ it('binds one repository through a single DSS include file', async () => {
   const repository = await createRepository(parent, 'project');
 
   const status = await bindRepository(repository, personalSpace);
-  const includes = runGit(repository, ['config', '--local', '--get-all', 'include.path'])
-    .split('\n')
+  const conditionKey = bindingConditionKey(repository);
+  const includes = runGit(repository, ['config', '-z', '--local', '--get-all', conditionKey])
+    .split('\0')
     .filter(Boolean);
 
   expect(status.bound).toBe(true);
@@ -307,6 +309,11 @@ interface BindingOptions {
   dryRun?: boolean;
 }
 
+interface BindingLocation {
+  configPath: string;
+  conditionKey: string;
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -315,19 +322,26 @@ function buildSshCommand(sshKeyPath: string): string {
   return `ssh -i ${shellQuote(sshKeyPath)} -o IdentitiesOnly=yes`;
 }
 
-async function resolveBindingConfigPath(repositoryRoot: string): Promise<string> {
+async function resolveBindingLocation(repositoryRoot: string): Promise<BindingLocation> {
+  const gitDirectory = await runGit(repositoryRoot, ['rev-parse', '--absolute-git-dir']);
   const gitPath = await runGit(repositoryRoot, ['rev-parse', '--git-path', 'dss/config']);
-  return path.resolve(repositoryRoot, gitPath);
+  const configPath = path.resolve(repositoryRoot, gitPath);
+  return {
+    configPath,
+    conditionKey: `includeIf.gitdir:${escapeGitdirPattern(gitDirectory)}.path`
+  };
 }
 
 async function readOptionalGitConfig(
   repositoryRoot: string,
-  args: string[]
+  args: string[],
+  trimOutput: boolean = true
 ): Promise<string | undefined> {
   try {
-    return await runGit(repositoryRoot, args);
-  } catch {
-    return undefined;
+    return await runGit(repositoryRoot, args, trimOutput);
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) return undefined;
+    throw error;
   }
 }
 ```
@@ -337,11 +351,14 @@ async function readOptionalGitConfig(
 Add these functions:
 
 ```typescript
-async function getLocalIncludes(repositoryRoot: string): Promise<string[]> {
+async function getConditionalIncludes(
+  repositoryRoot: string,
+  conditionKey: string
+): Promise<string[]> {
   const output = await readOptionalGitConfig(repositoryRoot, [
-    'config', '--local', '--get-all', 'include.path'
-  ]);
-  return output ? output.split('\n').filter(Boolean) : [];
+    'config', '-z', '--local', '--get-all', conditionKey
+  ], false);
+  return output ? output.split('\0').filter(Boolean) : [];
 }
 
 async function writeBindingConfig(configPath: string, space: ISpace): Promise<void> {
@@ -366,20 +383,27 @@ export async function getRepositoryBindingStatus(
   repositoryPath: string
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
-  const configPath = await resolveBindingConfigPath(repositoryRoot);
-  const includes = await getLocalIncludes(repositoryRoot);
+  const { configPath, conditionKey } = await resolveBindingLocation(repositoryRoot);
+  const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
   const bound = includes.includes(configPath) && await fs.pathExists(configPath);
 
-  if (!bound) return { repositoryRoot, configPath, bound: false };
+  const [spaceName, userName, email, sshCommand] = await Promise.all([
+    bound
+      ? readOptionalGitConfig(repositoryRoot, ['config', '--file', configPath, 'dss.space'])
+      : undefined,
+    readOptionalGitConfig(repositoryRoot, ['config', 'user.name']),
+    readOptionalGitConfig(repositoryRoot, ['config', 'user.email']),
+    readOptionalGitConfig(repositoryRoot, ['config', 'core.sshCommand'])
+  ]);
 
   return {
     repositoryRoot,
     configPath,
-    bound: true,
-    spaceName: await readOptionalGitConfig(repositoryRoot, ['config', '--file', configPath, 'dss.space']),
-    userName: await readOptionalGitConfig(repositoryRoot, ['config', 'user.name']),
-    email: await readOptionalGitConfig(repositoryRoot, ['config', 'user.email']),
-    sshCommand: await readOptionalGitConfig(repositoryRoot, ['config', 'core.sshCommand'])
+    bound,
+    spaceName,
+    userName,
+    email,
+    sshCommand
   };
 }
 ```
@@ -393,7 +417,9 @@ export async function bindRepository(
   options: BindingOptions = {}
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
-  const configPath = await resolveBindingConfigPath(repositoryRoot);
+  const { configPath, conditionKey, gitDirectory } = await resolveBindingLocation(repositoryRoot);
+  assertBindableGitDirectory(gitDirectory);
+  await assertRepositoryBindingGitVersion(repositoryRoot);
   if (options.dryRun) {
     return {
       repositoryRoot,
@@ -406,12 +432,30 @@ export async function bindRepository(
     };
   }
 
-  await writeBindingConfig(configPath, space);
-  const includes = await getLocalIncludes(repositoryRoot);
-  if (!includes.includes(configPath)) {
-    await runGit(repositoryRoot, ['config', '--local', '--add', 'include.path', configPath]);
+  const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
+  const previousContents = await fs.pathExists(configPath)
+    ? await fs.readFile(configPath)
+    : undefined;
+  let configWritten = false;
+  let includeAdded = false;
+  try {
+    await writeBindingConfig(configPath, space);
+    configWritten = true;
+    includeAdded = await ensureConditionalInclude(
+      repositoryRoot,
+      conditionKey,
+      configPath,
+      includes
+    );
+    return await getRepositoryBindingStatus(repositoryRoot);
+  } catch (error) {
+    if (!configWritten) throw error;
+    if (includeAdded) {
+      await removeExactConditionalIncludes(repositoryRoot, conditionKey, configPath);
+    }
+    await restoreBindingConfig(configPath, previousContents);
+    throw error;
   }
-  return getRepositoryBindingStatus(repositoryRoot);
 }
 ```
 
@@ -438,7 +482,8 @@ it('rebinds without duplicating the DSS include', async () => {
   await bindRepository(repository, workSpace);
 
   expect(runGit(repository, ['config', 'dss.space'])).toBe('work');
-  expect(runGit(repository, ['config', '--local', '--get-all', 'include.path']).split('\n'))
+  const conditionKey = bindingConditionKey(repository);
+  expect(runGit(repository, ['config', '-z', '--local', '--get-all', conditionKey]).split('\0'))
     .toHaveLength(1);
 });
 
@@ -493,16 +538,15 @@ export async function unbindRepository(
   options: BindingOptions = {}
 ): Promise<RepositoryBindingStatus> {
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
-  const configPath = await resolveBindingConfigPath(repositoryRoot);
+  const { configPath, conditionKey } = await resolveBindingLocation(repositoryRoot);
   if (options.dryRun) {
     return getRepositoryBindingStatus(repositoryRoot);
   }
 
-  const includes = await getLocalIncludes(repositoryRoot);
+  await assertRepositoryBindingGitVersion(repositoryRoot);
+  const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
   if (includes.includes(configPath)) {
-    await runGit(repositoryRoot, [
-      'config', '--local', '--fixed-value', '--unset-all', 'include.path', configPath
-    ]);
+    await removeExactConditionalIncludes(repositoryRoot, conditionKey, configPath);
   }
   await fs.remove(configPath);
   return getRepositoryBindingStatus(repositoryRoot);
@@ -775,7 +819,7 @@ export async function bindSpaceToRepository(
       fail(spaceName ? `Space "${spaceName}" was not found.` : 'No spaces have been configured.');
       return;
     }
-    if (!space.sshKeyPath.trim()) {
+    if (!space.sshKeyPath?.trim()) {
       fail(`Space "${space.name}" does not have an SSH key.`);
       return;
     }

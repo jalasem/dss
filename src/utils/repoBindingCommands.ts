@@ -27,8 +27,10 @@ export interface RepositoryCommandOptions {
 const configPath = path.join(os.homedir(), '.dss', 'spaces', 'config.json');
 
 async function resolveSpace(spaceName?: string): Promise<ISpace | undefined> {
-  const config: IConfig = await fs.readJson(configPath);
-  if (config.spaces.length === 0) return undefined;
+  if (!(await fs.pathExists(configPath))) return undefined;
+
+  const config: Partial<IConfig> = await fs.readJson(configPath);
+  if (!Array.isArray(config.spaces) || config.spaces.length === 0) return undefined;
 
   const selectedName = spaceName || await select({
     message: 'Choose a space to bind:',
@@ -71,7 +73,7 @@ export async function bindSpaceToRepository(
       fail(spaceName ? `Space "${spaceName}" was not found.` : 'No spaces have been configured.');
       return;
     }
-    if (!space.sshKeyPath.trim()) {
+    if (!space.sshKeyPath?.trim()) {
       fail(`Space "${space.name}" does not have an SSH key.`);
       return;
     }
@@ -125,7 +127,13 @@ export async function unbindSpaceFromRepository(
     const status = await unbindRepository(options.path || process.cwd(), {
       dryRun: options.dryRun
     });
-    if (options.dryRun) UIHelper.info('Dry run: the existing binding would be removed.');
+    if (options.dryRun) {
+      UIHelper.info(
+        status.bound
+          ? 'Dry run: the existing binding would be removed.'
+          : 'Dry run: there is no binding to remove.'
+      );
+    }
     printStatus(status);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));

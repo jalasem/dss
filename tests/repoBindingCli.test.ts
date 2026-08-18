@@ -21,7 +21,7 @@ describe('repository binding CLI commands', () => {
   async function createTemporaryDirectory(): Promise<string> {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dss-binding-cli-'));
     temporaryDirectories.push(directory);
-    return directory;
+    return fs.realpath(directory);
   }
 
   function cliEnvironment(): NodeJS.ProcessEnv {
@@ -140,6 +140,25 @@ describe('repository binding CLI commands', () => {
     expect(runGit(repository, ['config', 'dss.space'])).toBe('personal');
   });
 
+  it('reports missing or malformed space configuration without a raw filesystem error', async () => {
+    const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
+
+    await fs.remove(spacesConfigPath);
+    let result = runCliFailure(['bind', '--path', repository]);
+    expect(result.output).toContain('No spaces have been configured.');
+    expect(result.output).not.toContain('ENOENT');
+
+    await fs.outputJson(spacesConfigPath, { spaces: {} });
+    result = runCliFailure(['bind', '--path', repository]);
+    expect(result.output).toContain('No spaces have been configured.');
+
+    await fs.outputJson(spacesConfigPath, {
+      spaces: [{ name: 'personal', email: 'personal@example.com', userName: 'Personal User' }]
+    });
+    result = runCliFailure(['bind', 'personal', '--path', repository]);
+    expect(result.output).toContain('does not have an SSH key.');
+  });
+
   it('binds only the current repository when no repository option is supplied', () => {
     const sibling = path.join(temporaryHome, 'sibling');
     runGit(temporaryHome, ['init']);
@@ -224,6 +243,13 @@ describe('repository binding CLI commands', () => {
 
     expect(output).toContain('Dry run');
     expect(runGit(repository, ['config', 'dss.space'])).toBe('personal');
+  });
+
+  it('reports that there is nothing to remove for an unbound dry-run', () => {
+    const output = runCli(['unbind', '--path', repository, '--dry-run']);
+
+    expect(output).toContain('Dry run: there is no binding to remove.');
+    expect(output).not.toContain('the existing binding would be removed');
   });
 
   it('rejects mutually exclusive repository selection options', () => {
