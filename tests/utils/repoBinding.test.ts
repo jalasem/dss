@@ -105,7 +105,8 @@ async function renameWorktreeGitDirectory(
 
 async function installGitVersionWrapper(
   parent: string,
-  versionOutput: string
+  versionOutput: string,
+  versionCountPath?: string
 ): Promise<() => void> {
   const gitWrapperDirectory = path.join(parent, 'git-wrapper-version');
   const gitWrapper = path.join(gitWrapperDirectory, 'git');
@@ -113,14 +114,21 @@ async function installGitVersionWrapper(
   const originalPath = process.env.PATH;
   const originalGitExecutable = process.env.DSS_TEST_REAL_GIT;
   const originalVersionOutput = process.env.DSS_TEST_GIT_VERSION;
+  const originalVersionCountPath = process.env.DSS_TEST_GIT_VERSION_COUNT_PATH;
   await fs.ensureDir(gitWrapperDirectory);
   await fs.writeFile(
     gitWrapper,
     [
       '#!/usr/bin/env node',
       "const { execFileSync } = require('child_process');",
+      "const fs = require('fs');",
       'const args = process.argv.slice(2);',
       "if (args.includes('--version')) {",
+      "  const countPath = process.env.DSS_TEST_GIT_VERSION_COUNT_PATH;",
+      "  if (countPath) {",
+      "    const count = Number(fs.existsSync(countPath) ? fs.readFileSync(countPath, 'utf8') : '0');",
+      "    fs.writeFileSync(countPath, String(count + 1));",
+      '  }',
       "  process.stdout.write(`${process.env.DSS_TEST_GIT_VERSION}\\n`);",
       '  process.exit(0);',
       '}',
@@ -131,6 +139,11 @@ async function installGitVersionWrapper(
   await fs.chmod(gitWrapper, 0o755);
   process.env.DSS_TEST_REAL_GIT = gitExecutable;
   process.env.DSS_TEST_GIT_VERSION = versionOutput;
+  if (versionCountPath === undefined) {
+    delete process.env.DSS_TEST_GIT_VERSION_COUNT_PATH;
+  } else {
+    process.env.DSS_TEST_GIT_VERSION_COUNT_PATH = versionCountPath;
+  }
   process.env.PATH = `${gitWrapperDirectory}${path.delimiter}${originalPath ?? ''}`;
 
   return () => {
@@ -144,6 +157,11 @@ async function installGitVersionWrapper(
       delete process.env.DSS_TEST_GIT_VERSION;
     } else {
       process.env.DSS_TEST_GIT_VERSION = originalVersionOutput;
+    }
+    if (originalVersionCountPath === undefined) {
+      delete process.env.DSS_TEST_GIT_VERSION_COUNT_PATH;
+    } else {
+      process.env.DSS_TEST_GIT_VERSION_COUNT_PATH = originalVersionCountPath;
     }
   };
 }
@@ -579,6 +597,30 @@ describe('repository targeting', () => {
       message: expect.stringContaining('not a git repository')
     }]);
     expect(runGit(validRepository, ['config', 'dss.space'])).toBe('personal');
+  });
+
+  it('checks Git compatibility once for a batch bind', async () => {
+    const parent = await createTemporaryDirectory();
+    const firstRepository = await createRepository(parent, 'first');
+    const secondRepository = await createRepository(parent, 'second');
+    const versionCountPath = path.join(parent, 'git-version-count');
+    const restoreGit = await installGitVersionWrapper(
+      parent,
+      'git version 2.39.3',
+      versionCountPath
+    );
+
+    try {
+      const result = await bindRepositories(
+        [firstRepository, secondRepository],
+        personalSpace
+      );
+      expect(result.failed).toEqual([]);
+    } finally {
+      restoreGit();
+    }
+
+    await expect(fs.readFile(versionCountPath, 'utf8')).resolves.toBe('1');
   });
 
   it('previews each repository without writing during a dry run', async () => {

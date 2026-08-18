@@ -42,8 +42,18 @@ async function runGit(
   return trimOutput && stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
 }
 
+async function runGitVersion(): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['--version'], {
+    encoding: 'utf8',
+    env: gitEnvironment()
+  });
+
+  return stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
+}
+
 const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules']);
 
+/** Describes the effective identity and binding state of a repository. */
 export interface RepositoryBindingStatus {
   repositoryRoot: string;
   configPath: string;
@@ -54,6 +64,7 @@ export interface RepositoryBindingStatus {
   sshCommand?: string;
 }
 
+/** Represents the numeric components reported by Git. */
 export interface GitVersion {
   major: number;
   minor: number;
@@ -62,6 +73,7 @@ export interface GitVersion {
 
 interface BindingOptions {
   dryRun?: boolean;
+  gitVersionCheck?: Promise<void>;
 }
 
 interface BindingLocation {
@@ -70,11 +82,13 @@ interface BindingLocation {
   gitDirectory: string;
 }
 
+/** Records a repository that could not be processed in a batch. */
 export interface BatchBindingFailure {
   repositoryPath: string;
   message: string;
 }
 
+/** Contains successful bindings and per-repository failures from a batch. */
 export interface BatchBindingResult {
   successful: RepositoryBindingStatus[];
   failed: BatchBindingFailure[];
@@ -278,6 +292,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Parses a numeric Git version from `git --version` output. */
 export function parseGitVersion(output: string): GitVersion | undefined {
   const match = /^git version\s+(\d+)\.(\d+)(?:\.(\d+))?(?=$|[.\s(])/.exec(output);
   if (!match) return undefined;
@@ -290,6 +305,7 @@ export function parseGitVersion(output: string): GitVersion | undefined {
   };
 }
 
+/** Reports whether Git meets the minimum version for repository binding. */
 export function isRepositoryBindingGitVersionSupported(output: string): boolean {
   const version = parseGitVersion(output);
   if (!version) return false;
@@ -300,10 +316,8 @@ export function isRepositoryBindingGitVersionSupported(output: string): boolean 
   return version.patch >= minimum.patch;
 }
 
-async function assertRepositoryBindingGitVersion(
-  repositoryRoot: string
-): Promise<void> {
-  const output = await runGit(repositoryRoot, ['--version']);
+async function assertRepositoryBindingGitVersion(): Promise<void> {
+  const output = await runGitVersion();
   if (!isRepositoryBindingGitVersionSupported(output)) {
     throw new Error(
       'DSS repository binding requires Git 2.30 or newer. ' +
@@ -312,6 +326,7 @@ async function assertRepositoryBindingGitVersion(
   }
 }
 
+/** Resolves an input path to its canonical Git repository root. */
 export async function resolveRepositoryRoot(startPath: string): Promise<string> {
   const requestedPath = path.resolve(startPath);
   const repositoryRoot = await runGit(requestedPath, ['rev-parse', '--show-toplevel']);
@@ -319,8 +334,9 @@ export async function resolveRepositoryRoot(startPath: string): Promise<string> 
   return fs.realpath(repositoryRoot);
 }
 
-export async function discoverRepositories(_parentPath: string): Promise<string[]> {
-  const parent = path.resolve(_parentPath);
+/** Recursively discovers repositories below a directory without following symlinks. */
+export async function discoverRepositories(parentPath: string): Promise<string[]> {
+  const parent = path.resolve(parentPath);
   const parentStats = await fs.lstat(parent);
 
   if (parentStats.isSymbolicLink()) {
@@ -362,6 +378,7 @@ export async function discoverRepositories(_parentPath: string): Promise<string[
   return [...repositories].sort((left, right) => left.localeCompare(right));
 }
 
+/** Reads the current repository-local binding and effective Git identity. */
 export async function getRepositoryBindingStatus(
   repositoryPath: string
 ): Promise<RepositoryBindingStatus> {
@@ -389,6 +406,7 @@ export async function getRepositoryBindingStatus(
   };
 }
 
+/** Binds one repository to a space, optionally returning a dry-run preview. */
 export async function bindRepository(
   repositoryPath: string,
   space: ISpace,
@@ -399,7 +417,7 @@ export async function bindRepository(
     repositoryRoot
   );
   assertBindableGitDirectory(gitDirectory);
-  await assertRepositoryBindingGitVersion(repositoryRoot);
+  await (options.gitVersionCheck ?? assertRepositoryBindingGitVersion());
 
   if (options.dryRun) {
     return {
@@ -458,16 +476,21 @@ export async function bindRepository(
   }
 }
 
+/** Binds repositories independently while collecting per-repository failures. */
 export async function bindRepositories(
   repositoryPaths: string[],
   space: ISpace,
   options: BindingOptions = {}
 ): Promise<BatchBindingResult> {
   const result: BatchBindingResult = { successful: [], failed: [] };
+  const gitVersionCheck = options.gitVersionCheck ?? (
+    repositoryPaths.length > 0 ? assertRepositoryBindingGitVersion() : undefined
+  );
+  const batchOptions = { ...options, gitVersionCheck };
 
   for (const repositoryPath of repositoryPaths) {
     try {
-      result.successful.push(await bindRepository(repositoryPath, space, options));
+      result.successful.push(await bindRepository(repositoryPath, space, batchOptions));
     } catch (error) {
       result.failed.push({ repositoryPath, message: errorMessage(error) });
     }
@@ -476,6 +499,7 @@ export async function bindRepositories(
   return result;
 }
 
+/** Removes a repository-local binding and restores the repository's prior identity. */
 export async function unbindRepository(
   repositoryPath: string,
   options: BindingOptions = {}
@@ -487,7 +511,7 @@ export async function unbindRepository(
     return getRepositoryBindingStatus(repositoryRoot);
   }
 
-  await assertRepositoryBindingGitVersion(repositoryRoot);
+  await assertRepositoryBindingGitVersion();
 
   const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
   if (includes.includes(configPath)) {

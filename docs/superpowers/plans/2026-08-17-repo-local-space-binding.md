@@ -419,7 +419,7 @@ export async function bindRepository(
   const repositoryRoot = await resolveRepositoryRoot(repositoryPath);
   const { configPath, conditionKey, gitDirectory } = await resolveBindingLocation(repositoryRoot);
   assertBindableGitDirectory(gitDirectory);
-  await assertRepositoryBindingGitVersion(repositoryRoot);
+  await assertRepositoryBindingGitVersion();
   if (options.dryRun) {
     return {
       repositoryRoot,
@@ -543,7 +543,7 @@ export async function unbindRepository(
     return getRepositoryBindingStatus(repositoryRoot);
   }
 
-  await assertRepositoryBindingGitVersion(repositoryRoot);
+  await assertRepositoryBindingGitVersion();
   const includes = await getConditionalIncludes(repositoryRoot, conditionKey);
   if (includes.includes(configPath)) {
     await removeExactConditionalIncludes(repositoryRoot, conditionKey, configPath);
