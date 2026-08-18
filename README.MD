@@ -148,6 +148,46 @@ Modify existing space settings:
 
 </details>
 
+### Repository-Local Binding
+
+Use repository-local binding when you want one DSS identity to stay attached to
+the Git repository open in VS Code or another editor, without changing your
+global DSS space.
+
+```bash
+# From a repository opened in VS Code
+dss bind aweds-personal
+
+# Bind an explicitly selected repository
+dss bind aweds-personal --path ~/Desktop/my-project
+
+# From a parent folder, preview and bind every child Git repository
+dss bind aweds-personal -r --dry-run
+dss bind aweds-personal -r
+
+# Inspect or remove the current repository binding
+dss status
+dss unbind
+```
+
+DSS stores each repository binding under `.git/`, so no binding file can be
+committed or pushed. Editor Git integrations inherit the binding because they
+run Git inside that repository, while `dss switch` remains the separate global
+mode for changing your active DSS space everywhere else. A repository's linked
+Git worktrees can each be bound to a different DSS space.
+
+DSS registers the private file with a Git `includeIf.gitdir:` condition for the
+current worktree. Unbinding removes only that exact DSS condition and file; it
+does not change `extensions.worktreeConfig` or unrelated Git includes. The
+binding workflow requires Git 2.30 or newer.
+
+Git cannot represent a carriage return or line feed exactly in an
+`includeIf.gitdir:` subsection. DSS therefore refuses to bind the rare
+repository whose canonical Git metadata path contains either character, rather
+than using a wildcard that could match a sibling worktree. Read-only status and
+unbind retain compatibility for diagnosing and removing legacy experimental
+bindings created with that approximation.
+
 ### Advanced Features
 
 <details>
