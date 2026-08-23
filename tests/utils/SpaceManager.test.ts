@@ -369,6 +369,71 @@ describe('SpaceManager', () => {
       );
       expect(mockFs.writeJson).not.toHaveBeenCalled();
     });
+
+    it('should protect a legacy raw-name active space when looked up by its slug (regression)', async () => {
+      // config.activeSpace stores the legacy raw name; the user passes the
+      // slug. findSpace resolves them to the same space, and the active-space
+      // guard/filter must key off the resolved space's stored name, not the
+      // raw input, or the guard is bypassed and nothing is actually removed.
+      const legacySpace = {
+        name: 'Test Space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({
+        spaces: [legacySpace],
+        activeSpace: 'Test Space'
+      });
+
+      await removeSpace('test-space');
+
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('Cannot remove the active space')
+      );
+      expect(mockFs.writeJson).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('should find and remove a legacy raw-name space when looked up by its slug', async () => {
+      const legacySpace = {
+        name: 'Test Space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [legacySpace] });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      mockConfirm.mockResolvedValue(true);
+
+      await removeSpace('test-space');
+
+      expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, { spaces: [] });
+    });
+
+    it('should set process.exitCode = 1 when the named space is not found', async () => {
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
+
+      await removeSpace('does-not-exist');
+
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Space "does-not-exist" not found.'));
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('should set process.exitCode = 1 when the removal itself fails', async () => {
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
+      mockConfirm.mockResolvedValue(true);
+      (mockFs.writeJson as jest.Mock).mockRejectedValue(new Error('disk full'));
+
+      await removeSpace('test-space');
+
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to remove space'));
+      expect(process.exitCode).toBe(1);
+    });
   });
 
   describe('testSpace', () => {
@@ -603,7 +668,7 @@ describe('SpaceManager', () => {
       expect(mockExecSync).toHaveBeenCalledWith('git config --global user.email "new-email@example.com"');
     });
 
-    it('should abort the update and set exitCode = 1 if re-applying global git config fails', async () => {
+    it('should persist config before re-applying git, then report failure (exit 1) if the git re-apply fails, without losing the saved changes', async () => {
       const activeSpace = {
         name: 'test-space',
         email: 'test@example.com',
@@ -612,6 +677,7 @@ describe('SpaceManager', () => {
       };
       (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [activeSpace], activeSpace: 'test-space' });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
       mockExecSync.mockImplementation(() => {
         throw new Error('git not found');
       });
@@ -623,8 +689,82 @@ describe('SpaceManager', () => {
 
       await modifySpace('test-space');
 
-      expect(mockFs.writeJson).not.toHaveBeenCalled();
+      // Config is persisted with the new email BEFORE the git re-apply runs,
+      // so disk state isn't left inconsistent when the re-apply fails.
+      expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, {
+        spaces: [{ ...activeSpace, email: 'new-email@example.com' }],
+        activeSpace: 'test-space'
+      });
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to update global git configuration'));
+      expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('updated successfully'));
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('should move the key dir and persist config before a rename+active-space git re-apply failure', async () => {
+      const activeSpace = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [activeSpace], activeSpace: 'test-space' });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
+      mockExecSync.mockImplementation(() => {
+        throw new Error('git not found');
+      });
+
+      mockInput
+        .mockResolvedValueOnce('New Name') // rename
+        .mockResolvedValueOnce('new-email@example.com') // + email change (active -> triggers git re-apply)
+        .mockResolvedValueOnce(activeSpace.userName);
+
+      await modifySpace('test-space');
+
+      const oldKeyDir = path.dirname(mockSshKeyPath);
+      const newKeyDir = path.join(path.dirname(oldKeyDir), 'new-name');
+      const newSshKeyPath = path.join(newKeyDir, path.basename(mockSshKeyPath));
+
+      // The key directory move and the config write (reflecting the rename,
+      // moved sshKeyPath, and new activeSpace) both happened before the git
+      // re-apply failed, so nothing is orphaned.
+      expect(mockFs.move).toHaveBeenCalledWith(oldKeyDir, newKeyDir);
+      expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, {
+        spaces: [{
+          name: 'new-name',
+          email: 'new-email@example.com',
+          userName: activeSpace.userName,
+          sshKeyPath: newSshKeyPath
+        }],
+        activeSpace: 'new-name'
+      });
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to update global git configuration'));
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('should call fail() (not throw) when moving the key directory fails', async () => {
+      const activeSpace = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [activeSpace], activeSpace: 'test-space' });
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockRejectedValue(new Error('EACCES: permission denied'));
+
+      mockInput
+        .mockResolvedValueOnce('New Name')
+        .mockResolvedValueOnce(activeSpace.email)
+        .mockResolvedValueOnce(activeSpace.userName);
+
+      await expect(modifySpace('test-space')).resolves.toBeUndefined();
+
+      expect(mockFs.writeJson).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to move key directory'));
       expect(process.exitCode).toBe(1);
     });
 

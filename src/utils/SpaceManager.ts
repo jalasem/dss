@@ -307,15 +307,15 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     });
   }
 
-  if (selectedSpaceName === config.activeSpace) {
-    fail(`Cannot remove the active space '${UIHelper.highlight(selectedSpaceName)}'.`);
-    UIHelper.info("Please switch to another space first using " + UIHelper.command("dss switch") + ".");
-    return;
-  }
-
   const spaceToRemove = findSpace(config, selectedSpaceName);
   if (!spaceToRemove) {
     fail(`Space "${selectedSpaceName}" not found.`);
+    return;
+  }
+
+  if (spaceToRemove.name === config.activeSpace) {
+    fail(`Cannot remove the active space '${UIHelper.highlight(spaceToRemove.name)}'.`);
+    UIHelper.info("Please switch to another space first using " + UIHelper.command("dss switch") + ".");
     return;
   }
 
@@ -340,7 +340,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   }
 
   const confirmRemoval = await confirm({
-    message: `Are you absolutely sure you want to remove '${selectedSpaceName}'?`,
+    message: `Are you absolutely sure you want to remove '${spaceToRemove.name}'?`,
     default: false,
   });
 
@@ -351,17 +351,17 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
 
   try {
     UIHelper.printProgress("Removing space");
-    
+
     // Remove SSH key from agent
     await removeSSHKeyFromAgent(spaceToRemove.sshKeyPath);
 
     // Remove from config
-    config.spaces = config.spaces.filter((space) => space.name !== selectedSpaceName);
+    config.spaces = config.spaces.filter((space) => space.name !== spaceToRemove.name);
     await fs.writeJson(configPath, config);
-    
+
     UIHelper.clearProgress();
-    UIHelper.success(`Space '${UIHelper.highlight(selectedSpaceName)}' has been removed successfully.`);
-    
+    UIHelper.success(`Space '${UIHelper.highlight(spaceToRemove.name)}' has been removed successfully.`);
+
     // Show remaining spaces
     if (config.spaces.length > 0) {
       console.log(UIHelper.dim("\nRemaining spaces:"));
@@ -373,7 +373,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     }
   } catch (error) {
     UIHelper.clearProgress();
-    UIHelper.error(`Failed to remove space: ${(error as Error).message}`);
+    fail(`Failed to remove space: ${(error as Error).message}`);
   }
 }
 
@@ -463,7 +463,12 @@ export async function modifySpace(spaceName?: string) {
       const oldKeyDir = path.dirname(space.sshKeyPath);
       const newKeyDir = path.join(path.dirname(oldKeyDir), newSlug);
       if (await fs.pathExists(oldKeyDir)) {
-        await fs.move(oldKeyDir, newKeyDir);
+        try {
+          await fs.move(oldKeyDir, newKeyDir);
+        } catch (error) {
+          fail(`Failed to move key directory: ${(error as Error).message}`);
+          return;
+        }
         space.sshKeyPath = path.join(newKeyDir, path.basename(space.sshKeyPath));
       }
     }
@@ -483,6 +488,10 @@ export async function modifySpace(spaceName?: string) {
     isUpdateMade = true;
   }
 
+  // Persist before re-applying global git config so disk (config + any moved
+  // key directory) stays consistent even if the git re-apply below fails.
+  await fs.writeJson(configPath, config);
+
   if (wasActive && (email !== originalEmail || userName !== originalUserName)) {
     try {
       execSync(`git config --global user.name "${space.userName}"`);
@@ -493,7 +502,6 @@ export async function modifySpace(spaceName?: string) {
     }
   }
 
-  await fs.writeJson(configPath, config);
   if (isUpdateMade) {
     UIHelper.success(`Space "${UIHelper.highlight(space.name)}" updated successfully.`);
   } else {
