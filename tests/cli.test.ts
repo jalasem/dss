@@ -1,5 +1,6 @@
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import path from 'path';
+import os from 'os';
 import fs from 'fs-extra';
 
 const CLI_PATH = path.join(__dirname, '../build/index.js');
@@ -58,20 +59,37 @@ describe('CLI Integration Tests', () => {
       expect(switchHelp).toContain('switch');
     });
 
-    it('invoking a legacy alias prints a deprecation warning to stderr and still runs the same handler', () => {
-      const result = require('child_process').spawnSync(
-        process.execPath,
-        [CLI_PATH, 'list'],
-        { encoding: 'utf8' }
-      );
+    it('invoking a legacy alias ("list") prints a deprecation warning to stderr AND actually runs listSpaces (not just a clean exit)', async () => {
+      // Sandboxed HOME with a known space: proves delegation via a real,
+      // content-specific side effect (the space table listSpaces prints),
+      // not merely that the process exited without error.
+      const temporaryHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dss-cli-alias-'));
+      try {
+        await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
+          spaces: [{ name: 'alias-proof-space', email: 'proof@example.com', userName: 'Proof', sshKeyPath: '' }]
+        });
 
-      expect(result.stderr).toContain('"dss list" is deprecated');
-      expect(result.stderr).toContain('Use "dss ls"');
+        const result = spawnSync(
+          process.execPath,
+          [CLI_PATH, 'list'],
+          { encoding: 'utf8', env: { ...process.env, HOME: temporaryHome } }
+        );
+
+        // Delegation proof: listSpaces' actual output.
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain('Your Development Spaces');
+        expect(result.stdout).toContain('alias-proof-space');
+        // Deprecation-warning proof.
+        expect(result.stderr).toContain('"dss list" is deprecated');
+        expect(result.stderr).toContain('Use "dss ls"');
+      } finally {
+        await fs.remove(temporaryHome);
+      }
     });
 
     it('cut commands (batch, bulk, onboard) no longer exist', () => {
       for (const cmd of ['batch', 'bulk', 'onboard']) {
-        const result = require('child_process').spawnSync(
+        const result = spawnSync(
           process.execPath,
           [CLI_PATH, cmd],
           { encoding: 'utf8' }

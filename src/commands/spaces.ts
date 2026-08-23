@@ -15,6 +15,11 @@ import { UIHelper } from "./ui";
 import { fail } from "./fail";
 import { slugify, findSpace, validateIdentityName } from "../core/identity";
 import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/store";
+// Circular import: ./firstRun imports addSpace back from this file. Safe
+// under CommonJS only because `firstRunFlow` is called exclusively inside
+// listSpaces/switchSpace's async bodies below, never at module scope — see
+// the matching note in src/commands/firstRun.ts. Keep any new use of
+// `firstRunFlow` inside a function body.
 import { firstRunFlow } from "./firstRun";
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);

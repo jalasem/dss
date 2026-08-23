@@ -2,6 +2,14 @@ import { IConfig } from '../core/types';
 import { loadConfig } from '../infra/store';
 import { UIHelper } from './ui';
 import { safeConfirm } from './prompts';
+// Circular import: ./spaces imports firstRunFlow from this file too (for
+// its own empty-store branches). This only resolves safely under CommonJS
+// because `addSpace` is used exclusively inside firstRunFlow's async body
+// below, not at module scope — by the time firstRunFlow actually runs,
+// both modules have finished loading and spaces.ts's exports are fully
+// populated. Keep every use of `addSpace` (and, symmetrically, every use
+// of `firstRunFlow` on the spaces.ts side) inside a function body; a
+// module-scope reference to either export here would break on load order.
 import { addSpace } from './spaces';
 
 /**
