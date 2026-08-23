@@ -117,10 +117,10 @@ describe('Integration Tests', () => {
           stdio: 'pipe',
           env: { ...process.env, HOME: testHomeDir }
         });
-        expect(result).toMatch(/no spaces|empty|⚠️/i);
+        expect(result).toMatch(/no spaces|empty/i);
       } catch (error: any) {
         const output = error.stdout || error.stderr || '';
-        expect(output).toMatch(/no spaces|empty|⚠️/i);
+        expect(output).toMatch(/no spaces|empty/i);
       }
     });
   });

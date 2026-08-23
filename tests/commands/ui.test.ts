@@ -172,6 +172,28 @@ describe('UIHelper', () => {
         expect(line).not.toMatch(ANSI_RE);
       }
     });
+
+    it('printWelcome degrades to a plain name + tagline, no box/glyphs/ANSI', () => {
+      UIHelper.printWelcome();
+      const lines = loggedLines();
+      expect(lines.some(l => l.includes('Dev Spaces Switcher'))).toBe(true);
+      expect(lines.some(l => /manage isolated development environments/i.test(l))).toBe(true);
+      for (const line of lines) {
+        expect(line).not.toMatch(BOX_CHARS);
+        expect(line).not.toMatch(ANSI_RE);
+        expect(line).not.toMatch(EMOJI_RE);
+      }
+    });
+
+    it('printSpaceSwitched degrades to a bare one-line message, no box/glyphs/ANSI', () => {
+      UIHelper.printSpaceSwitched('work');
+      expect(console.log).toHaveBeenCalledTimes(1);
+      const [line] = (console.log as jest.Mock).mock.calls[0];
+      expect(line).toContain('work');
+      expect(line).not.toMatch(ANSI_RE);
+      expect(line).not.toMatch(BOX_CHARS);
+      expect(line).not.toMatch(/[✓✗!●]/);
+    });
   });
 
   describe('rich mode (TTY, no NO_COLOR): glyph + color mapping', () => {
@@ -244,6 +266,32 @@ describe('UIHelper', () => {
         for (const line of calls) {
           expect(line).not.toMatch(BOX_CHARS);
         }
+      });
+    });
+
+    it('printWelcome renders a bold/accent name line + dim tagline, no box frame', () => {
+      withRichMode(() => {
+        UIHelper.printWelcome();
+        const calls = (console.log as jest.Mock).mock.calls.map(c => c[0]);
+        expect(calls[0]).toContain('Dev Spaces Switcher');
+        expect(calls[0]).toMatch(ANSI_RE);
+        expect(calls.some(l => /manage isolated development environments/i.test(l))).toBe(true);
+        for (const line of calls) {
+          expect(line).not.toMatch(BOX_CHARS);
+        }
+      });
+    });
+
+    it('printSpaceSwitched renders one calm ✓ success line, no box frame', () => {
+      withRichMode(() => {
+        UIHelper.printSpaceSwitched('work');
+        expect(console.log).toHaveBeenCalledTimes(1);
+        const [line] = (console.log as jest.Mock).mock.calls[0];
+        expect(line).toContain('✓');
+        expect(line).toContain('work');
+        expect(line).toMatch(ANSI_RE);
+        expect(line).not.toMatch(BOX_CHARS);
+        expect(line).not.toContain('\n');
       });
     });
   });

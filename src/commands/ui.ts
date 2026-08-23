@@ -307,4 +307,25 @@ export class UIHelper {
     });
     console.log('');
   }
+
+  /**
+   * The product-name banner for the first-run/dashboard front door: a
+   * calm bold/accent name line plus a dim tagline. No box-drawing (the old
+   * ╭═╮ banner is gone) — same shape as printHeader, just two lines.
+   */
+  static printWelcome(): void {
+    if (this.isPlain()) {
+      console.log('Dev Spaces Switcher');
+      console.log('Manage isolated development environments with ease');
+      return;
+    }
+    console.log(chalk.bold.cyan('Dev Spaces Switcher'));
+    console.log(chalk.dim('Manage isolated development environments with ease'));
+  }
+
+  /** A calm, one-line "switched" success — the frameless replacement for
+   * the old bordered "Space Switched Successfully!" box. */
+  static printSpaceSwitched(spaceName: string): void {
+    this.success(`Switched to ${spaceName}`);
+  }
 }
