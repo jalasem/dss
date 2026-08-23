@@ -124,9 +124,8 @@ export async function addSpace() {
       UIHelper.success("SSH key generated successfully!");
       const settingsUrl = keySettingsUrl(host);
       UIHelper.printSuccessBox("SSH Key Ready", [
-        "✓ Public key copied to clipboard",
-        `✓ Add it to your ${host} account`,
-        "",
+        "Public key copied to clipboard",
+        `Add it to your ${host} account`,
         settingsUrl ? `${host} SSH Keys: ${settingsUrl}` : `Add the public key to your ${host} account.`
       ]);
 
@@ -203,7 +202,6 @@ export async function switchSpace(
 
   if (!selectedSpaceName) {
     UIHelper.printHeader("Switch Development Space");
-    UIHelper.printKeyInstruction();
 
     // Use enhanced selection with fuzzy search
     selectedSpaceName = await select({
@@ -226,7 +224,7 @@ export async function switchSpace(
     fail(`Space "${selectedSpaceName}" not found.`);
     UIHelper.info("Available spaces:");
     config.spaces.forEach(s => {
-      console.log(`  • ${UIHelper.highlight(s.name)} (${s.email})`);
+      console.log(`  · ${UIHelper.highlight(s.name)} (${s.email})`);
     });
     return;
   }
@@ -242,19 +240,19 @@ export async function switchSpace(
   // Check for dry-run mode
   if (options?.dryRun) {
     const previewLines = [
-      `✓ Would switch to: ${space.name}`,
-      `✓ Would set Git user: ${space.userName}`,
-      `✓ Would set Git email: ${space.email}`,
+      `Would switch to: ${space.name}`,
+      `Would set Git user: ${space.userName}`,
+      `Would set Git email: ${space.email}`,
     ];
     if (hasKey) {
       previewLines.push(
-        `✓ Would activate SSH key: ${space.sshKeyPath}`,
-        `✓ Would update SSH config for ${host}`
+        `Would activate SSH key: ${space.sshKeyPath}`,
+        `Would update SSH config for ${host}`
       );
     } else {
-      previewLines.push(`⚠ No key configured — key activation steps would be skipped`);
+      previewLines.push(`No key configured — key activation steps would be skipped`);
     }
-    previewLines.push(`✓ Would save configuration`, '', 'Use without --dry-run to apply changes');
+    previewLines.push(`Would save configuration`, 'Use without --dry-run to apply changes');
     UIHelper.printInfoBox("Dry Run: Switch Space Preview", previewLines);
     return;
   }
@@ -295,10 +293,10 @@ export async function switchSpace(
 
     UIHelper.clearProgress();
     UIHelper.printSuccessBox("Space Activated", [
-      `✓ Switched to: ${space.name}`,
-      `✓ Git user: ${space.userName}`,
-      `✓ Email: ${space.email}`,
-      hasKey ? `✓ SSH key: activated` : `⚠ SSH key: none`
+      `Switched to: ${space.name}`,
+      `Git user: ${space.userName}`,
+      `Email: ${space.email}`,
+      hasKey ? `SSH key: activated` : `SSH key: none`
     ]);
 
     if (hasKey) {
@@ -374,11 +372,10 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   if (options?.dryRun) {
     const hasKey = Boolean(spaceToRemove.sshKeyPath);
     UIHelper.printInfoBox("Dry Run: Remove Space Preview", [
-      `✓ Would remove space: ${spaceToRemove.name}`,
-      `✓ Would remove from configuration`,
-      hasKey ? `✓ Would remove SSH key from agent` : `⚠ No SSH key configured — agent removal skipped`,
-      `✓ SSH key files would remain on disk`,
-      '',
+      `Would remove space: ${spaceToRemove.name}`,
+      `Would remove from configuration`,
+      hasKey ? `Would remove SSH key from agent` : `No SSH key configured — agent removal skipped`,
+      `SSH key files would remain on disk`,
       'Use without --dry-run to actually remove'
     ]);
     return;
@@ -421,7 +418,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
         `still bound to the removed identity "${spaceToRemove.name}":`
       );
       orphanedBindings.forEach((binding) => {
-        console.log(`  • ${binding.path}`);
+        console.log(`  · ${binding.path}`);
       });
       UIHelper.info(`Run ${UIHelper.command('dss unbind')} in each repository to clear the binding.`);
     }
@@ -430,7 +427,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     if (config.spaces.length > 0) {
       console.log(UIHelper.dim("\nRemaining spaces:"));
       config.spaces.forEach(space => {
-        console.log(`  • ${UIHelper.highlight(space.name)} (${space.email})`);
+        console.log(`  · ${UIHelper.highlight(space.name)} (${space.email})`);
       });
     } else {
       UIHelper.info("No spaces remaining. Use " + UIHelper.command("dss add") + " to create a new one.");
@@ -793,17 +790,17 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
 
   // Action suggestions
   console.log(UIHelper.bold("Available Actions:"));
-  console.log(UIHelper.dim("  • " + UIHelper.command(`dss switch ${space.name}`) + " - Switch to this space"));
-  console.log(UIHelper.dim("  • " + UIHelper.command(`dss edit ${space.name}`) + " - Edit space configuration"));
-  console.log(UIHelper.dim("  • " + UIHelper.command(`dss test ${space.name}`) + ` - Test SSH access to ${space.host ?? 'github.com'}`));
+  console.log(UIHelper.dim("  · " + UIHelper.command(`dss switch ${space.name}`) + " - Switch to this space"));
+  console.log(UIHelper.dim("  · " + UIHelper.command(`dss edit ${space.name}`) + " - Edit space configuration"));
+  console.log(UIHelper.dim("  · " + UIHelper.command(`dss test ${space.name}`) + ` - Test SSH access to ${space.host ?? 'github.com'}`));
 
   if (space.name !== config.activeSpace) {
-    console.log(UIHelper.dim("  • " + UIHelper.command(`dss remove ${space.name}`) + " - Remove this space"));
+    console.log(UIHelper.dim("  · " + UIHelper.command(`dss remove ${space.name}`) + " - Remove this space"));
   }
 }
 
 export async function onboardUser(): Promise<void> {
-  UIHelper.printHeader("🎉 Welcome to DSS (Dev Spaces Switcher)");
+  UIHelper.printHeader("Welcome to DSS (Dev Spaces Switcher)");
 
   console.log(UIHelper.dim("Let's get you set up with your first development space!"));
   console.log("");
@@ -827,10 +824,10 @@ export async function onboardUser(): Promise<void> {
   // Introduction
   UIHelper.printInfoBox("What is DSS?", [
     "DSS helps you manage multiple development identities by:",
-    "• Switching between different Git configurations",
-    "• Managing separate SSH keys for different accounts",
-    "• Organizing your development environments",
-    "• Testing GitHub access for each identity"
+    "Switching between different Git configurations",
+    "Managing separate SSH keys for different accounts",
+    "Organizing your development environments",
+    "Testing GitHub access for each identity"
   ]);
 
   const startTutorial = await confirm({
@@ -845,12 +842,12 @@ export async function onboardUser(): Promise<void> {
 
   // Step 1: Create first space
   console.log("");
-  UIHelper.printHeader("📝 Step 1: Create Your First Space");
+  UIHelper.printHeader("Step 1: Create Your First Space");
 
   console.log(UIHelper.dim("A 'space' represents a development identity with its own:"));
-  console.log(UIHelper.dim("• Git username and email"));
-  console.log(UIHelper.dim("• SSH key for GitHub authentication"));
-  console.log(UIHelper.dim("• Isolated configuration"));
+  console.log(UIHelper.dim("· Git username and email"));
+  console.log(UIHelper.dim("· SSH key for GitHub authentication"));
+  console.log(UIHelper.dim("· Isolated configuration"));
   console.log("");
 
   const createFirstSpace = await confirm({
@@ -873,7 +870,7 @@ export async function onboardUser(): Promise<void> {
 
   // Step 2: Explain switching
   console.log("");
-  UIHelper.printHeader("🔄 Step 2: Understanding Space Switching");
+  UIHelper.printHeader("Step 2: Understanding Space Switching");
 
   UIHelper.printInfoBox("What happens when you switch spaces?", [
     "1. Git global config is updated with space's user/email",
@@ -890,9 +887,9 @@ export async function onboardUser(): Promise<void> {
   if (demoSwitch) {
     console.log("");
     UIHelper.info("Here's how to switch spaces:");
-    console.log(UIHelper.dim("  • " + UIHelper.command("dss switch") + " - Interactive selection"));
-    console.log(UIHelper.dim("  • " + UIHelper.command("dss switch <space-name>") + " - Direct switch"));
-    console.log(UIHelper.dim("  • " + UIHelper.command("dss switch --dry-run") + " - Preview changes"));
+    console.log(UIHelper.dim("  · " + UIHelper.command("dss switch") + " - Interactive selection"));
+    console.log(UIHelper.dim("  · " + UIHelper.command("dss switch <space-name>") + " - Direct switch"));
+    console.log(UIHelper.dim("  · " + UIHelper.command("dss switch --dry-run") + " - Preview changes"));
 
     const trySwitch = await confirm({
       message: "Try switching to your new space?",
@@ -906,29 +903,29 @@ export async function onboardUser(): Promise<void> {
 
   // Step 3: Essential commands
   console.log("");
-  UIHelper.printHeader("📚 Step 3: Essential Commands");
+  UIHelper.printHeader("Step 3: Essential Commands");
 
   console.log(UIHelper.bold("Core Commands:"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss list") + " - View all your spaces"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss switch") + " - Change active space"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss test") + " - Test GitHub access"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss inspect <space>") + " - Detailed space info"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss list") + " - View all your spaces"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss switch") + " - Change active space"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss test") + " - Test GitHub access"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss inspect <space>") + " - Detailed space info"));
 
   console.log("");
   console.log(UIHelper.bold("Management Commands:"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss add") + " - Create new space"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss edit") + " - Modify existing space"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss remove") + " - Delete space"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss add") + " - Create new space"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss edit") + " - Modify existing space"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss remove") + " - Delete space"));
 
   console.log("");
   console.log(UIHelper.bold("Advanced Commands:"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss batch") + " - Switch between multiple spaces"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss bulk") + " - Bulk update operations"));
-  console.log(UIHelper.dim("  • " + UIHelper.command("dss export/import") + " - Backup/restore config"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss batch") + " - Switch between multiple spaces"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss bulk") + " - Bulk update operations"));
+  console.log(UIHelper.dim("  · " + UIHelper.command("dss export/import") + " - Backup/restore config"));
 
   // Step 4: Next steps
   console.log("");
-  UIHelper.printHeader("🚀 Step 4: Next Steps");
+  UIHelper.printHeader("Step 4: Next Steps");
 
   const nextSteps = [
     "1. Add your SSH key to GitHub at https://github.com/settings/keys",
@@ -950,6 +947,6 @@ export async function onboardUser(): Promise<void> {
   }
 
   console.log("");
-  UIHelper.success("Onboarding complete! 🎉");
+  UIHelper.success("Onboarding complete!");
   UIHelper.info("Use " + UIHelper.command("dss --help") + " anytime to see all available commands.");
 }

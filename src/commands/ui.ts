@@ -1,110 +1,110 @@
 import chalk from 'chalk';
 import { performance } from 'perf_hooks';
 
+// The calm output voice (Phase 3 · Task 1): one accent (cyan), a small
+// glyph set instead of emoji, no box-drawing, and a PLAIN degrade for
+// NO_COLOR / non-TTY output so piped/CI output stays greppable ASCII.
+const GLYPH = {
+  active: '●',   // accent — the active/current identity marker
+  success: '✓',
+  error: '✗',
+  warning: '!',
+  bullet: '·',
+} as const;
+
+/**
+ * Whether output should degrade to plain ASCII: no ANSI color, no Unicode
+ * glyphs, no box-drawing characters. Respects `NO_COLOR` even on a TTY, and
+ * defaults to plain whenever stdout isn't a TTY (e.g. piped to `cat`).
+ *
+ * Deliberately re-evaluated on every call (not cached at module load) so
+ * NO_COLOR/TTY state can change between calls in the same process — which
+ * is also what lets tests exercise both PLAIN and rich rendering.
+ */
+function isPlainMode(): boolean {
+  return !!process.env.NO_COLOR || !process.stdout.isTTY;
+}
+
 export class UIHelper {
+  static isPlain(): boolean {
+    return isPlainMode();
+  }
+
+  private static style(colorFn: (s: string) => string, text: string): string {
+    return this.isPlain() ? text : colorFn(text);
+  }
+
   static success(message: string): void {
-    console.log(chalk.green(`✅ ${message}`));
+    console.log(this.isPlain() ? message : chalk.green(`${GLYPH.success} ${message}`));
   }
 
   static error(message: string): void {
-    console.log(chalk.red(`❌ ${message}`));
+    console.log(this.isPlain() ? `error: ${message}` : chalk.red(`${GLYPH.error} ${message}`));
   }
 
   static warning(message: string): void {
-    console.log(chalk.yellow(`⚠️  ${message}`));
+    console.log(this.isPlain() ? `warn: ${message}` : chalk.yellow(`${GLYPH.warning} ${message}`));
   }
 
   static info(message: string): void {
-    console.log(chalk.blue(`ℹ️  ${message}`));
+    console.log(this.isPlain() ? message : chalk.dim(message));
   }
 
   static highlight(text: string): string {
-    return chalk.cyan(text);
+    return this.style(chalk.cyan, text);
   }
 
   static dim(text: string): string {
-    return chalk.dim(text);
+    return this.style(chalk.dim, text);
   }
 
   static bold(text: string): string {
-    return chalk.bold(text);
+    return this.style(chalk.bold, text);
   }
 
   static activeSpace(name: string): string {
-    return chalk.green(`🔥 ${name}`);
+    return this.isPlain() ? `* ${name}` : chalk.cyan(`${GLYPH.active} ${name}`);
   }
 
   static inactiveSpace(name: string): string {
-    return chalk.white(name);
+    return name;
   }
 
   static spaceName(name: string, isActive: boolean = false): string {
     return isActive ? this.activeSpace(name) : this.inactiveSpace(name);
   }
 
-  static gradient(text: string): string {
-    // Create a simple gradient effect using different shades
-    const colors = [chalk.blue, chalk.cyan, chalk.green, chalk.yellow];
-    const chars = text.split('');
-    return chars.map((char, index) => {
-      const colorIndex = Math.floor((index / chars.length) * colors.length);
-      return colors[colorIndex] ? colors[colorIndex](char) : char;
-    }).join('');
-  }
-
-  static badge(text: string, type: 'success' | 'error' | 'warning' | 'info' = 'info'): string {
-    const colors = {
-      success: { bg: chalk.bgGreen, fg: chalk.black },
-      error: { bg: chalk.bgRed, fg: chalk.white },
-      warning: { bg: chalk.bgYellow, fg: chalk.black },
-      info: { bg: chalk.bgBlue, fg: chalk.white }
-    };
-    
-    const { bg, fg } = colors[type];
-    return bg(fg(` ${text} `));
-  }
-
-  static progressBar(current: number, total: number, width: number = 20): string {
-    const percentage = Math.min(current / total, 1);
-    const filled = Math.floor(percentage * width);
-    const empty = width - filled;
-    
-    const bar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
-    const percent = Math.floor(percentage * 100);
-    
-    return `${bar} ${percent}%`;
-  }
-
   static command(cmd: string): string {
-    return chalk.cyan(`\`${cmd}\``);
+    return this.style(chalk.cyan, `\`${cmd}\``);
   }
 
   static filename(path: string): string {
-    return chalk.magenta(path);
+    return this.style(chalk.dim, path);
   }
 
   static url(url: string): string {
-    return chalk.blue.underline(url);
+    return this.isPlain() ? url : chalk.cyan.underline(url);
   }
 
-  static printSeparator(): void {
+  /** A dim hairline rule `width` characters wide. No-op in PLAIN mode. */
+  static printSeparator(width?: number): void {
+    if (this.isPlain()) return;
     const terminalWidth = process.stdout.columns || 80;
-    const width = Math.min(60, terminalWidth - 4);
-    console.log(chalk.gray('─'.repeat(width)));
+    const lineWidth = Math.min(width ?? 60, terminalWidth - 4);
+    console.log(chalk.dim('─'.repeat(Math.max(0, lineWidth))));
   }
 
+  /**
+   * A calm section header: a single bold/accent line, optionally followed
+   * by a dim hairline the width of the title. No box-drawing.
+   */
   static printHeader(title: string): void {
-    const terminalWidth = process.stdout.columns || 80;
-    const maxWidth = Math.min(Math.max(title.length + 8, 50), terminalWidth - 4);
-    
-    console.log(chalk.cyan('╭' + '─'.repeat(maxWidth) + '╮'));
-    
-    const titleLength = title.length;
-    const padding = Math.max(0, Math.floor((maxWidth - titleLength) / 2));
-    const paddedTitle = ' '.repeat(padding) + title + ' '.repeat(maxWidth - titleLength - padding);
-    
-    console.log(chalk.cyan('│') + chalk.bold.white(paddedTitle) + chalk.cyan('│'));
-    console.log(chalk.cyan('╰' + '─'.repeat(maxWidth) + '╯'));
+    if (this.isPlain()) {
+      console.log(title);
+      return;
+    }
+    console.log(chalk.bold.cyan(title));
+    this.printSeparator(title.length);
   }
 
   // Helper function to get string length without ANSI escape codes
@@ -127,100 +127,48 @@ export class UIHelper {
       return;
     }
 
-    const terminalWidth = process.stdout.columns || 80;
-    const maxTableWidth = Math.min(terminalWidth - 4, 120);
+    const host = (s: { host?: string }) => s.host ?? 'github.com';
+    const status = (s: { name: string }) => (s.name === activeSpace ? 'active' : 'inactive');
 
-    // Calculate column widths with responsive sizing
-    const minNameWidth = 8;
-    const minEmailWidth = 12;
-    const minUserWidth = 8;
-    const minHostWidth = 10;
-    const statusWidth = 8;
-
-    // Get the actual content lengths
-    const baseNameWidth = Math.max(minNameWidth, ...spaces.map(s => s.name.length));
-    const baseEmailWidth = Math.max(minEmailWidth, ...spaces.map(s => s.email.length));
-    const baseUserWidth = Math.max(minUserWidth, ...spaces.map(s => s.userName.length));
-    const baseHostWidth = Math.max(minHostWidth, ...spaces.map(s => (s.host ?? 'github.com').length));
-
-    const totalBaseWidth = baseNameWidth + baseEmailWidth + baseUserWidth + baseHostWidth + statusWidth + 15; // 15 for borders and padding
-
-    let nameWidth = baseNameWidth;
-    let emailWidth = baseEmailWidth;
-    let userWidth = baseUserWidth;
-    let hostWidth = baseHostWidth;
-
-    // Adjust widths if table is too wide for terminal
-    if (totalBaseWidth > maxTableWidth) {
-      const availableWidth = maxTableWidth - statusWidth - 15;
-      const totalContentWidth = baseNameWidth + baseEmailWidth + baseUserWidth + baseHostWidth;
-
-      // Proportionally reduce each column
-      nameWidth = Math.max(minNameWidth, Math.floor((baseNameWidth / totalContentWidth) * availableWidth));
-      emailWidth = Math.max(minEmailWidth, Math.floor((baseEmailWidth / totalContentWidth) * availableWidth));
-      hostWidth = Math.max(minHostWidth, Math.floor((baseHostWidth / totalContentWidth) * availableWidth));
-      userWidth = Math.max(minUserWidth, availableWidth - nameWidth - emailWidth - hostWidth);
+    if (this.isPlain()) {
+      // No box-drawing, no color: a simple tab-separated table that pipes cleanly.
+      console.log(['Name', 'Email', 'User', 'Host', 'Status'].join('\t'));
+      spaces.forEach(space => {
+        const name = space.name === activeSpace ? `* ${space.name}` : space.name;
+        console.log([name, space.email, space.userName, host(space), status(space)].join('\t'));
+      });
+      return;
     }
 
-    // Create border components
-    const topBorder = `┌${'─'.repeat(nameWidth + 2)}┬${'─'.repeat(emailWidth + 2)}┬${'─'.repeat(userWidth + 2)}┬${'─'.repeat(hostWidth + 2)}┬${'─'.repeat(statusWidth + 2)}┐`;
-    const separator = `├${'─'.repeat(nameWidth + 2)}┼${'─'.repeat(emailWidth + 2)}┼${'─'.repeat(userWidth + 2)}┼${'─'.repeat(hostWidth + 2)}┼${'─'.repeat(statusWidth + 2)}┤`;
-    const bottomBorder = `└${'─'.repeat(nameWidth + 2)}┴${'─'.repeat(emailWidth + 2)}┴${'─'.repeat(userWidth + 2)}┴${'─'.repeat(hostWidth + 2)}┴${'─'.repeat(statusWidth + 2)}┘`;
+    const nameWidth = Math.max(4, ...spaces.map(s => s.name.length + (s.name === activeSpace ? 2 : 0)));
+    const emailWidth = Math.max(5, ...spaces.map(s => s.email.length));
+    const userWidth = Math.max(4, ...spaces.map(s => s.userName.length));
+    const hostWidth = Math.max(4, ...spaces.map(s => host(s).length));
 
-    // Print table header
-    console.log(chalk.cyan(topBorder));
+    const header = [
+      this.padWithColors(chalk.bold('Name'), nameWidth),
+      this.padWithColors(chalk.bold('Email'), emailWidth),
+      this.padWithColors(chalk.bold('User'), userWidth),
+      this.padWithColors(chalk.bold('Host'), hostWidth),
+      chalk.bold('Status'),
+    ].join('  ');
+    console.log(header);
+    this.printSeparator(nameWidth + emailWidth + userWidth + hostWidth + 6 + 8);
 
-    const headerRow = `│ ${this.padWithColors(chalk.bold.white('Name'), nameWidth)} │ ${this.padWithColors(chalk.bold.white('Email'), emailWidth)} │ ${this.padWithColors(chalk.bold.white('User'), userWidth)} │ ${this.padWithColors(chalk.bold.white('Host'), hostWidth)} │ ${this.padWithColors(chalk.bold.white('Status'), statusWidth)} │`;
-    console.log(headerRow);
-    console.log(chalk.cyan(separator));
-
-    // Print each space row
     spaces.forEach(space => {
       const isActive = space.name === activeSpace;
-      const host = space.host ?? 'github.com';
+      const nameCell = isActive ? this.activeSpace(space.name) : space.name;
+      const statusCell = isActive ? chalk.cyan('active') : chalk.dim('inactive');
 
-      // Truncate long values with ellipsis
-      const truncatedName = space.name.length > nameWidth ? space.name.substring(0, nameWidth - 3) + '...' : space.name;
-      const truncatedEmail = space.email.length > emailWidth ? space.email.substring(0, emailWidth - 3) + '...' : space.email;
-      const truncatedUser = space.userName.length > userWidth ? space.userName.substring(0, userWidth - 3) + '...' : space.userName;
-      const truncatedHost = host.length > hostWidth ? host.substring(0, hostWidth - 3) + '...' : host;
-
-      // Apply styling based on active state
-      const styledName = isActive ? this.activeSpace(truncatedName) : chalk.white(truncatedName);
-      const styledEmail = isActive ? chalk.green(truncatedEmail) : chalk.gray(truncatedEmail);
-      const styledUser = isActive ? chalk.green(truncatedUser) : chalk.gray(truncatedUser);
-      const styledHost = isActive ? chalk.green(truncatedHost) : chalk.gray(truncatedHost);
-      const styledStatus = isActive ? this.badge('ACTIVE', 'success') : chalk.dim('inactive');
-
-      const row = `│ ${this.padWithColors(styledName, nameWidth)} │ ${this.padWithColors(styledEmail, emailWidth)} │ ${this.padWithColors(styledUser, userWidth)} │ ${this.padWithColors(styledHost, hostWidth)} │ ${this.padWithColors(styledStatus, statusWidth)} │`;
+      const row = [
+        this.padWithColors(nameCell, nameWidth),
+        this.padWithColors(chalk.dim(space.email), emailWidth),
+        this.padWithColors(chalk.dim(space.userName), userWidth),
+        this.padWithColors(chalk.dim(host(space)), hostWidth),
+        statusCell,
+      ].join('  ');
       console.log(row);
     });
-
-    console.log(chalk.cyan(bottomBorder));
-    
-    // Enhanced summary footer with better formatting
-    const totalSpaces = spaces.length;
-    const activeCount = activeSpace ? 1 : 0;
-    const inactiveCount = totalSpaces - activeCount;
-    
-    console.log('');
-    console.log(chalk.dim('📊 Summary:'), 
-      chalk.cyan(`${totalSpaces} total`), 
-      chalk.green(`• ${activeCount} active`), 
-      chalk.gray(`• ${inactiveCount} inactive`)
-    );
-    
-    if (activeSpace) {
-      console.log('');
-      console.log(chalk.dim('🔥 Currently active:'), chalk.green.bold(activeSpace));
-    }
-    
-    console.log('');
-    console.log(chalk.dim('Commands:'));
-    console.log(chalk.dim('  • '), this.command('dss switch'), chalk.dim(' - Change active space'));
-    console.log(chalk.dim('  • '), this.command('dss inspect <space>'), chalk.dim(' - View detailed space info'));
-    console.log(chalk.dim('  • '), this.command('dss test'), chalk.dim(' - Test GitHub access'));
-    console.log('');
   }
 
   private static progressState = {
@@ -234,22 +182,29 @@ export class UIHelper {
 
   static printProgress(message: string): void {
     this.clearProgress();
+
+    if (this.isPlain()) {
+      // No animation off a TTY — a single static line instead of a spinner.
+      console.log(`${message}...`);
+      return;
+    }
+
     this.progressState.active = true;
     this.progressState.startTime = performance.now();
     this.progressState.message = message;
     this.progressState.index = 0;
-    
+
     const updateSpinner = () => {
       if (!this.progressState.active) return;
-      
+
       const elapsed = Math.floor((performance.now() - this.progressState.startTime) / 1000);
       const spinner = this.progressState.spinner[this.progressState.index % this.progressState.spinner.length];
       const timeStr = elapsed > 0 ? ` (${elapsed}s)` : '';
-      
-      process.stdout.write(`\r${chalk.yellow(spinner)} ${this.progressState.message}...${chalk.dim(timeStr)}`);
+
+      process.stdout.write(`\r${chalk.cyan(spinner)} ${this.progressState.message}...${chalk.dim(timeStr)}`);
       this.progressState.index++;
     };
-    
+
     updateSpinner();
     this.progressState.interval = setInterval(updateSpinner, 80);
   }
@@ -260,7 +215,9 @@ export class UIHelper {
       this.progressState.interval = null;
     }
     this.progressState.active = false;
-    
+
+    if (this.isPlain()) return; // nothing was drawn to erase
+
     const terminalWidth = process.stdout.columns || 80;
     process.stdout.write('\r' + ' '.repeat(terminalWidth) + '\r');
   }
@@ -271,110 +228,83 @@ export class UIHelper {
     }
   }
 
-  static printKeyInstruction(): void {
-    console.log(chalk.dim('\n💡 Tips:'));
-    console.log(chalk.dim('  • Use arrow keys to navigate'));
-    console.log(chalk.dim('  • Press Enter to select'));
-    console.log(chalk.dim('  • Press Ctrl+C to cancel'));
+  /**
+   * A one-line summary (success/error/info) plus dim, indented detail
+   * lines — the calm replacement for the old bordered boxes. Blank lines
+   * in `content` (formerly used as box spacers) are dropped, and a stray
+   * leading glyph left over in a content string is stripped so it doesn't
+   * duplicate the bullet this renders.
+   */
+  private static renderSummary(kind: 'success' | 'error' | 'info', title: string, content: string[]): void {
+    if (kind === 'success') this.success(title);
+    else if (kind === 'error') this.error(title);
+    else this.info(title);
+
+    content
+      .map(line => line.replace(/^\s*[✓✗!⚠]\s*/, '').trim())
+      .filter(line => line.length > 0)
+      .forEach(line => {
+        console.log(this.isPlain() ? `  - ${line}` : chalk.dim(`  ${GLYPH.bullet} ${line}`));
+      });
   }
 
   static printSuccessBox(title: string, content: string[]): void {
-    const maxWidth = Math.max(title.length, ...content.map(line => line.length));
-    const terminalWidth = process.stdout.columns || 80;
-    const width = Math.min(Math.max(maxWidth + 4, 40), terminalWidth - 4);
-    
-    console.log(chalk.green('╔' + '═'.repeat(width - 2) + '╗'));
-    console.log(chalk.green('║') + chalk.green.bold(title.padStart((width + title.length) / 2).padEnd(width - 2)) + chalk.green('║'));
-    console.log(chalk.green('╠' + '═'.repeat(width - 2) + '╣'));
-    
-    content.forEach(line => {
-      const truncatedLine = line.length > width - 4 ? line.substring(0, width - 7) + '...' : line;
-      console.log(chalk.green('║') + ` ${truncatedLine}`.padEnd(width - 2) + chalk.green('║'));
-    });
-    
-    console.log(chalk.green('╚' + '═'.repeat(width - 2) + '╝'));
+    this.renderSummary('success', title, content);
   }
 
   static printErrorBox(title: string, content: string[]): void {
-    const maxWidth = Math.max(title.length, ...content.map(line => line.length));
-    const terminalWidth = process.stdout.columns || 80;
-    const width = Math.min(Math.max(maxWidth + 4, 40), terminalWidth - 4);
-    
-    console.log(chalk.red('╔' + '═'.repeat(width - 2) + '╗'));
-    console.log(chalk.red('║') + chalk.red.bold(title.padStart((width + title.length) / 2).padEnd(width - 2)) + chalk.red('║'));
-    console.log(chalk.red('╠' + '═'.repeat(width - 2) + '╣'));
-    
-    content.forEach(line => {
-      const truncatedLine = line.length > width - 4 ? line.substring(0, width - 7) + '...' : line;
-      console.log(chalk.red('║') + ` ${truncatedLine}`.padEnd(width - 2) + chalk.red('║'));
-    });
-    
-    console.log(chalk.red('╚' + '═'.repeat(width - 2) + '╝'));
+    this.renderSummary('error', title, content);
   }
 
   static printInfoBox(title: string, content: string[]): void {
-    const maxWidth = Math.max(title.length, ...content.map(line => line.length));
-    const terminalWidth = process.stdout.columns || 80;
-    const width = Math.min(Math.max(maxWidth + 4, 40), terminalWidth - 4);
-    
-    console.log(chalk.blue('╔' + '═'.repeat(width - 2) + '╗'));
-    console.log(chalk.blue('║') + chalk.blue.bold(title.padStart((width + title.length) / 2).padEnd(width - 2)) + chalk.blue('║'));
-    console.log(chalk.blue('╠' + '═'.repeat(width - 2) + '╣'));
-    
-    content.forEach(line => {
-      const truncatedLine = line.length > width - 4 ? line.substring(0, width - 7) + '...' : line;
-      console.log(chalk.blue('║') + ` ${truncatedLine}`.padEnd(width - 2) + chalk.blue('║'));
-    });
-    
-    console.log(chalk.blue('╚' + '═'.repeat(width - 2) + '╝'));
+    this.renderSummary('info', title, content);
   }
 
   static printStatus(label: string, value: string, status: 'success' | 'error' | 'warning' | 'info' = 'info'): void {
-    const statusIcon = {
-      success: '✅',
-      error: '❌',
-      warning: '⚠️',
-      info: 'ℹ️'
-    }[status];
-    
-    const statusColor = {
+    const glyphByStatus = {
+      success: GLYPH.success,
+      error: GLYPH.error,
+      warning: GLYPH.warning,
+      info: '',
+    };
+    const colorByStatus = {
       success: chalk.green,
       error: chalk.red,
       warning: chalk.yellow,
-      info: chalk.blue
-    }[status];
-    
-    console.log(`${statusIcon} ${chalk.bold(label)}: ${statusColor(value)}`);
+      info: chalk.dim,
+    };
+    const plainTagByStatus = {
+      success: '',
+      error: 'error: ',
+      warning: 'warn: ',
+      info: '',
+    };
+
+    if (this.isPlain()) {
+      console.log(`${plainTagByStatus[status]}${label}: ${value}`);
+      return;
+    }
+
+    const glyph = glyphByStatus[status];
+    const prefix = glyph ? `${colorByStatus[status](glyph)} ` : '';
+    console.log(`${prefix}${chalk.bold(label)}: ${value}`);
   }
 
-  static printWelcome(): void {
-    const terminalWidth = process.stdout.columns || 80;
-    const maxWidth = Math.min(70, terminalWidth - 4);
-    
-    console.log('');
-    console.log(chalk.cyan('╭' + '═'.repeat(maxWidth) + '╮'));
-    console.log(chalk.cyan('║') + chalk.bold.cyan(' '.repeat(Math.floor((maxWidth - 24) / 2)) + '🚀 Dev Spaces Switcher' + ' '.repeat(Math.ceil((maxWidth - 24) / 2))) + chalk.cyan('║'));
-    console.log(chalk.cyan('║') + chalk.dim(' '.repeat(Math.floor((maxWidth - 52) / 2)) + 'Manage isolated development environments with ease' + ' '.repeat(Math.ceil((maxWidth - 52) / 2))) + chalk.cyan('║'));
-    console.log(chalk.cyan('╰' + '═'.repeat(maxWidth) + '╯'));
-    console.log('');
-  }
-
+  /** Reserved for the dashboard/help surface (later Phase 3 tasks) — not
+   * used in normal command output. */
   static printQuickHelp(): void {
-    console.log(chalk.dim('Quick commands:'));
-    console.log(chalk.dim('  • '), this.command('dss list'), chalk.dim(' - Show all spaces'));
-    console.log(chalk.dim('  • '), this.command('dss add'), chalk.dim(' - Add new space'));
-    console.log(chalk.dim('  • '), this.command('dss switch'), chalk.dim(' - Switch between spaces'));
-    console.log(chalk.dim('  • '), this.command('dss --help'), chalk.dim(' - Show detailed help'));
-    console.log('');
-  }
-
-  static printSpaceSwitched(spaceName: string): void {
-    console.log('');
-    console.log(chalk.green('╭─────────────────────────────────────╮'));
-    console.log(chalk.green('│') + chalk.green.bold('  ✨ Space Switched Successfully!  ') + chalk.green('│'));
-    console.log(chalk.green('├─────────────────────────────────────┤'));
-    console.log(chalk.green('│') + chalk.white(`  Active space: ${chalk.green.bold(spaceName)}`.padEnd(35)) + chalk.green('│'));
-    console.log(chalk.green('╰─────────────────────────────────────╯'));
+    console.log(this.isPlain() ? 'Quick commands:' : chalk.dim('Quick commands:'));
+    const lines: Array<[string, string]> = [
+      ['dss list', 'Show all spaces'],
+      ['dss add', 'Add new space'],
+      ['dss switch', 'Switch between spaces'],
+      ['dss --help', 'Show detailed help'],
+    ];
+    lines.forEach(([cmd, desc]) => {
+      const bullet = this.isPlain() ? '-' : chalk.dim(GLYPH.bullet);
+      const description = this.isPlain() ? ` - ${desc}` : chalk.dim(` - ${desc}`);
+      console.log(`  ${bullet} ${this.command(cmd)}${description}`);
+    });
     console.log('');
   }
 }

@@ -159,10 +159,9 @@ export async function rotateKey(identityName?: string): Promise<void> {
   }
 
   UIHelper.printSuccessBox('SSH Key Rotated', [
-    `✓ Algorithm: ${keyInfo.algorithm}`,
-    `✓ Fingerprint: ${keyInfo.fingerprint ?? 'unknown'}`,
-    publicKey ? '✓ Public key copied to clipboard' : '⚠ Public key could not be copied to clipboard',
-    '',
+    `Algorithm: ${keyInfo.algorithm}`,
+    `Fingerprint: ${keyInfo.fingerprint ?? 'unknown'}`,
+    publicKey ? 'Public key copied to clipboard' : 'Public key could not be copied to clipboard',
     keySettingsLine(identity.host)
   ]);
 

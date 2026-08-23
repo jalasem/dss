@@ -440,9 +440,11 @@ describe('commands/spaces', () => {
 
       await listSpaces();
 
-      // Check that the table was printed - looking for the active space indicator
+      // Check that the table was printed - looking for the active space indicator.
+      // Tests run non-TTY, so UIHelper renders in PLAIN mode: the active-space
+      // glyph (●, cyan) degrades to a plain ASCII '*' marker.
       const calls = (console.log as jest.Mock).mock.calls.flat();
-      const hasActiveSpace = calls.some(call => call && call.includes && call.includes('🔥 space1'));
+      const hasActiveSpace = calls.some(call => call && call.includes && call.includes('* space1'));
       expect(hasActiveSpace).toBe(true);
     });
 

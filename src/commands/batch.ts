@@ -109,9 +109,8 @@ export async function exportSpaceConfiguration() {
   await fs.writeJson(exportPath, exportData, { spaces: 2 });
 
   UIHelper.printSuccessBox('Configuration Exported', [
-    `✓ ${selectedSpaces.length} spaces exported`,
-    `✓ Saved to: ${exportPath}`,
-    '',
+    `${selectedSpaces.length} spaces exported`,
+    `Saved to: ${exportPath}`,
     'Note: SSH keys not included for security'
   ]);
 }
@@ -202,8 +201,7 @@ export async function importSpaceConfiguration() {
     await persistConfig(store, config, originalBySpace);
 
     UIHelper.printSuccessBox('Import Completed', [
-      `✓ ${spacesToImport.length} spaces imported`,
-      '',
+      `${spacesToImport.length} spaces imported`,
       'Note: SSH keys need to be set up manually',
       'Use `dss edit <space>` to configure SSH keys'
     ]);
@@ -273,7 +271,7 @@ export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Prom
           if (space && space.email.includes(oldDomain)) {
             const newEmail = space.email.replace(oldDomain, newDomain);
             if (dryRun) {
-              previewLines.push(`✓ ${space.name}: email ${space.email} → ${newEmail}`);
+              previewLines.push(`${space.name}: email ${space.email} → ${newEmail}`);
             } else {
               space.email = newEmail;
             }
@@ -306,7 +304,7 @@ export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Prom
             if (space && !space.userName.startsWith(prefix)) {
               const newUserName = prefix + space.userName;
               if (dryRun) {
-                previewLines.push(`✓ ${space.name}: userName ${space.userName} → ${newUserName}`);
+                previewLines.push(`${space.name}: userName ${space.userName} → ${newUserName}`);
               } else {
                 space.userName = newUserName;
               }
@@ -326,7 +324,7 @@ export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Prom
             if (space && !space.userName.endsWith(suffix)) {
               const newUserName = space.userName + suffix;
               if (dryRun) {
-                previewLines.push(`✓ ${space.name}: userName ${space.userName} → ${newUserName}`);
+                previewLines.push(`${space.name}: userName ${space.userName} → ${newUserName}`);
               } else {
                 space.userName = newUserName;
               }
@@ -351,7 +349,7 @@ export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Prom
             if (space && space.userName.includes(oldText)) {
               const newUserName = space.userName.replace(new RegExp(oldText, 'g'), newText);
               if (dryRun) {
-                previewLines.push(`✓ ${space.name}: userName ${space.userName} → ${newUserName}`);
+                previewLines.push(`${space.name}: userName ${space.userName} → ${newUserName}`);
               } else {
                 space.userName = newUserName;
               }
@@ -379,7 +377,7 @@ export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Prom
           for (const spaceName of selectedSpaces) {
             const space = config.spaces.find(s => s.name === spaceName);
             if (space) {
-              previewLines.push(`✓ ${space.name}: SSH key would be regenerated`);
+              previewLines.push(`${space.name}: SSH key would be regenerated`);
               updatedCount++;
             }
           }
@@ -421,7 +419,6 @@ export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Prom
       if (updatedCount > 0) {
         UIHelper.printInfoBox('Dry Run: Bulk Update Preview', [
           ...previewLines,
-          '',
           'Use without --dry-run to apply changes'
         ]);
       } else {
@@ -461,9 +458,8 @@ export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Prom
       }
 
       UIHelper.printSuccessBox('Bulk Update Complete', [
-        `✓ ${updatedCount} spaces updated successfully`,
-        `✓ Operation: ${updateType}`,
-        '',
+        `${updatedCount} spaces updated successfully`,
+        `Operation: ${updateType}`,
         'Use `dss list` to view updated spaces'
       ]);
     } else {

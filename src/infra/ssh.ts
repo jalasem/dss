@@ -256,14 +256,14 @@ export async function testHostAccess(sshKeyPath: string, host: string): Promise<
   try {
     try {
       await execFileAsync('ssh', ['-i', sshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', `git@${host}`]);
-      UIHelper.success(`🎉 Space configuration works! You've successfully authenticated with ${host}.`);
+      UIHelper.success(`Space configuration works! You've successfully authenticated with ${host}.`);
     } catch (error) {
       const { stderr, stdout } = error as { stderr?: string; stdout?: string };
       const output = `${stderr ?? ''}${stdout ?? ''}`;
       if (SUCCESS_MARKERS.some((marker) => output.includes(marker))) {
-        UIHelper.success(`🎉 Space configuration works! You've successfully authenticated with ${host}.`);
+        UIHelper.success(`Space configuration works! You've successfully authenticated with ${host}.`);
       } else {
-        fail(`🚨 Error testing SSH access to ${host}: ` + (error as Error).message);
+        fail(`Error testing SSH access to ${host}: ` + (error as Error).message);
       }
     }
 
@@ -278,7 +278,7 @@ export async function testHostAccess(sshKeyPath: string, host: string): Promise<
     console.log(UIHelper.dim("\nPublic SSH Key:"));
     console.log(UIHelper.highlight(publicKey));
   } catch (error) {
-    fail(`🚨 Error testing SSH access to ${host}: ` + (error as Error).message);
+    fail(`Error testing SSH access to ${host}: ` + (error as Error).message);
     UIHelper.info(`Ensure the public key has been added to your ${host} account.`);
   }
 }
