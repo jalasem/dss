@@ -156,6 +156,39 @@ describe('infra/ssh', () => {
         'Host github.com\n  HostName github.com\n  User git\n  IdentityFile /new/id_ed25519\n  IdentitiesOnly yes'
       );
     });
+
+    it('quotes the IdentityFile value when the key path contains whitespace', () => {
+      const spacedPath = '/tmp/my dir/id_rsa';
+      const updated = applyHostSSHKey('', spacedPath, 'github.com');
+      const reparsed = parseSshConfig(updated);
+      expect(reparsed.blocks[0].lines).toContain(`  IdentityFile "${spacedPath}"`);
+    });
+
+    it('does not quote an IdentityFile value with no whitespace', () => {
+      const updated = applyHostSSHKey('', mockSshKeyPath, 'github.com');
+      const reparsed = parseSshConfig(updated);
+      expect(reparsed.blocks[0].lines).toContain(`  IdentityFile ${mockSshKeyPath}`);
+    });
+
+    // Security: a crafted `host` or `sshKeyPath` containing a line break
+    // could inject an arbitrary extra ssh_config directive (e.g. a
+    // ProxyCommand) into the globally-applied ~/.ssh/config. This is the
+    // last-line hard gate — it must throw regardless of what validation an
+    // upstream caller (import filter, prompt) does or doesn't have.
+    it('throws when host contains an embedded ssh_config directive via a line break', () => {
+      expect(() => applyHostSSHKey('', mockSshKeyPath, 'github.com\n  ProxyCommand /bin/sh -c "evil"'))
+        .toThrow(/line break/);
+    });
+
+    it('throws when host contains a carriage return', () => {
+      expect(() => applyHostSSHKey('', mockSshKeyPath, 'github.com\r  ProxyCommand evil'))
+        .toThrow(/line break/);
+    });
+
+    it('throws when sshKeyPath contains a line break', () => {
+      expect(() => applyHostSSHKey('', '/some/path\n  ProxyCommand evil', 'github.com'))
+        .toThrow(/line break/);
+    });
   });
 
   // ---------------------------------------------------------------------
@@ -253,6 +286,23 @@ Host other.com
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('Failed to update SSH config for github.com: Permission denied')
       );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('surfaces a crafted-host injection attempt via fail() (exit code 1) rather than writing the config', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue('');
+
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      await setHostSSHKey(mockSshKeyPath, 'github.com\n  ProxyCommand /bin/sh -c "evil"');
+
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+      expect(mockFs.copy).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('line break'));
+      expect(process.exitCode).toBe(1);
 
       consoleSpy.mockRestore();
     });

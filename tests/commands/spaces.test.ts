@@ -639,6 +639,40 @@ describe('commands/spaces', () => {
 
       expect(mockAddToAgent).toHaveBeenCalledWith(spacedKeyPath);
     });
+
+    it('treats a cancelled "Test SSH access?" prompt as declined (safeConfirm) rather than a switch failure — the switch already succeeded and persisted', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
+      mockConfirm.mockRejectedValueOnce(new ExitPromptError('User force closed the prompt with 0 null'));
+
+      await switchSpace('test-space');
+
+      expect(mockTestHostAccess).not.toHaveBeenCalled();
+      expect(mockSaveStore).toHaveBeenCalledWith(storeOf([mockSpace], 'test-space'));
+      expect(process.exitCode).toBeUndefined();
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('Failed to switch'))).toBe(false);
+    });
+
+    it('warns (not fail()) when addToAgent fails — the switch still completes and persists (agent-less environment: CI/containers/fresh login)', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
+      mockAddToAgent.mockRejectedValueOnce(new Error('Could not open a connection to your authentication agent'));
+      mockConfirm.mockResolvedValue(false);
+
+      const warningSpy = jest.spyOn(UIHelper, 'warning');
+
+      await switchSpace('test-space');
+
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining('Could not add the SSH key to the ssh-agent'));
+      // The rest of the switch still runs: ssh-config gets the key, and the
+      // new active space is persisted — global git identity and the store
+      // don't end up disagreeing with each other.
+      expect(mockSetHostSSHKey).toHaveBeenCalledWith(mockSpace.sshKeyPath, 'github.com');
+      expect(mockSaveStore).toHaveBeenCalledWith(storeOf([mockSpace], 'test-space'));
+      expect(process.exitCode).toBeUndefined();
+
+      warningSpy.mockRestore();
+    });
   });
 
   describe('removeSpace', () => {
@@ -1428,6 +1462,53 @@ describe('commands/spaces', () => {
       expect(userNameValidate('John\nDoe')).not.toBe(true);
       expect(userNameValidate('John\rDoe')).not.toBe(true);
       expect(userNameValidate('John Doe')).toBe(true);
+    });
+
+    it('rejects a rename to a path-traversal name, but always allows the unchanged current name (defense-in-depth against fs.move escaping ~/.dss)', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
+
+      mockInput
+        .mockResolvedValueOnce(mockSpace.name)
+        .mockResolvedValueOnce(mockSpace.email)
+        .mockResolvedValueOnce(mockSpace.userName);
+
+      await modifySpace('test-space');
+
+      const nameCall = mockInput.mock.calls.find(
+        (call) => (call[0] as { message: string }).message === `New name for "${mockSpace.name}" (leave blank to skip):`
+      );
+      expect(nameCall).toBeDefined();
+      const validate = (nameCall![0] as { validate: (input: string) => string | boolean }).validate;
+
+      expect(validate('../../../tmp/evil')).not.toBe(true);
+      expect(validate('foo/bar')).not.toBe(true);
+      expect(validate(mockSpace.name)).toBe(true);
+      expect(validate('Renamed Space')).toBe(true);
+    });
+
+    it('calls setHostSSHKey with the NEW key path when renaming the active identity (ssh-config repair; a stale IdentityFile after a rename could otherwise never be fixed, since `switch <active>` early-returns "already active")', async () => {
+      const activeSpace = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      mockLoadStore.mockResolvedValue(storeOf([activeSpace], 'test-space'));
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
+
+      mockInput
+        .mockResolvedValueOnce('New Name')
+        .mockResolvedValueOnce(activeSpace.email)
+        .mockResolvedValueOnce(activeSpace.userName);
+
+      await modifySpace('test-space');
+
+      const oldKeyDir = path.dirname(mockSshKeyPath);
+      const newKeyDir = path.join(path.dirname(oldKeyDir), 'new-name');
+      const newSshKeyPath = path.join(newKeyDir, path.basename(mockSshKeyPath));
+
+      expect(mockSetHostSSHKey).toHaveBeenCalledWith(newSshKeyPath, 'github.com');
     });
   });
 

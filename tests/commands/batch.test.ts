@@ -1,6 +1,6 @@
 import os from 'os';
 import path from 'path';
-import { select, confirm, checkbox } from '@inquirer/prompts';
+import { select, confirm, checkbox, input } from '@inquirer/prompts';
 import { generateKey } from '../../src/infra/keys';
 import { UIHelper } from '../../src/commands/ui';
 import type { loadStore as LoadStore, saveStore as SaveStore } from '../../src/infra/store';
@@ -10,7 +10,8 @@ jest.mock('os');
 jest.mock('@inquirer/prompts');
 jest.mock('../../src/infra/keys');
 jest.mock('../../src/commands/spaces', () => ({
-  switchSpace: jest.fn()
+  switchSpace: jest.fn(),
+  reapplyActiveIdentity: jest.fn()
 }));
 jest.mock('../../src/infra/store', () => {
   const actual = jest.requireActual('../../src/infra/store');
@@ -51,15 +52,17 @@ mockOs.homedir.mockReturnValue('/mock/home');
 
 const { bulkUpdateSpaces, batchSwitchSpaces } = require('../../src/commands/batch');
 const { loadStore, saveStore } = require('../../src/infra/store');
-const { switchSpace } = require('../../src/commands/spaces');
+const { switchSpace, reapplyActiveIdentity } = require('../../src/commands/spaces');
 
 const mockLoadStore = loadStore as jest.MockedFunction<typeof LoadStore>;
 const mockSaveStore = saveStore as jest.MockedFunction<typeof SaveStore>;
 const mockSelect = select as jest.MockedFunction<typeof select>;
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockCheckbox = checkbox as jest.MockedFunction<typeof checkbox>;
+const mockInput = input as jest.MockedFunction<typeof input>;
 const mockGenerateKey = generateKey as jest.MockedFunction<typeof generateKey>;
 const mockSwitchSpace = switchSpace as jest.MockedFunction<typeof switchSpace>;
+const mockReapplyActiveIdentity = reapplyActiveIdentity as jest.MockedFunction<(space: unknown, store: unknown) => Promise<void>>;
 
 const mockHomeDir = '/mock/home';
 
@@ -282,5 +285,149 @@ describe('commands/batch batchSwitchSpaces', () => {
     await batchSwitchSpaces();
 
     expect(process.exitCode).toBeUndefined();
+  });
+});
+
+describe('commands/batch bulkUpdateSpaces — active identity re-apply (finding #4)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation();
+    mockOs.homedir.mockReturnValue(mockHomeDir);
+    mockSaveStore.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
+  it('refreshes the active identity\'s global git/SSH config after an email-domain bulk update touches it — otherwise active.gitconfig/ssh-config keep the old value while `dss list` already shows the new one', async () => {
+    const activeIdentity = identity({ name: 'active-space', email: 'user@old.com' });
+    const otherIdentity = identity({ name: 'other-space', email: 'user@old.com' });
+    mockLoadStore.mockResolvedValue({
+      version: 2,
+      identities: [activeIdentity, otherIdentity],
+      active: 'active-space',
+      bindings: []
+    });
+    mockSelect.mockResolvedValue('email-domain');
+    mockCheckbox.mockResolvedValue(['active-space', 'other-space']);
+    mockInput
+      .mockResolvedValueOnce('old.com')
+      .mockResolvedValueOnce('new.com');
+
+    await bulkUpdateSpaces();
+
+    expect(mockReapplyActiveIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'active-space', email: 'user@new.com' }),
+      expect.anything()
+    );
+  });
+
+  it('does not call reapplyActiveIdentity when the active identity is not among the updated spaces', async () => {
+    const activeIdentity = identity({ name: 'active-space', email: 'user@old.com' });
+    const otherIdentity = identity({ name: 'other-space', email: 'user@old.com' });
+    mockLoadStore.mockResolvedValue({
+      version: 2,
+      identities: [activeIdentity, otherIdentity],
+      active: 'active-space',
+      bindings: []
+    });
+    mockSelect.mockResolvedValue('email-domain');
+    mockCheckbox.mockResolvedValue(['other-space']);
+    mockInput
+      .mockResolvedValueOnce('old.com')
+      .mockResolvedValueOnce('new.com');
+
+    await bulkUpdateSpaces();
+
+    expect(mockReapplyActiveIdentity).not.toHaveBeenCalled();
+  });
+
+  it('does not call reapplyActiveIdentity when no identity is active', async () => {
+    const spaceA = identity({ name: 'space-a', email: 'user@old.com' });
+    mockLoadStore.mockResolvedValue(storeOf([spaceA]));
+    mockSelect.mockResolvedValue('email-domain');
+    mockCheckbox.mockResolvedValue(['space-a']);
+    mockInput
+      .mockResolvedValueOnce('old.com')
+      .mockResolvedValueOnce('new.com');
+
+    await bulkUpdateSpaces();
+
+    expect(mockReapplyActiveIdentity).not.toHaveBeenCalled();
+  });
+
+  it('warns (but still succeeds) when the re-apply itself fails after a successful save', async () => {
+    const activeIdentity = identity({ name: 'active-space', email: 'user@old.com' });
+    mockLoadStore.mockResolvedValue({
+      version: 2,
+      identities: [activeIdentity],
+      active: 'active-space',
+      bindings: []
+    });
+    mockSelect.mockResolvedValue('email-domain');
+    mockCheckbox.mockResolvedValue(['active-space']);
+    mockInput
+      .mockResolvedValueOnce('old.com')
+      .mockResolvedValueOnce('new.com');
+    mockReapplyActiveIdentity.mockRejectedValueOnce(new Error('git not found'));
+
+    const warningSpy = jest.spyOn(UIHelper, 'warning');
+
+    await bulkUpdateSpaces();
+
+    expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining('re-applying the active identity'));
+    expect(mockSaveStore).toHaveBeenCalled();
+
+    warningSpy.mockRestore();
+  });
+});
+
+describe('commands/batch bulkUpdateSpaces — --dry-run (load-bearing minor)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation();
+    mockOs.homedir.mockReturnValue(mockHomeDir);
+    mockSaveStore.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
+  it('previews an email-domain update without persisting or mutating the loaded identities', async () => {
+    const spaceA = identity({ name: 'space-a', email: 'user@old.com' });
+    mockLoadStore.mockResolvedValue(storeOf([spaceA]));
+    mockSelect.mockResolvedValue('email-domain');
+    mockCheckbox.mockResolvedValue(['space-a']);
+    mockInput
+      .mockResolvedValueOnce('old.com')
+      .mockResolvedValueOnce('new.com');
+
+    await bulkUpdateSpaces({ dryRun: true });
+
+    expect(mockSaveStore).not.toHaveBeenCalled();
+    expect(mockReapplyActiveIdentity).not.toHaveBeenCalled();
+    const calls = (console.log as jest.Mock).mock.calls.flat();
+    expect(calls.some(call => call && call.includes && call.includes('user@old.com → user@new.com'))).toBe(true);
+    expect(calls.some(call => call && call.includes && call.includes('Use without --dry-run'))).toBe(true);
+  });
+
+  it('does not call generateKey during a regenerate-keys dry-run preview', async () => {
+    const spaceA = identity({
+      name: 'space-a',
+      key: { path: '/mock/home/.dss/spaces/space-a/id_ed25519', algorithm: 'ed25519' }
+    });
+    mockLoadStore.mockResolvedValue(storeOf([spaceA]));
+    mockSelect.mockResolvedValue('regenerate-keys');
+    mockCheckbox.mockResolvedValue(['space-a']);
+
+    await bulkUpdateSpaces({ dryRun: true });
+
+    expect(mockGenerateKey).not.toHaveBeenCalled();
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockSaveStore).not.toHaveBeenCalled();
+    const calls = (console.log as jest.Mock).mock.calls.flat();
+    expect(calls.some(call => call && call.includes && call.includes('SSH key would be regenerated'))).toBe(true);
   });
 });

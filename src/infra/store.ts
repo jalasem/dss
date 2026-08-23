@@ -79,11 +79,19 @@ export function mergeIdentity(space: ISpace, original: IIdentity | undefined): I
   updated.host = space.host ?? original.host;
 
   if (updated.key && original.key) {
+    // A rename that only moves the key DIRECTORY (same basename — e.g. a
+    // legacy non-standard filename like "id_mystery") must not re-infer the
+    // algorithm from the filename, which would silently flip a correctly
+    // known algorithm to 'unknown' on every such rename. Only a genuinely
+    // different filename triggers re-inference.
+    const sameBasename = path.basename(updated.key.path) === path.basename(original.key.path);
     updated.key = {
       ...updated.key,
       fingerprint: original.key.fingerprint,
       createdAt: original.key.createdAt,
-      algorithm: updated.key.path === original.key.path ? original.key.algorithm : updated.key.algorithm
+      algorithm: (updated.key.path === original.key.path || sameBasename)
+        ? original.key.algorithm
+        : updated.key.algorithm
     };
   }
 
@@ -166,16 +174,32 @@ export async function loadStore(): Promise<IStoreV2> {
     return fresh;
   }
 
-  if (parsed && typeof parsed === 'object' && (parsed as { version?: unknown }).version === 2) {
-    const v2 = parsed as Partial<IStoreV2>;
-    return {
-      version: 2,
-      identities: Array.isArray(v2.identities) ? v2.identities : [],
-      active: v2.active,
-      bindings: Array.isArray(v2.bindings) ? v2.bindings : []
-    };
+  if (parsed && typeof parsed === 'object') {
+    const version = (parsed as { version?: unknown }).version;
+
+    if (version === 2) {
+      const v2 = parsed as Partial<IStoreV2>;
+      return {
+        version: 2,
+        identities: Array.isArray(v2.identities) ? v2.identities : [],
+        active: v2.active,
+        bindings: Array.isArray(v2.bindings) ? v2.bindings : []
+      };
+    }
+
+    // A future store format newer than this build understands. Silently
+    // falling through to migrateV1 here would treat its shape as v1 and
+    // reduce it to an empty store, destroying data — hard-error instead.
+    if (typeof version === 'number' && version > 2) {
+      throw new Error(
+        `Unsupported config version ${version} in ${CONFIG_PATH} — this build of DSS only understands up to version 2. ` +
+        'Upgrade DSS before using this config file.'
+      );
+    }
   }
 
+  // Everything else (absent version, version === 1, or any other shape
+  // that isn't a numeric version > 2) is treated as v1-migratable.
   await backupIfAbsent(CONFIG_PATH, `${CONFIG_PATH}.v1.bak`);
   const migrated = migrateV1((parsed ?? {}) as IV1Config);
   await saveStore(migrated);

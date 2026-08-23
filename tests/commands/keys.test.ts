@@ -4,6 +4,7 @@ import { addToAgent } from '../../src/infra/ssh';
 import { copyToClipboard } from '../../src/infra/clipboard';
 import { confirm } from '@inquirer/prompts';
 import { IIdentity, IKeyInfo, IStoreV2 } from '../../src/core/types';
+import { UIHelper } from '../../src/commands/ui';
 
 jest.mock('fs-extra');
 jest.mock('@inquirer/prompts', () => ({
@@ -24,8 +25,17 @@ jest.mock('../../src/infra/store', () => {
     saveStore: jest.fn()
   };
 });
+// keys.ts calls reapplyActiveIdentity (src/commands/spaces.ts) when rotating
+// the active identity's key. Importing the real spaces.ts here would pull in
+// its real infra/git.ts (unmocked child_process) — a real `git config
+// --global --add include.path ...` against the machine's actual ~/.gitconfig
+// the moment a rotateKey test's identity is active. Stub the whole module.
+jest.mock('../../src/commands/spaces', () => ({
+  reapplyActiveIdentity: jest.fn()
+}));
 
 const { loadStore, saveStore } = require('../../src/infra/store');
+const { reapplyActiveIdentity } = require('../../src/commands/spaces');
 const { showKey, copyKey, rotateKey, keyCommand } = require('../../src/commands/keys');
 
 const mockLoadStore = loadStore as jest.MockedFunction<() => Promise<IStoreV2>>;
@@ -35,6 +45,7 @@ const mockAddToAgent = addToAgent as jest.MockedFunction<typeof addToAgent>;
 const mockCopyToClipboard = copyToClipboard as jest.MockedFunction<typeof copyToClipboard>;
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockFs = fs as jest.Mocked<typeof fs>;
+const mockReapplyActiveIdentity = reapplyActiveIdentity as jest.MockedFunction<(space: unknown, store: IStoreV2) => Promise<void>>;
 
 function storeWith(identities: IIdentity[], active?: string): IStoreV2 {
   return { version: 2, identities, active, bindings: [] };
@@ -257,6 +268,96 @@ describe('commands/keys', () => {
       expect(mockSaveStore).not.toHaveBeenCalled();
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to generate SSH key'));
       expect(process.exitCode).toBe(1);
+    });
+
+    // Finding #5: rotating the ACTIVE identity's key can change its path
+    // (keyless→keyed, or a migrated legacy-filename identity rotating onto
+    // a standard-named file) — without re-applying, active.gitconfig/
+    // ssh-config keep the old/absent key while `dss key rotate` reports
+    // success.
+    describe('active-identity re-apply (finding #5)', () => {
+      it('calls reapplyActiveIdentity with the identity\'s NEW key path when rotating the active identity', async () => {
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space'));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+
+        await rotateKey();
+
+        expect(mockReapplyActiveIdentity).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'test-space', sshKeyPath: newKeyInfo.path }),
+          expect.anything()
+        );
+      });
+
+      it('does not call reapplyActiveIdentity when rotating a non-active identity', async () => {
+        const otherIdentity: IIdentity = { ...keyedIdentity, name: 'other-space' };
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity, otherIdentity], 'test-space'));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+
+        await rotateKey('other-space');
+
+        expect(mockReapplyActiveIdentity).not.toHaveBeenCalled();
+      });
+
+      it('warns (but the rotation still succeeds/persists) when the re-apply itself fails', async () => {
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space'));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+        mockReapplyActiveIdentity.mockRejectedValueOnce(new Error('git not found'));
+
+        const warningSpy = jest.spyOn(UIHelper, 'warning');
+
+        await rotateKey();
+
+        expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining('re-applying the active identity'));
+        expect(mockSaveStore).toHaveBeenCalled();
+        expect(process.exitCode).toBeUndefined();
+
+        warningSpy.mockRestore();
+      });
+
+      // Deferred-but-now-load-bearing regression: an active identity whose
+      // key has a legacy non-standard filename (algorithm 'unknown') still
+      // gets its ssh-agent add / active.gitconfig+ssh-config re-apply on
+      // rotation, using the freshly generated key's own correct algorithm
+      // and path — not the old, mismatched metadata.
+      it('rotates an active identity with a legacy non-standard filename (algorithm "unknown"), re-applying with the correct new path/algorithm', async () => {
+        const legacyIdentity: IIdentity = {
+          name: 'legacy-space',
+          email: 'legacy@example.com',
+          userName: 'Legacy User',
+          host: 'github.com',
+          key: { path: '/mock/home/.dss/spaces/legacy-space/id_mystery', algorithm: 'unknown' }
+        };
+        mockLoadStore.mockResolvedValue(storeWith([legacyIdentity], 'legacy-space'));
+        mockConfirm.mockResolvedValue(true);
+        const rotatedKeyInfo: IKeyInfo = {
+          path: '/mock/home/.dss/spaces/legacy-space/id_ed25519',
+          algorithm: 'ed25519',
+          fingerprint: 'SHA256:legacyrotated',
+          createdAt: '2024-06-01T00:00:00.000Z'
+        };
+        mockGenerateKey.mockResolvedValue(rotatedKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+
+        await rotateKey();
+
+        // 'unknown' algorithm rotates onto ed25519 (same fallback as 'rsa'-only
+        // detection), not carried through as-is.
+        expect(mockGenerateKey).toHaveBeenCalledWith(expect.objectContaining({ algorithm: 'ed25519' }));
+
+        const savedStore = mockSaveStore.mock.calls[0][0] as IStoreV2;
+        expect(savedStore.identities[0].key).toEqual(rotatedKeyInfo);
+
+        expect(mockReapplyActiveIdentity).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'legacy-space', sshKeyPath: rotatedKeyInfo.path }),
+          expect.anything()
+        );
+      });
     });
   });
 

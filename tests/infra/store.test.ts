@@ -177,6 +177,37 @@ describe('infra/store', () => {
     });
   });
 
+  describe('loadStore - version gating', () => {
+    it('hard-errors on a numeric version newer than this build understands, instead of silently reducing it to an empty store', async () => {
+      await fs.outputJson(configPath, {
+        version: 3,
+        identities: [{ name: 'future', email: 'f@x.com', userName: 'F', host: 'github.com' }],
+        bindings: []
+      });
+
+      await expect(store.loadStore()).rejects.toThrow(/version 3/);
+
+      // The file itself must be left untouched — no destructive migration.
+      const onDisk = await fs.readJson(configPath);
+      expect(onDisk.version).toBe(3);
+      expect(onDisk.identities).toHaveLength(1);
+    });
+
+    it('treats an explicit version === 1 as v1-migratable (same as an absent version)', async () => {
+      await fs.outputJson(configPath, {
+        version: 1,
+        spaces: [{ name: 'explicit-v1', email: 'e@x.com', userName: 'E', sshKeyPath: '' }]
+      });
+
+      const result = await store.loadStore();
+
+      expect(result.version).toBe(2);
+      expect(result.identities).toEqual([
+        { name: 'explicit-v1', email: 'e@x.com', userName: 'E', host: 'github.com' }
+      ]);
+    });
+  });
+
   describe('saveStore - atomic write', () => {
     it('writes pretty-printed JSON and cleans up the tmp file', async () => {
       const toSave = {
@@ -426,6 +457,33 @@ describe('infra/store', () => {
       const merged = store.mergeIdentity(space, original);
 
       expect(merged.key).toEqual({ path: '/keys/a/id_rsa', algorithm: 'rsa' });
+    });
+
+    it('preserves the original algorithm on a directory-only move (same basename), even for a non-standard filename that would otherwise re-infer to "unknown"', () => {
+      // Regression: a rename that only moves the key DIRECTORY (basename
+      // unchanged) used to re-infer the algorithm from the filename any
+      // time the path changed at all — silently flipping a correctly known
+      // algorithm (e.g. 'ed25519' on a legacy non-standard filename like
+      // "id_mystery") to 'unknown' on every such rename.
+      const original: IIdentity = {
+        name: 'a',
+        email: 'a@x.com',
+        userName: 'A',
+        host: 'github.com',
+        key: {
+          path: '/keys/a/id_mystery',
+          algorithm: 'ed25519',
+          fingerprint: 'SHA256:deadbeef',
+          createdAt: '2024-01-01T00:00:00.000Z'
+        }
+      };
+      const space = { name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '/keys/a-renamed/id_mystery' };
+
+      const merged = store.mergeIdentity(space, original);
+
+      expect(merged.key?.path).toBe('/keys/a-renamed/id_mystery');
+      expect(merged.key?.algorithm).toBe('ed25519');
+      expect(merged.key?.fingerprint).toBe('SHA256:deadbeef');
     });
   });
 });

@@ -4,13 +4,14 @@ import path from 'path';
 import { generateKey } from '../infra/keys';
 import { addToAgent } from '../infra/ssh';
 import { copyToClipboard } from '../infra/clipboard';
-import { loadStore, saveStore, setIdentityKey } from '../infra/store';
-import { findIdentity } from '../core/identity';
+import { loadStore, saveStore, setIdentityKey, toSpace } from '../infra/store';
+import { findIdentity, slugify } from '../core/identity';
 import { IIdentity, IStoreV2 } from '../core/types';
 import { keySettingsUrl } from '../core/hosts';
 import { UIHelper } from './ui';
 import { fail } from './fail';
 import { safeConfirm } from './prompts';
+import { reapplyActiveIdentity } from './spaces';
 
 function keySettingsLine(host: string): string {
   const url = keySettingsUrl(host);
@@ -130,6 +131,18 @@ export async function rotateKey(identityName?: string): Promise<void> {
 
   setIdentityKey(store, identity.name, keyInfo);
   await saveStore(store);
+
+  // Rotating the ACTIVE identity's key changes its path (keyless→keyed, or
+  // a migrated legacy-filename identity rotating onto a standard-named
+  // file) — without this, active.gitconfig/ssh-config keep pointing at the
+  // old/absent key while `dss key rotate` reports success.
+  if (store.active && slugify(store.active) === slugify(identity.name)) {
+    try {
+      await reapplyActiveIdentity(toSpace(identity), store);
+    } catch (error) {
+      UIHelper.warning(`Key rotated, but re-applying the active identity's global git/SSH config failed: ${(error as Error).message}`);
+    }
+  }
 
   try {
     await addToAgent(keyInfo.path);

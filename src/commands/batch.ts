@@ -4,10 +4,10 @@ import os from 'os';
 import { select, confirm, checkbox, input } from '@inquirer/prompts';
 import { ISpace, IKeyInfo } from '../core/types';
 import { UIHelper } from './ui';
-import { switchSpace } from './spaces';
+import { switchSpace, reapplyActiveIdentity } from './spaces';
 import { generateKey } from '../infra/keys';
 import { fail } from './fail';
-import { slugify, findSpace } from '../core/identity';
+import { slugify, findSpace, validateIdentityName } from '../core/identity';
 import { loadConfig, persistConfig, saveStore, setIdentityKey } from '../infra/store';
 
 function hasLineBreak(value: unknown): boolean {
@@ -140,16 +140,30 @@ export async function importSpaceConfiguration() {
     const { store, config, originalBySpace } = await loadConfig();
 
     const spacesToImport = importData.spaces.filter((importSpace: any) => {
-      // Imported name/email/userName are unvalidated JSON — a line break in
-      // any of them would eventually reach writeActiveGitconfig, a globally
-      // included file, where it can corrupt or inject config lines. Reject
-      // here rather than relying solely on that later hard gate.
+      // Imported name/email/userName/host/sshKeyPath are unvalidated JSON —
+      // a line break in any of them would eventually reach
+      // writeActiveGitconfig or setHostSSHKey, both globally-included/
+      // applied files, where it can corrupt or inject config lines (host in
+      // particular reaches the ssh-config writer, an RCE vector via
+      // ProxyCommand). Reject here rather than relying solely on those
+      // later hard gates.
       if (
         hasLineBreak(importSpace.name)
         || hasLineBreak(importSpace.email)
         || hasLineBreak(importSpace.userName)
+        || hasLineBreak(importSpace.host)
+        || hasLineBreak(importSpace.sshKeyPath)
       ) {
-        UIHelper.warning(`Space '${importSpace.name}' contains a line break in its name/email/userName - skipping.`);
+        UIHelper.warning(`Space '${importSpace.name}' contains a line break in its name/email/userName/host - skipping.`);
+        return false;
+      }
+
+      // The imported name becomes an fs path segment (key directory) once a
+      // key is generated for it — reject anything outside addSpace's own
+      // charset rule (e.g. "../../../tmp/x") rather than only slugifying it.
+      const nameValidation = validateIdentityName(importSpace.name);
+      if (nameValidation !== true) {
+        UIHelper.warning(`Space '${importSpace.name}' has an invalid name (${nameValidation}) - skipping.`);
         return false;
       }
 
@@ -199,7 +213,8 @@ export async function importSpaceConfiguration() {
   }
 }
 
-export async function bulkUpdateSpaces() {
+export async function bulkUpdateSpaces(options: { dryRun?: boolean } = {}): Promise<void> {
+  const dryRun = Boolean(options.dryRun);
   const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
@@ -236,6 +251,7 @@ export async function bulkUpdateSpaces() {
 
   let updatedCount = 0;
   let regenerateKeysMetadata: Map<string, IKeyInfo> | undefined;
+  const previewLines: string[] = [];
 
   try {
     switch (updateType) {
@@ -250,12 +266,17 @@ export async function bulkUpdateSpaces() {
           validate: (input) => input.trim().length > 0 || 'Domain is required'
         });
 
-        UIHelper.printProgress(`Updating email domains from ${oldDomain} to ${newDomain}`);
+        if (!dryRun) UIHelper.printProgress(`Updating email domains from ${oldDomain} to ${newDomain}`);
 
         for (const spaceName of selectedSpaces) {
           const space = config.spaces.find(s => s.name === spaceName);
           if (space && space.email.includes(oldDomain)) {
-            space.email = space.email.replace(oldDomain, newDomain);
+            const newEmail = space.email.replace(oldDomain, newDomain);
+            if (dryRun) {
+              previewLines.push(`✓ ${space.name}: email ${space.email} → ${newEmail}`);
+            } else {
+              space.email = newEmail;
+            }
             updatedCount++;
           }
         }
@@ -278,12 +299,17 @@ export async function bulkUpdateSpaces() {
             validate: (input) => input.trim().length > 0 || 'Prefix is required'
           });
 
-          UIHelper.printProgress(`Adding prefix "${prefix}" to usernames`);
+          if (!dryRun) UIHelper.printProgress(`Adding prefix "${prefix}" to usernames`);
 
           for (const spaceName of selectedSpaces) {
             const space = config.spaces.find(s => s.name === spaceName);
             if (space && !space.userName.startsWith(prefix)) {
-              space.userName = prefix + space.userName;
+              const newUserName = prefix + space.userName;
+              if (dryRun) {
+                previewLines.push(`✓ ${space.name}: userName ${space.userName} → ${newUserName}`);
+              } else {
+                space.userName = newUserName;
+              }
               updatedCount++;
             }
           }
@@ -293,12 +319,17 @@ export async function bulkUpdateSpaces() {
             validate: (input) => input.trim().length > 0 || 'Suffix is required'
           });
 
-          UIHelper.printProgress(`Adding suffix "${suffix}" to usernames`);
+          if (!dryRun) UIHelper.printProgress(`Adding suffix "${suffix}" to usernames`);
 
           for (const spaceName of selectedSpaces) {
             const space = config.spaces.find(s => s.name === spaceName);
             if (space && !space.userName.endsWith(suffix)) {
-              space.userName = space.userName + suffix;
+              const newUserName = space.userName + suffix;
+              if (dryRun) {
+                previewLines.push(`✓ ${space.name}: userName ${space.userName} → ${newUserName}`);
+              } else {
+                space.userName = newUserName;
+              }
               updatedCount++;
             }
           }
@@ -313,12 +344,17 @@ export async function bulkUpdateSpaces() {
             validate: (input) => input.trim().length > 0 || 'Replacement text is required'
           });
 
-          UIHelper.printProgress(`Replacing "${oldText}" with "${newText}" in usernames`);
+          if (!dryRun) UIHelper.printProgress(`Replacing "${oldText}" with "${newText}" in usernames`);
 
           for (const spaceName of selectedSpaces) {
             const space = config.spaces.find(s => s.name === spaceName);
             if (space && space.userName.includes(oldText)) {
-              space.userName = space.userName.replace(new RegExp(oldText, 'g'), newText);
+              const newUserName = space.userName.replace(new RegExp(oldText, 'g'), newText);
+              if (dryRun) {
+                previewLines.push(`✓ ${space.name}: userName ${space.userName} → ${newUserName}`);
+              } else {
+                space.userName = newUserName;
+              }
               updatedCount++;
             }
           }
@@ -327,14 +363,27 @@ export async function bulkUpdateSpaces() {
       }
 
       case 'regenerate-keys': {
-        const confirmRegenerate = await confirm({
-          message: 'Are you sure you want to regenerate SSH keys? This will replace existing keys.',
-          default: false
-        });
+        if (!dryRun) {
+          const confirmRegenerate = await confirm({
+            message: 'Are you sure you want to regenerate SSH keys? This will replace existing keys.',
+            default: false
+          });
 
-        if (!confirmRegenerate) {
-          UIHelper.info('SSH key regeneration cancelled.');
-          return;
+          if (!confirmRegenerate) {
+            UIHelper.info('SSH key regeneration cancelled.');
+            return;
+          }
+        }
+
+        if (dryRun) {
+          for (const spaceName of selectedSpaces) {
+            const space = config.spaces.find(s => s.name === spaceName);
+            if (space) {
+              previewLines.push(`✓ ${space.name}: SSH key would be regenerated`);
+              updatedCount++;
+            }
+          }
+          break;
         }
 
         UIHelper.printProgress('Regenerating SSH keys');
@@ -368,6 +417,19 @@ export async function bulkUpdateSpaces() {
 
     UIHelper.clearProgress();
 
+    if (dryRun) {
+      if (updatedCount > 0) {
+        UIHelper.printInfoBox('Dry Run: Bulk Update Preview', [
+          ...previewLines,
+          '',
+          'Use without --dry-run to apply changes'
+        ]);
+      } else {
+        UIHelper.info('No spaces would be updated.');
+      }
+      return;
+    }
+
     if (updatedCount > 0) {
       await persistConfig(store, config, originalBySpace);
 
@@ -379,6 +441,23 @@ export async function bulkUpdateSpaces() {
           setIdentityKey(store, identityName, keyInfo);
         }
         await saveStore(store);
+      }
+
+      // A bulk edit can touch the ACTIVE identity's email/username/key —
+      // left unrefreshed, active.gitconfig/ssh-config would keep the old
+      // values while `dss list`/`dss inspect` already show the new ones
+      // (e.g. commits still authored with the stale email).
+      if (store.active && selectedSpaces.includes(store.active)) {
+        const activeSpace = config.spaces.find(s => s.name === store.active);
+        if (activeSpace) {
+          try {
+            await reapplyActiveIdentity(activeSpace, store);
+          } catch (error) {
+            UIHelper.warning(
+              `Bulk update saved, but re-applying the active identity's global git/SSH config failed: ${(error as Error).message}`
+            );
+          }
+        }
       }
 
       UIHelper.printSuccessBox('Bulk Update Complete', [

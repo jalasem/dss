@@ -92,11 +92,34 @@ function upsertDirective(lines: string[], name: string, value: string): string[]
   return updated;
 }
 
+// ssh_config reads an unquoted value up to the first whitespace, so a key
+// directory containing a space (migrated v1 users can have one) would
+// silently truncate the IdentityFile path unless it's quoted.
+function formatIdentityFileValue(sshKeyPath: string): string {
+  return /\s/.test(sshKeyPath) ? `"${sshKeyPath}"` : sshKeyPath;
+}
+
+/**
+ * A raw `\r`/`\n` in `host` or `sshKeyPath` reaching the serializer could
+ * inject an arbitrary extra ssh_config line (e.g. a `host` of
+ * "github.com\n  ProxyCommand /bin/sh -c ...") — this is the hard gate: no
+ * value may ever reach the writer with a line break, regardless of what
+ * validation callers (import filters, prompts) do or don't have upstream.
+ */
+function assertSshConfigSafe(label: string, value: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(
+      `Refusing to update SSH config: ${label} contains a line break, ` +
+      'which could inject an arbitrary ssh_config directive.'
+    );
+  }
+}
+
 function buildManagedBlockLines(existingLines: string[], sshKeyPath: string, host: string): string[] {
   const values: Record<typeof MANAGED_DIRECTIVES[number], string> = {
     HostName: host,
     User: 'git',
-    IdentityFile: sshKeyPath,
+    IdentityFile: formatIdentityFileValue(sshKeyPath),
     IdentitiesOnly: 'yes'
   };
   let lines = existingLines;
@@ -117,6 +140,9 @@ function buildManagedBlockLines(existingLines: string[], sshKeyPath: string, hos
  * adopted in place instead of duplicated).
  */
 export function applyHostSSHKey(content: string, sshKeyPath: string, host: string): string {
+  assertSshConfigSafe('host', host);
+  assertSshConfigSafe('sshKeyPath', sshKeyPath);
+
   const parsed = parseSshConfig(content);
   const targetIndex = parsed.blocks.findIndex(
     (block) => block.keyword === 'Host' && block.patterns.length === 1 && block.patterns[0] === host

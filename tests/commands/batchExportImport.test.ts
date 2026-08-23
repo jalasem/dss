@@ -168,5 +168,59 @@ describe('commands/batch export/import — host carry', () => {
 
       warningSpy.mockRestore();
     });
+
+    // Security regression (Critical finding): `host` reaches applyHostSSHKey
+    // (the ssh-config writer) unvalidated once a key is later given to this
+    // identity and it's switched to — a crafted host line break there is an
+    // arbitrary ssh_config directive injection (e.g. ProxyCommand), an RCE
+    // vector on the next SSH invocation. The import layer must reject it too,
+    // as defense-in-depth alongside the writer's own hard gate.
+    it('skips (with a warning naming the entry) an imported identity whose host contains a line break, importing only the clean entries', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readJson as unknown as jest.Mock).mockResolvedValue({
+        spaces: [
+          { name: 'Poisoned', email: 'p@example.com', userName: 'P', host: 'github.com\n  ProxyCommand /bin/sh -c "evil"' },
+          { name: 'Clean', email: 'clean@example.com', userName: 'Clean User', host: 'github.com' }
+        ]
+      });
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      mockConfirm.mockResolvedValue(true);
+
+      const warningSpy = jest.spyOn(UIHelper, 'warning');
+
+      await importSpaceConfiguration();
+
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space 'Poisoned' contains a line break"));
+      expect(mockSaveStore).toHaveBeenCalledWith(expect.objectContaining({
+        identities: [expect.objectContaining({ name: 'clean' })]
+      }));
+
+      warningSpy.mockRestore();
+    });
+
+    // Path-traversal name (finding #8): the imported name becomes an fs path
+    // segment (key directory) once a key is generated for it.
+    it('skips (with a warning naming the entry) an imported identity whose name is a path-traversal attempt, importing only the clean entries', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readJson as unknown as jest.Mock).mockResolvedValue({
+        spaces: [
+          { name: '../../../tmp/evil', email: 'p@example.com', userName: 'P' },
+          { name: 'Clean', email: 'clean@example.com', userName: 'Clean User' }
+        ]
+      });
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      mockConfirm.mockResolvedValue(true);
+
+      const warningSpy = jest.spyOn(UIHelper, 'warning');
+
+      await importSpaceConfiguration();
+
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space '../../../tmp/evil' has an invalid name"));
+      expect(mockSaveStore).toHaveBeenCalledWith(expect.objectContaining({
+        identities: [expect.objectContaining({ name: 'clean' })]
+      }));
+
+      warningSpy.mockRestore();
+    });
   });
 });

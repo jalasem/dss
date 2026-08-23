@@ -1,4 +1,4 @@
-import { slugify, findSpace, findIdentity } from '../../src/core/identity';
+import { slugify, findSpace, findIdentity, validateIdentityName } from '../../src/core/identity';
 import { IStoreV2, IConfig } from '../../src/core/types';
 
 describe('spaceLookup', () => {
@@ -69,6 +69,34 @@ describe('spaceLookup', () => {
 
     it('returns undefined when no space matches', () => {
       expect(findSpace(config, 'does-not-exist')).toBeUndefined();
+    });
+  });
+
+  describe('validateIdentityName', () => {
+    it('accepts a name with letters, numbers, spaces, hyphens, and underscores', () => {
+      expect(validateIdentityName('Work Space_2-Alt')).toBe(true);
+    });
+
+    it('rejects an empty or whitespace-only name', () => {
+      expect(validateIdentityName('')).not.toBe(true);
+      expect(validateIdentityName('   ')).not.toBe(true);
+    });
+
+    it('rejects a non-string value', () => {
+      expect(validateIdentityName(undefined)).not.toBe(true);
+      expect(validateIdentityName(123)).not.toBe(true);
+    });
+
+    it('rejects a name shorter than 2 characters', () => {
+      expect(validateIdentityName('a')).not.toBe(true);
+    });
+
+    it('rejects a path-traversal name', () => {
+      expect(validateIdentityName('../../../tmp/evil')).not.toBe(true);
+    });
+
+    it('rejects a name containing a slash', () => {
+      expect(validateIdentityName('foo/bar')).not.toBe(true);
     });
   });
 });

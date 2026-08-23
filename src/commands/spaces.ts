@@ -8,12 +8,12 @@ import { copyToClipboard } from "../infra/clipboard";
 import { addToAgent, removeSSHKeyFromAgent, setHostSSHKey, testHostAccess } from "../infra/ssh";
 import { getGitUser, writeActiveGitconfig, ensureGlobalInclude } from "../infra/git";
 import { bindRepository } from "../infra/repoBinding";
-import { isPromptExitError, safePassword, promptHost } from "./prompts";
-import { ISpace, IKeyInfo } from "../core/types";
+import { isPromptExitError, safeConfirm, safePassword, promptHost } from "./prompts";
+import { ISpace, IKeyInfo, IStoreV2 } from "../core/types";
 import { keySettingsUrl } from "../core/hosts";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
-import { slugify, findSpace } from "../core/identity";
+import { slugify, findSpace, validateIdentityName } from "../core/identity";
 import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/store";
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
@@ -27,18 +27,36 @@ function containsLineBreak(value: string): boolean {
   return /[\r\n]/.test(value);
 }
 
+/**
+ * Re-applies the DSS-managed global identity for `space`: active.gitconfig
+ * (+ the global include) and, when the identity has a key, the ~/.ssh/config
+ * Host block for it. A no-op unless `space` IS (still) the store's active
+ * identity — safe/idempotent to call unconditionally after any edit to an
+ * identity that might or might not be the active one (rename, bulk update,
+ * key rotation, ...), rather than requiring every caller to duplicate the
+ * active check.
+ *
+ * Deliberately does NOT touch repo-local bindings (`dss bind`) — those are
+ * refreshed separately, independent of whether the identity is the
+ * globally-active one (see modifySpace's own binding-refresh loop).
+ */
+export async function reapplyActiveIdentity(space: ISpace, store: IStoreV2): Promise<void> {
+  if (!store.active || slugify(store.active) !== slugify(space.name)) return;
+
+  await writeActiveGitconfig(space);
+  await ensureGlobalInclude();
+  if (space.sshKeyPath) {
+    await setHostSSHKey(space.sshKeyPath, space.host ?? 'github.com');
+  }
+}
+
 export async function addSpace() {
   UIHelper.printHeader("Create New Development Space");
   UIHelper.info("Please provide the following information:");
 
   const name = await input({
     message: "Space name:",
-    validate: (input) => {
-      if (!input.trim()) return "Space name is required!";
-      if (input.length < 2) return "Space name must be at least 2 characters long";
-      if (!/^[a-zA-Z0-9\s\-_]+$/.test(input)) return "Space name can only contain letters, numbers, spaces, hyphens, and underscores";
-      return true;
-    },
+    validate: (input) => validateIdentityName(input),
   });
 
   const email = (
@@ -252,9 +270,18 @@ export async function switchSpace(
     UIHelper.success(`Git user set to ${UIHelper.highlight(space.userName)} <${UIHelper.highlight(space.email)}>.`);
 
     if (hasKey) {
-      // Add SSH key to the ssh-agent
-      await addToAgent(space.sshKeyPath);
-      UIHelper.success(`SSH key added to ssh-agent successfully.`);
+      // Add SSH key to the ssh-agent. Not terminal: core.sshCommand's `-i
+      // <path>` means git SSH no longer depends on the agent, so an
+      // agent-less environment (CI, containers, a fresh login) shouldn't
+      // abort the switch — warn and continue instead of fail()ing (which
+      // would leave the global git identity already changed but
+      // config.activeSpace un-persisted, an inconsistent state).
+      try {
+        await addToAgent(space.sshKeyPath);
+        UIHelper.success(`SSH key added to ssh-agent successfully.`);
+      } catch (error) {
+        UIHelper.warning(`Could not add the SSH key to the ssh-agent: ${(error as Error).message}`);
+      }
       await setHostSSHKey(space.sshKeyPath, host);
     } else {
       UIHelper.warning(
@@ -275,7 +302,12 @@ export async function switchSpace(
     ]);
 
     if (hasKey) {
-      const confirmTest = await confirm({
+      // safeConfirm: this runs AFTER the switch already succeeded and
+      // persisted, so a closed prompt (Ctrl+C / non-TTY) must not surface
+      // as a command failure — a raw confirm() throwing ExitPromptError
+      // here would fall into the catch below and fail() the whole command
+      // after the real work is already done.
+      const confirmTest = await safeConfirm({
         message: `Test SSH access to ${host} for this space?`,
         default: false,
       });
@@ -471,6 +503,14 @@ export async function modifySpace(spaceName?: string) {
   const newSpaceName = await input({
     message: `New name for "${space.name}" (leave blank to skip):`,
     default: space.name,
+    validate: (input) => {
+      // A name that's cosmetically different but slugifies the same (e.g.
+      // retyping the current name, or a legacy raw name's normalized slug)
+      // is a no-op rename — always allowed, even for a pre-existing name
+      // that predates this validator. Only a genuine new name is checked.
+      if (slugify(input) === slugify(space.name)) return true;
+      return validateIdentityName(input);
+    },
   });
   const email = await input({
     message: "New email (leave blank to skip):",
@@ -594,11 +634,14 @@ export async function modifySpace(spaceName?: string) {
   // edit of the ACTIVE identity must also re-apply it — otherwise it's left
   // pointing at a key path that may no longer exist (that file is globally
   // included and unconditional, so a stale sshCommand breaks git SSH for
-  // every remote on the machine until the next `dss switch`).
+  // every remote on the machine until the next `dss switch`). Delegates to
+  // reapplyActiveIdentity, which also refreshes ~/.ssh/config's Host block —
+  // without that, a rename that moves the key directory leaves ssh-config's
+  // IdentityFile pointing at a gone path, and `switch <active>` early-returns
+  // "already active" so it can never be repaired.
   if (wasActive && bindingRefreshNeeded) {
     try {
-      await writeActiveGitconfig(space);
-      await ensureGlobalInclude();
+      await reapplyActiveIdentity(space, store);
     } catch (error) {
       fail(`Failed to update global git configuration: ${(error as Error).message}`);
       return;

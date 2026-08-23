@@ -86,7 +86,8 @@ dss add
 Interactive wizard to create a new development space:
 - Enter space name (auto-slugified)
 - Provide email and username
-- Automatically generates SSH keys
+- Choose a Git host (GitHub, GitLab, Bitbucket, or a custom host)
+- Automatically generates an SSH key (Ed25519 by default)
 - Sets up Git configuration
 
 </details>
@@ -142,9 +143,27 @@ dss edit [spaceName]
 ```
 
 Modify existing space settings:
-- Update name, email, and username
+- Update name, email, username, and Git host
 - Interactive editing workflow
-- Does not regenerate SSH keys — use `dss bulk` for that
+- Does not regenerate SSH keys — use `dss bulk` or `dss key rotate` for that
+
+</details>
+
+<details>
+<summary><b>🔑 SSH Key Management</b></summary>
+
+```bash
+dss key show [identityName]
+dss key copy [identityName]
+dss key rotate [identityName]
+```
+
+Manage a single identity's SSH key directly, without going through `dss add`/`dss bulk`:
+- `show` — prints the public key, algorithm, fingerprint, and a link to the host's key-settings page
+- `copy` — copies the public key to the clipboard
+- `rotate` — generates a new key for the identity (same algorithm as its current key, Ed25519 for a keyless identity), adds it to the ssh-agent, and copies the new public key
+
+`identityName` defaults to the currently active space when omitted. Rotating the active identity's key also refreshes `~/.dss/active.gitconfig` and `~/.ssh/config` so the new key takes effect immediately.
 
 </details>
 
@@ -351,15 +370,20 @@ src/
 │   ├── spaces.ts         # addSpace, switchSpace, etc. (core business logic)
 │   ├── batch.ts          # Bulk operations
 │   ├── binding.ts        # Repository binding commands
+│   ├── keys.ts           # dss key show/copy/rotate
+│   ├── prompts.ts        # Shared/cancellation-safe prompt helpers
 │   └── ui.ts             # Rich UI components
 ├── core/                 # Dependency-free domain types and lookups
 │   ├── types.ts
-│   └── identity.ts
+│   ├── identity.ts
+│   └── hosts.ts          # Known Git hosts + key-settings links
 └── infra/                # Filesystem, Git, and SSH side effects
-    ├── store.ts          # Config store (~/.dss/spaces/config.json)
-    ├── git.ts            # Git identity (user.name/user.email)
-    ├── ssh.ts            # SSH config and GitHub access
-    └── keys.ts           # SSH key generation
+    ├── store.ts          # Config store (~/.dss/spaces/config.json, v1→v2 migration)
+    ├── git.ts            # active.gitconfig + global include (includeIf-first)
+    ├── ssh.ts            # SSH config (parse-don't-splice) and host access
+    ├── keys.ts           # SSH key generation (system ssh-keygen binary)
+    ├── clipboard.ts       # Platform-specific clipboard operations
+    └── repoBinding.ts     # Repository-local Git conditional-include binding
 tests/
 ├── commands/              # Command-layer test suites
 ├── core/                  # Core-layer test suites
