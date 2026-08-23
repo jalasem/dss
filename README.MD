@@ -347,14 +347,24 @@ npm run test:coverage # Generate coverage report
 ```
 src/
 ├── index.ts              # CLI entry point
-├── utils/
-│   ├── SpaceManager.ts   # Core business logic
-│   ├── ui.ts            # Rich UI components
-│   ├── sshKeyGen.ts     # SSH key generation
-│   └── batchOperations.ts # Bulk operations
+├── commands/             # Thin, prompt-owning command handlers
+│   ├── spaces.ts         # addSpace, switchSpace, etc. (core business logic)
+│   ├── batch.ts          # Bulk operations
+│   ├── binding.ts        # Repository binding commands
+│   └── ui.ts             # Rich UI components
+├── core/                 # Dependency-free domain types and lookups
+│   ├── types.ts
+│   └── identity.ts
+└── infra/                # Filesystem, Git, and SSH side effects
+    ├── store.ts          # Config store (~/.dss/spaces/config.json)
+    ├── git.ts            # Git identity (user.name/user.email)
+    ├── ssh.ts            # SSH config and GitHub access
+    └── keys.ts           # SSH key generation
 tests/
-├── utils/                # Test suites
-└── ...                   # Additional tests
+├── commands/              # Command-layer test suites
+├── core/                  # Core-layer test suites
+├── infra/                 # Infra-layer test suites
+└── ...                    # Additional tests
 ```
 
 ## 🙏 Acknowledgments

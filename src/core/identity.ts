@@ -1,5 +1,4 @@
-import { IConfig, ISpace } from "./types";
-import type { IIdentity, IStoreV2 } from "../infra/store";
+import { IConfig, ISpace, IStoreV2, IIdentity } from "./types";
 
 export function slugify(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, "-");

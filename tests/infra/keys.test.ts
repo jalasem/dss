@@ -1,11 +1,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { generateSSHKey } from '../../src/utils/sshKeyGen';
+import { generateSSHKey } from '../../src/infra/keys';
 
 jest.mock('fs-extra');
 jest.mock('ssh-keygen', () => jest.fn());
-jest.mock('../../src/utils/ui');
+jest.mock('../../src/commands/ui');
 
 const mockFs = fs as jest.Mocked<typeof fs>;
 const mockKeygen = require('ssh-keygen') as jest.MockedFunction<any>;

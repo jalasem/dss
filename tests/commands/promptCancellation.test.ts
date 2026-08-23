@@ -1,9 +1,9 @@
 import { confirm } from '@inquirer/prompts';
-import { testGithubAccess } from '../../src/utils';
-import { generateCompletionScript } from '../../src/utils/completion';
-import { bindSpaceToRepository } from '../../src/utils/repoBindingCommands';
-import { safeConfirm, isPromptExitError } from '../../src/utils/prompts';
-import { UIHelper } from '../../src/utils/ui';
+import { testGithubAccess } from '../../src/infra/ssh';
+import { generateCompletionScript } from '../../src/commands/completion';
+import { bindSpaceToRepository } from '../../src/commands/binding';
+import { safeConfirm, isPromptExitError } from '../../src/commands/prompts';
+import { UIHelper } from '../../src/commands/ui';
 import { execFile } from 'child_process';
 import fs from 'fs-extra';
 import { loadStore, fromSpace } from '../../src/infra/store';
@@ -15,7 +15,7 @@ jest.mock('@inquirer/prompts', () => ({
 }));
 jest.mock('child_process');
 jest.mock('fs-extra');
-jest.mock('../../src/utils/repoBinding', () => ({
+jest.mock('../../src/infra/repoBinding', () => ({
   bindRepositories: jest.fn(),
   bindRepository: jest.fn(),
   discoverRepositories: jest.fn(),
@@ -122,7 +122,7 @@ describe('prompt cancellation handling', () => {
 
   describe('dss bind', () => {
     it('cancels cleanly when the recursive confirmation prompt is closed', async () => {
-      const { discoverRepositories, bindRepositories } = jest.requireMock('../../src/utils/repoBinding');
+      const { discoverRepositories, bindRepositories } = jest.requireMock('../../src/infra/repoBinding');
       mockLoadStore.mockResolvedValue({
         version: 2,
         identities: [fromSpace({ name: 'Work', email: 'w@x.com', userName: 'W', sshKeyPath: '/mock/key' })],

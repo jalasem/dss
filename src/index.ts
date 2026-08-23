@@ -9,21 +9,21 @@ import {
   testSpace,
   inspectSpace,
   onboardUser,
-} from "./utils/SpaceManager";
-import { generateCompletionScript } from "./utils/completion";
+} from "./commands/spaces";
+import { generateCompletionScript } from "./commands/completion";
 import {
   batchSwitchSpaces,
   exportSpaceConfiguration,
   importSpaceConfiguration,
   bulkUpdateSpaces
-} from "./utils/batchOperations";
-import { UIHelper } from "./utils/ui";
+} from "./commands/batch";
+import { UIHelper } from "./commands/ui";
 import {
   bindSpaceToRepository,
   showRepositoryBindingStatus,
   unbindSpaceFromRepository
-} from './utils/repoBindingCommands';
-import { isPromptExitError } from './utils/prompts';
+} from './commands/binding';
+import { isPromptExitError } from './commands/prompts';
 
 program
   .name("dss")

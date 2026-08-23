@@ -1,38 +1,13 @@
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { ISpace } from '../utils/types';
-import { slugify } from '../utils/spaceLookup';
+import { ISpace, IConfig, IKeyInfo, IIdentity, IStoreV2 } from '../core/types';
+import { slugify } from '../core/identity';
+
+export type { IKeyInfo, IIdentity, IBinding, IStoreV2 } from '../core/types';
 
 const CONFIG_DIR = path.join(os.homedir(), '.dss', 'spaces');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
-
-export interface IKeyInfo {
-  path: string;
-  algorithm: 'ed25519' | 'rsa' | 'unknown';
-  createdAt?: string;
-  fingerprint?: string;
-}
-
-export interface IIdentity {
-  name: string;
-  email: string;
-  userName: string;
-  host: string;
-  key?: IKeyInfo;
-}
-
-export interface IBinding {
-  path: string;
-  identity: string;
-}
-
-export interface IStoreV2 {
-  version: 2;
-  identities: IIdentity[];
-  active?: string;
-  bindings: IBinding[];
-}
 
 interface IV1Space {
   name: string;
@@ -208,4 +183,41 @@ export function recordBinding(store: IStoreV2, repositoryPath: string, identity:
 /** Removes any binding for a canonical repository path. */
 export function removeBinding(store: IStoreV2, repositoryPath: string): void {
   store.bindings = store.bindings.filter(binding => binding.path !== repositoryPath);
+}
+
+export interface ILoadedConfig {
+  store: IStoreV2;
+  config: IConfig;
+  // Tracks which identity each ISpace was derived from (by object identity,
+  // stable across in-place edits, filters, and appends) so persistConfig can
+  // preserve metadata the ISpace view can't carry (host, key fingerprint/
+  // createdAt, ...) instead of wholesale-replacing every identity.
+  originalBySpace: Map<ISpace, IIdentity>;
+}
+
+/** Loads the store and its back-compat ISpace[] view, tracking each space's
+ * originating identity so persistConfig can merge edits without dropping
+ * metadata the ISpace view can't carry. */
+export async function loadConfig(): Promise<ILoadedConfig> {
+  const store = await loadStore();
+  const originalBySpace = new Map<ISpace, IIdentity>();
+  const spaces = store.identities.map(identity => {
+    const space = toSpace(identity);
+    originalBySpace.set(space, identity);
+    return space;
+  });
+  const config: IConfig = { spaces, activeSpace: store.active };
+  return { store, config, originalBySpace };
+}
+
+/** Persists an edited ISpace[] view back to the store, merging each space
+ * with the identity it was loaded from (see loadConfig). */
+export async function persistConfig(
+  store: IStoreV2,
+  config: IConfig,
+  originalBySpace: Map<ISpace, IIdentity>
+): Promise<void> {
+  store.identities = config.spaces.map(space => mergeIdentity(space, originalBySpace.get(space)));
+  store.active = config.activeSpace;
+  await saveStore(store);
 }

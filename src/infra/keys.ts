@@ -7,7 +7,7 @@ export async function generateSSHKey(spaceName: string, email: string): Promise<
   // Construct the path for ~/.dss/spaces
   const dssPath = path.join(os.homedir(), '.dss', 'spaces');
   const spaceFolderPath = path.join(dssPath, spaceName);
-  
+
   // Ensure the space's folder exists
   await fs.ensureDir(spaceFolderPath);
 

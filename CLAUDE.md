@@ -19,12 +19,21 @@ DSS (Dev Spaces Switcher) is a CLI tool for managing isolated development enviro
 
 ### Core Components
 
-- **CLI Entry Point** (`src/index.ts`): Defines all CLI commands using Commander.js
-- **SpaceManager** (`src/utils/SpaceManager.ts`): Core business logic for managing spaces
-- **SSH Key Generation** (`src/utils/sshKeyGen.ts`): Handles SSH key generation using the `ssh-keygen` package
-- **Utility Functions** (`src/utils/index.ts`): SSH configuration, clipboard operations, and GitHub access testing
-- **UI Helper** (`src/utils/ui.ts`): Rich UI components with colored output and formatting
-- **Batch Operations** (`src/utils/batchOperations.ts`): Bulk operations and import/export functionality
+The codebase is layered into `commands/` (thin, prompt-owning command handlers), `core/` (dependency-free domain types and lookups), and `infra/` (filesystem, Git, and SSH side effects):
+
+- **CLI Entry Point** (`src/index.ts`): Defines all CLI commands using Commander.js, wiring them to `commands/`
+- **Space Commands** (`src/commands/spaces.ts`): addSpace, listSpaces, switchSpace, removeSpace, modifySpace, testSpace, inspectSpace, onboardUser
+- **Batch Commands** (`src/commands/batch.ts`): batchSwitchSpaces, exportSpaceConfiguration, importSpaceConfiguration, bulkUpdateSpaces
+- **Repository Binding Commands** (`src/commands/binding.ts`): bindSpaceToRepository, unbindSpaceFromRepository, showRepositoryBindingStatus
+- **UI Helper** (`src/commands/ui.ts`): Rich UI components with colored output and formatting
+- **Domain Types** (`src/core/types.ts`): ISpace, IConfig, IIdentity, IKeyInfo, IBinding, IStoreV2
+- **Identity Lookups** (`src/core/identity.ts`): slugify, findSpace, findIdentity — pure, dependency-free helpers
+- **Config Store** (`src/infra/store.ts`): Reads/writes `~/.dss/spaces/config.json` (with silent v1→v2 migration), including the shared loadConfig/persistConfig helpers used by the space and batch commands
+- **Git Identity** (`src/infra/git.ts`): setGitUser/getGitUser — wraps global `git config user.name`/`user.email`
+- **SSH Config & Access** (`src/infra/ssh.ts`): setGitHubSSHKey, removeSSHKeyFromAgent, testGithubAccess
+- **SSH Key Generation** (`src/infra/keys.ts`): Handles SSH key generation using the `ssh-keygen` package
+- **Clipboard** (`src/infra/clipboard.ts`): Platform-specific clipboard operations (pbcopy/clip/xclip)
+- **Repository Binding** (`src/infra/repoBinding.ts`): Low-level Git conditional-include binding logic
 
 ### Data Model
 

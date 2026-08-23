@@ -8,11 +8,11 @@ import {
   getRepositoryBindingStatus,
   RepositoryBindingStatus,
   unbindRepository
-} from './repoBinding';
-import { IConfig, ISpace } from './types';
+} from '../infra/repoBinding';
+import { IConfig, ISpace } from '../core/types';
 import { UIHelper } from './ui';
 import { fail } from './fail';
-import { findSpace } from './spaceLookup';
+import { findSpace } from '../core/identity';
 import { loadStore, saveStore, toSpace, recordBinding, removeBinding } from '../infra/store';
 
 export interface BindCommandOptions {

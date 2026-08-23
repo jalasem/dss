@@ -1,20 +1,46 @@
 import os from 'os';
 import { performance } from 'perf_hooks';
-import { addSpace, listSpaces, switchSpace } from '../src/utils/SpaceManager';
+import { addSpace, listSpaces, switchSpace } from '../src/commands/spaces';
 import { loadStore, saveStore, fromSpace, IStoreV2 } from '../src/infra/store';
-import { ISpace } from '../src/utils/types';
+import { ISpace } from '../src/core/types';
 
 // Mock external dependencies for performance tests
 jest.mock('fs-extra');
 jest.mock('child_process');
 jest.mock('@inquirer/prompts');
-jest.mock('../src/utils/sshKeyGen');
-jest.mock('../src/utils/index');
-jest.mock('../src/infra/store', () => ({
-  ...jest.requireActual('../src/infra/store'),
-  loadStore: jest.fn(),
-  saveStore: jest.fn()
-}));
+jest.mock('../src/infra/keys');
+jest.mock('../src/infra/ssh');
+jest.mock('../src/infra/clipboard');
+jest.mock('../src/infra/store', () => {
+  const actual = jest.requireActual('../src/infra/store');
+  const loadStore = jest.fn();
+  const saveStore = jest.fn();
+  // loadConfig/persistConfig are defined in the real module in terms of a
+  // same-file reference to loadStore/saveStore, which a jest.mock property
+  // override can't intercept. Rebuild them here on top of the mocks so
+  // listSpaces/switchSpace (which go through loadConfig/persistConfig) still
+  // observe the mocked loadStore/saveStore.
+  return {
+    ...actual,
+    loadStore,
+    saveStore,
+    loadConfig: async () => {
+      const store = await loadStore();
+      const originalBySpace = new Map();
+      const spaces = store.identities.map((identity: any) => {
+        const space = actual.toSpace(identity);
+        originalBySpace.set(space, identity);
+        return space;
+      });
+      return { store, config: { spaces, activeSpace: store.active }, originalBySpace };
+    },
+    persistConfig: async (store: any, config: any, originalBySpace: Map<any, any>) => {
+      store.identities = config.spaces.map((space: any) => actual.mergeIdentity(space, originalBySpace.get(space)));
+      store.active = config.activeSpace;
+      await saveStore(store);
+    }
+  };
+});
 
 function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
   return { version: 2, identities: spaces.map(fromSpace), active, bindings: [] };

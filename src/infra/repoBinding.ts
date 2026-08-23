@@ -2,7 +2,7 @@ import { execFile } from 'child_process';
 import fs from 'fs-extra';
 import path from 'path';
 import { promisify } from 'util';
-import { ISpace } from './types';
+import { ISpace } from '../core/types';
 
 const execFileAsync = promisify(execFile);
 const MINIMUM_REPOSITORY_BINDING_GIT_VERSION = {

@@ -1,6 +1,5 @@
-import { slugify, findSpace, findIdentity } from '../../src/utils/spaceLookup';
-import { IStoreV2 } from '../../src/infra/store';
-import { IConfig } from '../../src/utils/types';
+import { slugify, findSpace, findIdentity } from '../../src/core/identity';
+import { IStoreV2, IConfig } from '../../src/core/types';
 
 describe('spaceLookup', () => {
   describe('findIdentity', () => {

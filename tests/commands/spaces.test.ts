@@ -3,30 +3,58 @@ import path from 'path';
 import os from 'os';
 import { execFile } from 'child_process';
 import { input, confirm, select } from '@inquirer/prompts';
-import { generateSSHKey } from '../../src/utils/sshKeyGen';
-import { copyToClipboard, testGithubAccess, removeSSHKeyFromAgent } from '../../src/utils/index';
-import { UIHelper } from '../../src/utils/ui';
+import { generateSSHKey } from '../../src/infra/keys';
+import { copyToClipboard } from '../../src/infra/clipboard';
+import { testGithubAccess, removeSSHKeyFromAgent } from '../../src/infra/ssh';
+import { UIHelper } from '../../src/commands/ui';
 import type { loadStore as LoadStore, saveStore as SaveStore, fromSpace as FromSpace, IStoreV2 } from '../../src/infra/store';
-import type { ISpace } from '../../src/utils/types';
+import type { ISpace } from '../../src/core/types';
 
 jest.mock('fs-extra');
 jest.mock('os');
 jest.mock('child_process');
 jest.mock('@inquirer/prompts');
-jest.mock('../../src/utils/sshKeyGen');
-jest.mock('../../src/utils/index');
-jest.mock('../../src/infra/store', () => ({
-  ...jest.requireActual('../../src/infra/store'),
-  loadStore: jest.fn(),
-  saveStore: jest.fn()
-}));
+jest.mock('../../src/infra/keys');
+jest.mock('../../src/infra/clipboard');
+jest.mock('../../src/infra/ssh');
+jest.mock('../../src/infra/store', () => {
+  const actual = jest.requireActual('../../src/infra/store');
+  const loadStore = jest.fn();
+  const saveStore = jest.fn();
+  // loadConfig/persistConfig are defined in the real module in terms of a
+  // same-file reference to loadStore/saveStore, which a jest.mock property
+  // override can't intercept (the real functions still call the real
+  // loadStore/saveStore internally). Rebuild them here on top of the mocks
+  // so tests can drive loadStore/saveStore and still exercise the real
+  // toSpace/mergeIdentity view-mapping logic.
+  return {
+    ...actual,
+    loadStore,
+    saveStore,
+    loadConfig: async () => {
+      const store = await loadStore();
+      const originalBySpace = new Map();
+      const spaces = store.identities.map((identity: any) => {
+        const space = actual.toSpace(identity);
+        originalBySpace.set(space, identity);
+        return space;
+      });
+      return { store, config: { spaces, activeSpace: store.active }, originalBySpace };
+    },
+    persistConfig: async (store: any, config: any, originalBySpace: Map<any, any>) => {
+      store.identities = config.spaces.map((space: any) => actual.mergeIdentity(space, originalBySpace.get(space)));
+      store.active = config.activeSpace;
+      await saveStore(store);
+    }
+  };
+});
 
-// Set up os.homedir mock before importing SpaceManager (and the store module,
+// Set up os.homedir mock before importing spaces (and the store module,
 // whose config path constant is computed once, at require time).
 const mockOs = os as jest.Mocked<typeof os>;
 mockOs.homedir.mockReturnValue('/mock/home');
 
-// Now import SpaceManager (and the store) after mocks are set
+// Now import the spaces commands (and the store) after mocks are set
 const {
   addSpace,
   listSpaces,
@@ -35,7 +63,7 @@ const {
   testSpace,
   modifySpace,
   inspectSpace
-} = require('../../src/utils/SpaceManager');
+} = require('../../src/commands/spaces');
 const { loadStore, saveStore, fromSpace } = require('../../src/infra/store');
 
 const mockFs = fs as jest.Mocked<typeof fs>;
@@ -59,7 +87,7 @@ function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
 // so isPromptExitError detection cannot rely on error.name === 'ExitPromptError'.
 class ExitPromptError extends Error {}
 
-describe('SpaceManager', () => {
+describe('commands/spaces', () => {
   const mockHomeDir = '/mock/home';
   const mockConfigPath = path.join(mockHomeDir, '.dss', 'spaces', 'config.json');
   const mockSshKeyPath = '/mock/home/.dss/spaces/test-space/id_rsa';
@@ -85,12 +113,12 @@ describe('SpaceManager', () => {
     it('should add a new space successfully', async () => {
       mockLoadStore.mockResolvedValue(storeOf([]));
       (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
-      
+
       mockInput
         .mockResolvedValueOnce('Test Space')
         .mockResolvedValueOnce('test@example.com')
         .mockResolvedValueOnce('Test User');
-      
+
       mockConfirm
         .mockResolvedValueOnce(true) // Generate SSH key
         .mockResolvedValueOnce(false); // Don't switch to new space
@@ -110,7 +138,7 @@ describe('SpaceManager', () => {
 
     it('should handle duplicate space names', async () => {
       mockLoadStore.mockResolvedValue(storeOf([{ name: 'test-space', email: 'existing@example.com', userName: 'Existing', sshKeyPath: '' }]));
-      
+
       mockInput
         .mockResolvedValueOnce('Test Space')
         .mockResolvedValueOnce('test@example.com')
@@ -124,12 +152,12 @@ describe('SpaceManager', () => {
     it('should handle SSH key generation without switch', async () => {
       mockLoadStore.mockResolvedValue(storeOf([]));
       (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
-      
+
       mockInput
         .mockResolvedValueOnce('Test Space')
         .mockResolvedValueOnce('test@example.com')
         .mockResolvedValueOnce('Test User');
-      
+
       mockConfirm
         .mockResolvedValueOnce(true) // Generate SSH key
         .mockResolvedValueOnce(false); // Don't switch to new space
@@ -357,7 +385,7 @@ describe('SpaceManager', () => {
 
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([]));
       const calls = (console.log as jest.Mock).mock.calls.flat();
-      const hasRemoveMessage = calls.some(call => 
+      const hasRemoveMessage = calls.some(call =>
         call && call.includes && call.includes("has been removed successfully")
       );
       expect(hasRemoveMessage).toBe(true);

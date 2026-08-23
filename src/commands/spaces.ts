@@ -3,53 +3,23 @@ import { input, confirm, select } from "@inquirer/prompts";
 import os from "os";
 import fs from "fs-extra";
 import path from "path";
-import { generateSSHKey } from "./sshKeyGen";
-import { copyToClipboard, removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAccess } from ".";
+import { generateSSHKey } from "../infra/keys";
+import { copyToClipboard } from "../infra/clipboard";
+import { removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAccess } from "../infra/ssh";
+import { setGitUser, getGitUser } from "../infra/git";
 import { isPromptExitError } from "./prompts";
-import { IConfig, ISpace } from "./types";
+import { ISpace } from "../core/types";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
-import { slugify, findSpace } from "./spaceLookup";
-import { loadStore, saveStore, toSpace, mergeIdentity, IStoreV2, IIdentity } from "../infra/store";
+import { slugify, findSpace } from "../core/identity";
+import { loadConfig, persistConfig } from "../infra/store";
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
-
-interface ILoadedConfig {
-  store: IStoreV2;
-  config: IConfig;
-  // Tracks which identity each ISpace was derived from (by object identity,
-  // stable across in-place edits, filters, and appends) so persistConfig can
-  // preserve metadata the ISpace view can't carry (host, key fingerprint/
-  // createdAt, ...) instead of wholesale-replacing every identity.
-  originalBySpace: Map<ISpace, IIdentity>;
-}
-
-async function loadConfig(): Promise<ILoadedConfig> {
-  const store = await loadStore();
-  const originalBySpace = new Map<ISpace, IIdentity>();
-  const spaces = store.identities.map(identity => {
-    const space = toSpace(identity);
-    originalBySpace.set(space, identity);
-    return space;
-  });
-  const config: IConfig = { spaces, activeSpace: store.active };
-  return { store, config, originalBySpace };
-}
-
-async function persistConfig(
-  store: IStoreV2,
-  config: IConfig,
-  originalBySpace: Map<ISpace, IIdentity>
-): Promise<void> {
-  store.identities = config.spaces.map(space => mergeIdentity(space, originalBySpace.get(space)));
-  store.active = config.activeSpace;
-  await saveStore(store);
-}
 
 export async function addSpace() {
   UIHelper.printHeader("Create New Development Space");
   UIHelper.info("Please provide the following information:");
-  
+
   const name = await input({
     message: "Space name:",
     validate: (input) => {
@@ -59,7 +29,7 @@ export async function addSpace() {
       return true;
     },
   });
-  
+
   const email = (
     await input({
       message: "Email address:",
@@ -71,7 +41,7 @@ export async function addSpace() {
       },
     })
   )?.trim();
-  
+
   const userName = await input({
     message: "User name:",
     validate: (input) => {
@@ -80,7 +50,7 @@ export async function addSpace() {
       return true;
     },
   });
-  
+
   const generateKey = await confirm({
     message: "Generate a new SSH key for this space?",
     default: true,
@@ -100,7 +70,7 @@ export async function addSpace() {
     UIHelper.printProgress("Generating SSH key");
     sshKeyPath = await generateSSHKey(slugifiedSpaceName, email);
     UIHelper.clearProgress();
-    
+
     const publicKeyPath = `${sshKeyPath}.pub`;
 
     try {
@@ -114,7 +84,7 @@ export async function addSpace() {
         "",
         "GitHub SSH Keys: https://github.com/settings/keys"
       ]);
-      
+
       console.log(UIHelper.dim("\nPublic SSH Key:"));
       console.log(UIHelper.highlight(publicKey));
     } catch (err) {
@@ -179,7 +149,7 @@ export async function switchSpace(
   if (!selectedSpaceName) {
     UIHelper.printHeader("Switch Development Space");
     UIHelper.printKeyInstruction();
-    
+
     // Use enhanced selection with fuzzy search
     selectedSpaceName = await select({
       message: "Choose a space to switch to:",
@@ -237,8 +207,7 @@ export async function switchSpace(
     UIHelper.printProgress("Switching to space");
 
     // Set Git configuration
-    await execFileAsync('git', ['config', '--global', 'user.name', space.userName]);
-    await execFileAsync('git', ['config', '--global', 'user.email', space.email]);
+    await setGitUser(space.userName, space.email);
     UIHelper.success(`Git user set to ${UIHelper.highlight(space.userName)} <${UIHelper.highlight(space.email)}>.`);
 
     if (hasKey) {
@@ -296,7 +265,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   if (!options?.dryRun) {
     UIHelper.warning("This action cannot be undone!");
   }
-  
+
   let selectedSpaceName = spaceName;
   if (!selectedSpaceName) {
     selectedSpaceName = await select({
@@ -506,8 +475,7 @@ export async function modifySpace(spaceName?: string) {
 
   if (wasActive && (email !== originalEmail || userName !== originalUserName)) {
     try {
-      await execFileAsync('git', ['config', '--global', 'user.name', space.userName]);
-      await execFileAsync('git', ['config', '--global', 'user.email', space.email]);
+      await setGitUser(space.userName, space.email);
     } catch (error) {
       fail(`Failed to update global git configuration: ${(error as Error).message}`);
       return;
@@ -549,27 +517,27 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
   }
 
   UIHelper.printHeader(`Space Details: ${space.name}`);
-  
+
   // Basic Information
   console.log(UIHelper.bold("Basic Information:"));
   UIHelper.printStatus("Name", space.name, space.name === config.activeSpace ? 'success' : 'info');
   UIHelper.printStatus("Email", space.email, 'info');
   UIHelper.printStatus("Username", space.userName, 'info');
   UIHelper.printStatus("Status", space.name === config.activeSpace ? 'Active' : 'Inactive', space.name === config.activeSpace ? 'success' : 'info');
-  
+
   console.log("");
-  
+
   // SSH Key Status
   console.log(UIHelper.bold("SSH Configuration:"));
-  
+
   if (space.sshKeyPath) {
     const keyExists = await fs.pathExists(space.sshKeyPath);
     const pubKeyExists = await fs.pathExists(`${space.sshKeyPath}.pub`);
-    
+
     UIHelper.printStatus("SSH Key Path", space.sshKeyPath, keyExists ? 'success' : 'error');
     UIHelper.printStatus("Private Key", keyExists ? 'Found' : 'Missing', keyExists ? 'success' : 'error');
     UIHelper.printStatus("Public Key", pubKeyExists ? 'Found' : 'Missing', pubKeyExists ? 'success' : 'error');
-    
+
     // Check if key is loaded in ssh-agent by comparing fingerprints
     try {
       const { stdout: fingerprintOutput } = await execFileAsync('ssh-keygen', ['-lf', `${space.sshKeyPath}.pub`]);
@@ -582,7 +550,7 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
     } catch {
       UIHelper.printStatus("SSH Agent", 'Unable to check', 'warning');
     }
-    
+
     // Check SSH config
     const sshConfigPath = path.join(os.homedir(), '.ssh', 'config');
     if (await fs.pathExists(sshConfigPath)) {
@@ -593,7 +561,7 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
     } else {
       UIHelper.printStatus("SSH Config", 'No SSH config file', 'warning');
     }
-    
+
     // Check key file permissions
     if (keyExists) {
       try {
@@ -608,24 +576,21 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
   } else {
     UIHelper.printStatus("SSH Key", 'Not configured', 'error');
   }
-  
+
   console.log("");
-  
+
   // Git Status
   console.log(UIHelper.bold("Git Configuration:"));
-  
+
   try {
-    const { stdout: gitUserOutput } = await execFileAsync('git', ['config', '--global', 'user.name']);
-    const { stdout: gitEmailOutput } = await execFileAsync('git', ['config', '--global', 'user.email']);
-    const currentGitUser = gitUserOutput.trim();
-    const currentGitEmail = gitEmailOutput.trim();
+    const { userName: currentGitUser, email: currentGitEmail } = await getGitUser();
 
     const userMatches = currentGitUser === space.userName;
     const emailMatches = currentGitEmail === space.email;
-    
+
     UIHelper.printStatus("Git User", currentGitUser, userMatches ? 'success' : 'warning');
     UIHelper.printStatus("Git Email", currentGitEmail, emailMatches ? 'success' : 'warning');
-    
+
     if (userMatches && emailMatches) {
       UIHelper.printStatus("Git Config", 'Matches this space', 'success');
     } else {
@@ -634,17 +599,17 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
   } catch {
     UIHelper.printStatus("Git Config", 'Unable to check', 'warning');
   }
-  
+
   console.log("");
-  
+
   // File System Info
   console.log(UIHelper.bold("File System:"));
-  
+
   if (space.sshKeyPath) {
     const keyDir = path.dirname(space.sshKeyPath);
     const keyDirExists = await fs.pathExists(keyDir);
     UIHelper.printStatus("Key Directory", keyDir, keyDirExists ? 'success' : 'error');
-    
+
     if (keyDirExists) {
       try {
         const files = await fs.readdir(keyDir);
@@ -655,15 +620,15 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
       }
     }
   }
-  
+
   console.log("");
-  
+
   // Action suggestions
   console.log(UIHelper.bold("Available Actions:"));
   console.log(UIHelper.dim("  • " + UIHelper.command(`dss switch ${space.name}`) + " - Switch to this space"));
   console.log(UIHelper.dim("  • " + UIHelper.command(`dss edit ${space.name}`) + " - Edit space configuration"));
   console.log(UIHelper.dim("  • " + UIHelper.command(`dss test ${space.name}`) + " - Test GitHub access"));
-  
+
   if (space.name !== config.activeSpace) {
     console.log(UIHelper.dim("  • " + UIHelper.command(`dss remove ${space.name}`) + " - Remove this space"));
   }
@@ -671,10 +636,10 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
 
 export async function onboardUser(): Promise<void> {
   UIHelper.printHeader("🎉 Welcome to DSS (Dev Spaces Switcher)");
-  
+
   console.log(UIHelper.dim("Let's get you set up with your first development space!"));
   console.log("");
-  
+
   // Check if user already has spaces
   const { config } = await loadConfig();
 
@@ -684,13 +649,13 @@ export async function onboardUser(): Promise<void> {
       message: "Would you like to continue with the onboarding tutorial?",
       default: false
     });
-    
+
     if (!continueOnboarding) {
       UIHelper.info("Onboarding cancelled. Use " + UIHelper.command("dss list") + " to see your spaces.");
       return;
     }
   }
-  
+
   // Introduction
   UIHelper.printInfoBox("What is DSS?", [
     "DSS helps you manage multiple development identities by:",
@@ -699,32 +664,32 @@ export async function onboardUser(): Promise<void> {
     "• Organizing your development environments",
     "• Testing GitHub access for each identity"
   ]);
-  
+
   const startTutorial = await confirm({
     message: "Ready to create your first development space?",
     default: true
   });
-  
+
   if (!startTutorial) {
     UIHelper.info("You can start the onboarding anytime with " + UIHelper.command("dss onboard"));
     return;
   }
-  
+
   // Step 1: Create first space
   console.log("");
   UIHelper.printHeader("📝 Step 1: Create Your First Space");
-  
+
   console.log(UIHelper.dim("A 'space' represents a development identity with its own:"));
   console.log(UIHelper.dim("• Git username and email"));
   console.log(UIHelper.dim("• SSH key for GitHub authentication"));
   console.log(UIHelper.dim("• Isolated configuration"));
   console.log("");
-  
+
   const createFirstSpace = await confirm({
     message: "Create your first space now?",
     default: true
   });
-  
+
   if (createFirstSpace) {
     await addSpace();
 
@@ -737,66 +702,66 @@ export async function onboardUser(): Promise<void> {
   } else {
     UIHelper.info("You can create a space later with " + UIHelper.command("dss add"));
   }
-  
+
   // Step 2: Explain switching
   console.log("");
   UIHelper.printHeader("🔄 Step 2: Understanding Space Switching");
-  
+
   UIHelper.printInfoBox("What happens when you switch spaces?", [
     "1. Git global config is updated with space's user/email",
     "2. SSH key is added to ssh-agent",
     "3. SSH config is updated for GitHub",
     "4. Space becomes 'active' for your development work"
   ]);
-  
+
   const demoSwitch = await confirm({
     message: "Would you like to see the switch command in action?",
     default: true
   });
-  
+
   if (demoSwitch) {
     console.log("");
     UIHelper.info("Here's how to switch spaces:");
     console.log(UIHelper.dim("  • " + UIHelper.command("dss switch") + " - Interactive selection"));
     console.log(UIHelper.dim("  • " + UIHelper.command("dss switch <space-name>") + " - Direct switch"));
     console.log(UIHelper.dim("  • " + UIHelper.command("dss switch --dry-run") + " - Preview changes"));
-    
+
     const trySwitch = await confirm({
       message: "Try switching to your new space?",
       default: true
     });
-    
+
     if (trySwitch) {
       await switchSpace();
     }
   }
-  
+
   // Step 3: Essential commands
   console.log("");
   UIHelper.printHeader("📚 Step 3: Essential Commands");
-  
+
   console.log(UIHelper.bold("Core Commands:"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss list") + " - View all your spaces"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss switch") + " - Change active space"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss test") + " - Test GitHub access"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss inspect <space>") + " - Detailed space info"));
-  
+
   console.log("");
   console.log(UIHelper.bold("Management Commands:"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss add") + " - Create new space"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss edit") + " - Modify existing space"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss remove") + " - Delete space"));
-  
+
   console.log("");
   console.log(UIHelper.bold("Advanced Commands:"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss batch") + " - Switch between multiple spaces"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss bulk") + " - Bulk update operations"));
   console.log(UIHelper.dim("  • " + UIHelper.command("dss export/import") + " - Backup/restore config"));
-  
+
   // Step 4: Next steps
   console.log("");
   UIHelper.printHeader("🚀 Step 4: Next Steps");
-  
+
   const nextSteps = [
     "1. Add your SSH key to GitHub at https://github.com/settings/keys",
     "2. Test your GitHub access with " + UIHelper.command("dss test"),
@@ -804,18 +769,18 @@ export async function onboardUser(): Promise<void> {
     "4. Use " + UIHelper.command("dss list") + " to see all your spaces",
     "5. Switch between spaces as needed for your work"
   ];
-  
+
   UIHelper.printSuccessBox("You're all set!", nextSteps);
-  
+
   const testGitHub = await confirm({
     message: "Would you like to test GitHub access now?",
     default: true
   });
-  
+
   if (testGitHub) {
     await testSpace();
   }
-  
+
   console.log("");
   UIHelper.success("Onboarding complete! 🎉");
   UIHelper.info("Use " + UIHelper.command("dss --help") + " anytime to see all available commands.");

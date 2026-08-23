@@ -1,11 +1,18 @@
-import { execFile, spawn } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from 'util';
 import os from "os";
 import fs from "fs-extra";
 import path from "path";
-import { UIHelper } from "./ui";
-import { safeConfirm } from "./prompts";
-import { fail } from "./fail";
+// LAYER VIOLATION (flagged, not fixed — see task-2-report.md "Concerns"):
+// these functions print via UIHelper/fail on success/failure paths that are
+// interleaved with control flow in their callers (e.g. switchSpace keeps
+// going after a failed setGitHubSSHKey/removeSSHKeyFromAgent because these
+// call fail() internally instead of throwing). Inverting to "throw/return,
+// print in the command layer" would change that control flow, which the
+// brief says to avoid — so the UIHelper/fail imports stay here.
+import { UIHelper } from "../commands/ui";
+import { safeConfirm } from "../commands/prompts";
+import { fail } from "../commands/fail";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,7 +70,7 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
         fail("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
       }
     }
-    
+
     const showPublicKey = await safeConfirm({
       message: "Would you like to see the public SSH key?",
       default: false,
@@ -79,65 +86,3 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
     UIHelper.info("Ensure the SSH key has been added to the ssh-agent and is associated with your GitHub account.");
   }
 }
-
-export const copyToClipboard = (publicKey: string) => {
-  return new Promise((resolve, reject) => {
-    // Platform-specific command to copy the SSH public key to clipboard
-    let command: string;
-    let args: string[];
-    switch (process.platform) {
-      case "darwin":
-        command = "pbcopy";
-        args = [];
-        break;
-      case "win32":
-        command = "clip";
-        args = [];
-        break;
-      case "linux":
-        command = "xclip";
-        args = ["-selection", "clipboard"];
-        break;
-      default:
-        UIHelper.error(
-          `Platform ${process.platform} is not supported for clipboard operations.`
-        );
-        reject(new Error("Unsupported platform for clipboard operations."));
-        return;
-    }
-
-    const child = spawn(command, args);
-    let settled = false;
-
-    const settleOnce = (action: () => void) => {
-      if (settled) return;
-      settled = true;
-      action();
-    };
-
-    child.on("error", (error) => {
-      settleOnce(() => reject(error));
-    });
-
-    // Without this handler, an error on the stdin pipe (e.g. the binary
-    // exits before the write completes) is an unhandled 'error' event on
-    // the stream, which Node treats as an uncaught exception and crashes
-    // the process instead of surfacing as a rejected promise.
-    child.stdin.on("error", (error) => {
-      settleOnce(() => reject(error));
-    });
-
-    child.on("close", (code) => {
-      settleOnce(() => {
-        if (code === 0) {
-          resolve("Public SSH key copied to clipboard.");
-        } else {
-          reject(new Error(`${command} exited with code ${code}`));
-        }
-      });
-    });
-
-    child.stdin.write(publicKey);
-    child.stdin.end();
-  });
-};

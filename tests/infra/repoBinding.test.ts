@@ -11,8 +11,8 @@ import {
   parseGitVersion,
   unbindRepository,
   resolveRepositoryRoot
-} from '../../src/utils/repoBinding';
-import { ISpace } from '../../src/utils/types';
+} from '../../src/infra/repoBinding';
+import { ISpace } from '../../src/core/types';
 
 function runGit(cwd: string, args: string[]): string {
   const output = execFileSync('git', ['-C', cwd, ...args], {

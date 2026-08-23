@@ -2,45 +2,13 @@ import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
 import { select, confirm, checkbox, input } from '@inquirer/prompts';
-import { IConfig, ISpace } from './types';
+import { ISpace } from '../core/types';
 import { UIHelper } from './ui';
-import { switchSpace } from './SpaceManager';
-import { generateSSHKey } from './sshKeyGen';
+import { switchSpace } from './spaces';
+import { generateSSHKey } from '../infra/keys';
 import { fail } from './fail';
-import { slugify, findSpace } from './spaceLookup';
-import { loadStore, saveStore, toSpace, mergeIdentity, IStoreV2, IIdentity } from '../infra/store';
-
-interface ILoadedConfig {
-  store: IStoreV2;
-  config: IConfig;
-  // Tracks which identity each ISpace was derived from (by object identity,
-  // stable across in-place edits, filters, and appends) so persistConfig can
-  // preserve metadata the ISpace view can't carry (host, key fingerprint/
-  // createdAt, ...) instead of wholesale-replacing every identity.
-  originalBySpace: Map<ISpace, IIdentity>;
-}
-
-async function loadConfig(): Promise<ILoadedConfig> {
-  const store = await loadStore();
-  const originalBySpace = new Map<ISpace, IIdentity>();
-  const spaces = store.identities.map(identity => {
-    const space = toSpace(identity);
-    originalBySpace.set(space, identity);
-    return space;
-  });
-  const config: IConfig = { spaces, activeSpace: store.active };
-  return { store, config, originalBySpace };
-}
-
-async function persistConfig(
-  store: IStoreV2,
-  config: IConfig,
-  originalBySpace: Map<ISpace, IIdentity>
-): Promise<void> {
-  store.identities = config.spaces.map(space => mergeIdentity(space, originalBySpace.get(space)));
-  store.active = config.activeSpace;
-  await saveStore(store);
-}
+import { slugify, findSpace } from '../core/identity';
+import { loadConfig, persistConfig } from '../infra/store';
 
 export async function batchSwitchSpaces() {
   const { config } = await loadConfig();
@@ -73,21 +41,21 @@ export async function batchSwitchSpaces() {
     try {
       UIHelper.info(`Switching to: ${UIHelper.highlight(spaceName)}`);
       await switchSpace(spaceName);
-      
+
       const continueNext = await confirm({
         message: 'Continue to next space?',
         default: true
       });
-      
+
       if (!continueNext) break;
     } catch (error) {
       UIHelper.error(`Failed to switch to ${spaceName}: ${(error as Error).message}`);
-      
+
       const continueOnError = await confirm({
         message: 'Continue with remaining spaces?',
         default: true
       });
-      
+
       if (!continueOnError) break;
     }
   }
@@ -145,9 +113,9 @@ export async function exportSpaceConfiguration() {
 
 export async function importSpaceConfiguration() {
   UIHelper.printHeader('Import Space Configuration');
-  
+
   const importPath = path.join(os.homedir(), 'dss-export.json');
-  
+
   if (!await fs.pathExists(importPath)) {
     fail(`Import file not found: ${importPath}`);
     UIHelper.info('Please ensure the export file exists in your home directory.');
@@ -163,7 +131,7 @@ export async function importSpaceConfiguration() {
     }
 
     UIHelper.info(`Found ${importData.spaces.length} spaces in import file.`);
-    
+
     const { store, config, originalBySpace } = await loadConfig();
 
     const spacesToImport = importData.spaces.filter((importSpace: any) => {
@@ -246,9 +214,9 @@ export async function bulkUpdateSpaces() {
   }
 
   UIHelper.info(`Selected ${selectedSpaces.length} spaces for update.`);
-  
+
   let updatedCount = 0;
-  
+
   try {
     switch (updateType) {
       case 'email-domain': {
@@ -256,14 +224,14 @@ export async function bulkUpdateSpaces() {
           message: 'Enter the old domain to replace (e.g., oldcompany.com):',
           validate: (input) => input.trim().length > 0 || 'Domain is required'
         });
-        
+
         const newDomain = await input({
           message: 'Enter the new domain (e.g., newcompany.com):',
           validate: (input) => input.trim().length > 0 || 'Domain is required'
         });
-        
+
         UIHelper.printProgress(`Updating email domains from ${oldDomain} to ${newDomain}`);
-        
+
         for (const spaceName of selectedSpaces) {
           const space = config.spaces.find(s => s.name === spaceName);
           if (space && space.email.includes(oldDomain)) {
@@ -273,7 +241,7 @@ export async function bulkUpdateSpaces() {
         }
         break;
       }
-        
+
       case 'username-pattern': {
         const operation = await select({
           message: 'What would you like to do with usernames?',
@@ -283,15 +251,15 @@ export async function bulkUpdateSpaces() {
             { name: 'Replace text', value: 'replace' }
           ]
         });
-        
+
         if (operation === 'add-prefix') {
           const prefix = await input({
             message: 'Enter prefix to add:',
             validate: (input) => input.trim().length > 0 || 'Prefix is required'
           });
-          
+
           UIHelper.printProgress(`Adding prefix "${prefix}" to usernames`);
-          
+
           for (const spaceName of selectedSpaces) {
             const space = config.spaces.find(s => s.name === spaceName);
             if (space && !space.userName.startsWith(prefix)) {
@@ -304,9 +272,9 @@ export async function bulkUpdateSpaces() {
             message: 'Enter suffix to add:',
             validate: (input) => input.trim().length > 0 || 'Suffix is required'
           });
-          
+
           UIHelper.printProgress(`Adding suffix "${suffix}" to usernames`);
-          
+
           for (const spaceName of selectedSpaces) {
             const space = config.spaces.find(s => s.name === spaceName);
             if (space && !space.userName.endsWith(suffix)) {
@@ -319,14 +287,14 @@ export async function bulkUpdateSpaces() {
             message: 'Enter text to replace:',
             validate: (input) => input.trim().length > 0 || 'Text is required'
           });
-          
+
           const newText = await input({
             message: 'Enter replacement text:',
             validate: (input) => input.trim().length > 0 || 'Replacement text is required'
           });
-          
+
           UIHelper.printProgress(`Replacing "${oldText}" with "${newText}" in usernames`);
-          
+
           for (const spaceName of selectedSpaces) {
             const space = config.spaces.find(s => s.name === spaceName);
             if (space && space.userName.includes(oldText)) {
@@ -337,20 +305,20 @@ export async function bulkUpdateSpaces() {
         }
         break;
       }
-        
+
       case 'regenerate-keys': {
         const confirmRegenerate = await confirm({
           message: 'Are you sure you want to regenerate SSH keys? This will replace existing keys.',
           default: false
         });
-        
+
         if (!confirmRegenerate) {
           UIHelper.info('SSH key regeneration cancelled.');
           return;
         }
-        
+
         UIHelper.printProgress('Regenerating SSH keys');
-        
+
         for (const spaceName of selectedSpaces) {
           const space = config.spaces.find(s => s.name === spaceName);
           if (space) {
@@ -367,9 +335,9 @@ export async function bulkUpdateSpaces() {
         break;
       }
     }
-    
+
     UIHelper.clearProgress();
-    
+
     if (updatedCount > 0) {
       await persistConfig(store, config, originalBySpace);
       UIHelper.printSuccessBox('Bulk Update Complete', [
@@ -381,7 +349,7 @@ export async function bulkUpdateSpaces() {
     } else {
       UIHelper.info('No spaces were updated.');
     }
-    
+
   } catch (error) {
     UIHelper.clearProgress();
     fail(`Bulk update failed: ${(error as Error).message}`);

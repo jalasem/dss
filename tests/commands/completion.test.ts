@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { confirm } from '@inquirer/prompts';
-import { generateCompletionScript } from '../../src/utils/completion';
+import { generateCompletionScript } from '../../src/commands/completion';
 
 jest.mock('@inquirer/prompts', () => ({
   confirm: jest.fn(),
