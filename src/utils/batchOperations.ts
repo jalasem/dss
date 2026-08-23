@@ -8,12 +8,26 @@ import { switchSpace } from './SpaceManager';
 import { generateSSHKey } from './sshKeyGen';
 import { fail } from './fail';
 import { slugify, findSpace } from './spaceLookup';
+import { loadStore, saveStore, toSpace, fromSpace, IStoreV2 } from '../infra/store';
 
-const configPath = path.join(os.homedir(), '.dss', 'spaces', 'config.json');
+async function loadConfig(): Promise<{ store: IStoreV2; config: IConfig }> {
+  const store = await loadStore();
+  const config: IConfig = {
+    spaces: store.identities.map(toSpace),
+    activeSpace: store.active
+  };
+  return { store, config };
+}
+
+async function persistConfig(store: IStoreV2, config: IConfig): Promise<void> {
+  store.identities = config.spaces.map(fromSpace);
+  store.active = config.activeSpace;
+  await saveStore(store);
+}
 
 export async function batchSwitchSpaces() {
-  const config: IConfig = await fs.readJson(configPath);
-  
+  const { config } = await loadConfig();
+
   if (config.spaces.length === 0) {
     UIHelper.warning('No spaces available for batch operations.');
     return;
@@ -65,8 +79,8 @@ export async function batchSwitchSpaces() {
 }
 
 export async function exportSpaceConfiguration() {
-  const config: IConfig = await fs.readJson(configPath);
-  
+  const { config } = await loadConfig();
+
   if (config.spaces.length === 0) {
     UIHelper.warning('No spaces to export.');
     return;
@@ -133,8 +147,8 @@ export async function importSpaceConfiguration() {
 
     UIHelper.info(`Found ${importData.spaces.length} spaces in import file.`);
     
-    const config: IConfig = await fs.readJson(configPath).catch(() => ({ spaces: [] }));
-    
+    const { store, config } = await loadConfig();
+
     const spacesToImport = importData.spaces.filter((importSpace: any) => {
       const exists = Boolean(findSpace(config, importSpace.name));
       if (exists) {
@@ -167,7 +181,7 @@ export async function importSpaceConfiguration() {
     }));
 
     config.spaces.push(...newSpaces);
-    await fs.writeJson(configPath, config);
+    await persistConfig(store, config);
 
     UIHelper.printSuccessBox('Import Completed', [
       `✓ ${spacesToImport.length} spaces imported`,
@@ -182,8 +196,8 @@ export async function importSpaceConfiguration() {
 }
 
 export async function bulkUpdateSpaces() {
-  const config: IConfig = await fs.readJson(configPath);
-  
+  const { store, config } = await loadConfig();
+
   if (config.spaces.length === 0) {
     UIHelper.warning('No spaces available for bulk update.');
     return;
@@ -340,7 +354,7 @@ export async function bulkUpdateSpaces() {
     UIHelper.clearProgress();
     
     if (updatedCount > 0) {
-      await fs.writeJson(configPath, config);
+      await persistConfig(store, config);
       UIHelper.printSuccessBox('Bulk Update Complete', [
         `✓ ${updatedCount} spaces updated successfully`,
         `✓ Operation: ${updateType}`,

@@ -140,7 +140,31 @@ describe('repository binding CLI commands', () => {
     expect(runGit(repository, ['config', 'dss.space'])).toBe('personal');
   });
 
+  it('records the binding in the store registry (config.json bindings) after a successful bind', async () => {
+    runCli(['bind', 'personal', '--path', repository]);
+
+    const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
+    const config = await fs.readJson(spacesConfigPath);
+    const realRepository = await fs.realpath(repository);
+
+    expect(config.version).toBe(2);
+    expect(config.bindings).toEqual([{ path: realRepository, identity: 'personal' }]);
+  });
+
+  it('removes the binding from the store registry after a successful unbind', async () => {
+    runCli(['bind', 'personal', '--path', repository]);
+    runCli(['unbind', '--path', repository]);
+
+    const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
+    const config = await fs.readJson(spacesConfigPath);
+
+    expect(config.bindings).toEqual([]);
+  });
+
   it('resolves a legacy raw-name space by its slug (dss bind my-work)', async () => {
+    // The v1 config below is migrated to v2 (silently, on first read), which
+    // slugifies stored identity names — so the legacy "My Work" display name
+    // becomes "my-work" in the persisted store from this point on.
     const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
     await fs.outputJson(spacesConfigPath, {
       spaces: [{
@@ -153,9 +177,9 @@ describe('repository binding CLI commands', () => {
 
     const output = runCli(['bind', 'my-work', '--path', repository]);
 
-    expect(output).toContain('My Work');
+    expect(output).toContain('my-work');
     expect(runGit(repository, ['config', 'user.email'])).toBe('work@example.com');
-    expect(runGit(repository, ['config', 'dss.space'])).toBe('My Work');
+    expect(runGit(repository, ['config', 'dss.space'])).toBe('my-work');
   });
 
   it('reports missing or malformed space configuration without a raw filesystem error', async () => {

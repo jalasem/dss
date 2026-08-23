@@ -10,22 +10,26 @@ import { IConfig, ISpace } from "./types";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
 import { slugify, findSpace } from "./spaceLookup";
+import { loadStore, saveStore, toSpace, fromSpace, IStoreV2 } from "../infra/store";
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
-const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
+async function loadConfig(): Promise<{ store: IStoreV2; config: IConfig }> {
+  const store = await loadStore();
+  const config: IConfig = {
+    spaces: store.identities.map(toSpace),
+    activeSpace: store.active
+  };
+  return { store, config };
+}
 
-async function ensureConfigFileExists() {
-  await fs.ensureFile(configPath);
-  const exists = await fs.readJson(configPath).catch(() => null);
-  if (!exists) {
-    await fs.writeJson(configPath, { spaces: [] });
-  }
+async function persistConfig(store: IStoreV2, config: IConfig): Promise<void> {
+  store.identities = config.spaces.map(fromSpace);
+  store.active = config.activeSpace;
+  await saveStore(store);
 }
 
 export async function addSpace() {
-  await ensureConfigFileExists();
-
   UIHelper.printHeader("Create New Development Space");
   UIHelper.info("Please provide the following information:");
   
@@ -65,7 +69,7 @@ export async function addSpace() {
     default: true,
   });
 
-  const config: IConfig = await fs.readJson(configPath);
+  const { store, config } = await loadConfig();
   const slugifiedSpaceName = slugify(name);
 
   if (findSpace(config, slugifiedSpaceName)) {
@@ -112,7 +116,7 @@ export async function addSpace() {
   };
 
   config.spaces.push(newSpace);
-  await fs.writeJson(configPath, config);
+  await persistConfig(store, config);
 
   const switchToNewSpace = await confirm({
     message: `Do you want to switch to the newly added space "${slugifiedSpaceName}" now?`,
@@ -129,9 +133,7 @@ export async function addSpace() {
 }
 
 export async function listSpaces() {
-  await ensureConfigFileExists();
-
-  const config: IConfig = await fs.readJson(configPath);
+  const { config } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -147,8 +149,7 @@ export async function switchSpace(
   spaceName?: string,
   options?: { dryRun?: boolean }
 ): Promise<void> {
-  await ensureConfigFileExists();
-  const config: IConfig = await fs.readJson(configPath);
+  const { store, config } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -236,7 +237,7 @@ export async function switchSpace(
     }
 
     config.activeSpace = space.name;
-    await fs.writeJson(configPath, config);
+    await persistConfig(store, config);
 
     UIHelper.clearProgress();
     UIHelper.printSuccessBox("Space Activated", [
@@ -266,8 +267,7 @@ export async function switchSpace(
 }
 
 export async function removeSpace(spaceName?: string, options?: { dryRun?: boolean }) {
-  await ensureConfigFileExists();
-  const config: IConfig = await fs.readJson(configPath);
+  const { store, config } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -345,7 +345,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
 
     // Remove from config
     config.spaces = config.spaces.filter((space) => space.name !== spaceToRemove.name);
-    await fs.writeJson(configPath, config);
+    await persistConfig(store, config);
 
     UIHelper.clearProgress();
     UIHelper.success(`Space '${UIHelper.highlight(spaceToRemove.name)}' has been removed successfully.`);
@@ -366,8 +366,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
 }
 
 export async function testSpace(spaceName?: string) {
-  await ensureConfigFileExists();
-  const config: IConfig = await fs.readJson(configPath);
+  const { config } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -396,8 +395,7 @@ export async function testSpace(spaceName?: string) {
 }
 
 export async function modifySpace(spaceName?: string) {
-  await ensureConfigFileExists();
-  const config: IConfig = await fs.readJson(configPath);
+  const { store, config } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -487,7 +485,7 @@ export async function modifySpace(spaceName?: string) {
 
   // Persist before re-applying global git config so disk (config + any moved
   // key directory) stays consistent even if the git re-apply below fails.
-  await fs.writeJson(configPath, config);
+  await persistConfig(store, config);
 
   if (wasActive && (email !== originalEmail || userName !== originalUserName)) {
     try {
@@ -507,8 +505,7 @@ export async function modifySpace(spaceName?: string) {
 }
 
 export async function inspectSpace(spaceName?: string): Promise<void> {
-  await ensureConfigFileExists();
-  const config: IConfig = await fs.readJson(configPath);
+  const { config } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -662,9 +659,8 @@ export async function onboardUser(): Promise<void> {
   console.log("");
   
   // Check if user already has spaces
-  await ensureConfigFileExists();
-  const config: IConfig = await fs.readJson(configPath);
-  
+  const { config } = await loadConfig();
+
   if (config.spaces.length > 0) {
     UIHelper.info(`You already have ${config.spaces.length} space(s) configured.`);
     const continueOnboarding = await confirm({
@@ -714,9 +710,9 @@ export async function onboardUser(): Promise<void> {
   
   if (createFirstSpace) {
     await addSpace();
-    
+
     // Refresh config
-    const updatedConfig: IConfig = await fs.readJson(configPath);
+    const { config: updatedConfig } = await loadConfig();
     if (updatedConfig.spaces.length === 0) {
       UIHelper.warning("Space creation was cancelled. You can try again with " + UIHelper.command("dss add"));
       return;

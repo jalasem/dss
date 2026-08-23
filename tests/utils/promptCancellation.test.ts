@@ -6,6 +6,7 @@ import { safeConfirm, isPromptExitError } from '../../src/utils/prompts';
 import { UIHelper } from '../../src/utils/ui';
 import { execFile } from 'child_process';
 import fs from 'fs-extra';
+import { loadStore, fromSpace } from '../../src/infra/store';
 
 jest.mock('@inquirer/prompts', () => ({
   confirm: jest.fn(),
@@ -21,10 +22,16 @@ jest.mock('../../src/utils/repoBinding', () => ({
   getRepositoryBindingStatus: jest.fn(),
   unbindRepository: jest.fn()
 }));
+jest.mock('../../src/infra/store', () => ({
+  ...jest.requireActual('../../src/infra/store'),
+  loadStore: jest.fn(),
+  saveStore: jest.fn()
+}));
 
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockExecFile = execFile as unknown as jest.MockedFunction<typeof execFile>;
 const mockFs = fs as jest.Mocked<typeof fs>;
+const mockLoadStore = loadStore as jest.MockedFunction<typeof loadStore>;
 
 // Mirrors @inquirer/core exactly: the class does NOT override `name`,
 // so detection cannot rely on error.name === 'ExitPromptError'.
@@ -116,9 +123,10 @@ describe('prompt cancellation handling', () => {
   describe('dss bind', () => {
     it('cancels cleanly when the recursive confirmation prompt is closed', async () => {
       const { discoverRepositories, bindRepositories } = jest.requireMock('../../src/utils/repoBinding');
-      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
-      (mockFs.readJson as unknown as jest.Mock).mockResolvedValue({
-        spaces: [{ name: 'Work', email: 'w@x.com', userName: 'W', sshKeyPath: '/mock/key' }]
+      mockLoadStore.mockResolvedValue({
+        version: 2,
+        identities: [fromSpace({ name: 'Work', email: 'w@x.com', userName: 'W', sshKeyPath: '/mock/key' })],
+        bindings: []
       });
       discoverRepositories.mockResolvedValue(['/repo/a', '/repo/b']);
       mockConfirm.mockRejectedValue(createExitPromptError());

@@ -1,7 +1,5 @@
 import { select } from '@inquirer/prompts';
 import { safeConfirm } from './prompts';
-import fs from 'fs-extra';
-import os from 'os';
 import path from 'path';
 import {
   bindRepositories,
@@ -15,6 +13,7 @@ import { IConfig, ISpace } from './types';
 import { UIHelper } from './ui';
 import { fail } from './fail';
 import { findSpace } from './spaceLookup';
+import { loadStore, saveStore, toSpace, recordBinding, removeBinding } from '../infra/store';
 
 export interface BindCommandOptions {
   path?: string;
@@ -27,13 +26,10 @@ export interface RepositoryCommandOptions {
   dryRun?: boolean;
 }
 
-const configPath = path.join(os.homedir(), '.dss', 'spaces', 'config.json');
-
 async function resolveSpace(spaceName?: string): Promise<ISpace | undefined> {
-  if (!(await fs.pathExists(configPath))) return undefined;
-
-  const config: Partial<IConfig> = await fs.readJson(configPath);
-  if (!Array.isArray(config.spaces) || config.spaces.length === 0) return undefined;
+  const store = await loadStore();
+  const config: IConfig = { spaces: store.identities.map(toSpace), activeSpace: store.active };
+  if (config.spaces.length === 0) return undefined;
 
   const selectedName = spaceName || await select({
     message: 'Choose a space to bind:',
@@ -44,7 +40,21 @@ async function resolveSpace(spaceName?: string): Promise<ISpace | undefined> {
     }))
   });
 
-  return findSpace(config as IConfig, selectedName);
+  return findSpace(config, selectedName);
+}
+
+/** Best-effort: updates the binding registry after a successful bind/unbind
+ * without failing the overall operation if the registry write fails. */
+async function updateBindingRegistry(
+  update: (store: Awaited<ReturnType<typeof loadStore>>) => void
+): Promise<void> {
+  try {
+    const store = await loadStore();
+    update(store);
+    await saveStore(store);
+  } catch (error) {
+    UIHelper.warning(`Failed to update the binding registry: ${(error as Error).message}`);
+  }
 }
 
 function printStatus(status: RepositoryBindingStatus): void {
@@ -80,7 +90,11 @@ export async function bindSpaceToRepository(
       const status = await bindRepository(options.path || process.cwd(), space, {
         dryRun: options.dryRun
       });
-      if (options.dryRun) UIHelper.info('Dry run: no repository configuration was changed.');
+      if (options.dryRun) {
+        UIHelper.info('Dry run: no repository configuration was changed.');
+      } else {
+        await updateBindingRegistry(store => recordBinding(store, status.repositoryRoot, space.name));
+      }
       printStatus(status);
       return;
     }
@@ -109,6 +123,11 @@ export async function bindSpaceToRepository(
     }
 
     const result = await bindRepositories(repositories, space, { dryRun: options.dryRun });
+    if (!options.dryRun) {
+      for (const status of result.successful) {
+        await updateBindingRegistry(store => recordBinding(store, status.repositoryRoot, space.name));
+      }
+    }
     result.successful.forEach(printStatus);
     result.failed.forEach(item => UIHelper.error(`${item.repositoryPath}: ${item.message}`));
     if (result.failed.length > 0) process.exitCode = 1;
@@ -131,6 +150,8 @@ export async function unbindSpaceFromRepository(
           ? 'Dry run: the existing binding would be removed.'
           : 'Dry run: there is no binding to remove.'
       );
+    } else {
+      await updateBindingRegistry(store => removeBinding(store, status.repositoryRoot));
     }
     printStatus(status);
   } catch (error) {

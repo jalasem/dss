@@ -1,8 +1,8 @@
-import fs from 'fs-extra';
-import path from 'path';
 import os from 'os';
 import { performance } from 'perf_hooks';
 import { addSpace, listSpaces, switchSpace } from '../src/utils/SpaceManager';
+import { loadStore, saveStore, fromSpace, IStoreV2 } from '../src/infra/store';
+import { ISpace } from '../src/utils/types';
 
 // Mock external dependencies for performance tests
 jest.mock('fs-extra');
@@ -10,17 +10,27 @@ jest.mock('child_process');
 jest.mock('@inquirer/prompts');
 jest.mock('../src/utils/sshKeyGen');
 jest.mock('../src/utils/index');
+jest.mock('../src/infra/store', () => ({
+  ...jest.requireActual('../src/infra/store'),
+  loadStore: jest.fn(),
+  saveStore: jest.fn()
+}));
+
+function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
+  return { version: 2, identities: spaces.map(fromSpace), active, bindings: [] };
+}
 
 describe('Performance Tests', () => {
   const mockHomeDir = '/mock/home';
-  const mockConfigPath = path.join(mockHomeDir, '.dss', 'spaces', 'config.json');
-  const mockFs = fs as jest.Mocked<typeof fs>;
+  const mockLoadStore = loadStore as jest.MockedFunction<typeof loadStore>;
+  const mockSaveStore = saveStore as jest.MockedFunction<typeof saveStore>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(os, 'homedir').mockReturnValue(mockHomeDir);
     jest.spyOn(console, 'log').mockImplementation();
     jest.spyOn(console, 'error').mockImplementation();
+    mockSaveStore.mockResolvedValue(undefined);
   });
 
   describe('Space Operations Performance', () => {
@@ -32,8 +42,7 @@ describe('Performance Tests', () => {
         sshKeyPath: `/mock/path/space-${i}/id_rsa`
       }));
 
-      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
-      mockFs.readJson.mockResolvedValue({ spaces: mockSpaces });
+      mockLoadStore.mockResolvedValue(storeOf(mockSpaces));
 
       const startTime = performance.now();
       await listSpaces();
@@ -51,9 +60,7 @@ describe('Performance Tests', () => {
         sshKeyPath: '/mock/path/test-space/id_rsa'
       };
 
-      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
-      mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
-      mockFs.writeJson.mockResolvedValue();
+      mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
 
       const { execFile } = require('child_process');
       execFile.mockImplementation((_file: string, _args: string[], callback: any) => {
@@ -72,18 +79,15 @@ describe('Performance Tests', () => {
     });
 
     it('should handle configuration file operations efficiently', async () => {
-      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
-      mockFs.readJson.mockResolvedValue({ spaces: [] });
-      mockFs.writeJson.mockResolvedValue();
+      mockLoadStore.mockResolvedValue(storeOf([]));
 
       const operations = [];
       const startTime = performance.now();
 
       // Simulate multiple rapid configuration operations
       for (let i = 0; i < 10; i++) {
-        operations.push(mockFs.ensureFile(mockConfigPath));
-        operations.push(mockFs.readJson(mockConfigPath));
-        operations.push(mockFs.writeJson(mockConfigPath, { spaces: [] }));
+        operations.push(loadStore());
+        operations.push(saveStore(storeOf([])));
       }
 
       await Promise.all(operations);
@@ -96,8 +100,7 @@ describe('Performance Tests', () => {
 
   describe('Memory Usage Tests', () => {
     it('should not leak memory during repeated operations', async () => {
-      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
-      mockFs.readJson.mockResolvedValue({ spaces: [] });
+      mockLoadStore.mockResolvedValue(storeOf([]));
 
       const initialMemory = process.memoryUsage().heapUsed;
 
@@ -121,8 +124,7 @@ describe('Performance Tests', () => {
 
   describe('Stress Tests', () => {
     it('should handle concurrent operations gracefully', async () => {
-      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
-      mockFs.readJson.mockResolvedValue({ spaces: [] });
+      mockLoadStore.mockResolvedValue(storeOf([]));
 
       const concurrentOperations = Array.from({ length: 20 }, () => listSpaces());
 
@@ -142,8 +144,7 @@ describe('Performance Tests', () => {
         sshKeyPath: `/mock/path/space-${i}/id_rsa`
       }));
 
-      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
-      mockFs.readJson.mockResolvedValue({ spaces: largeSpacesArray });
+      mockLoadStore.mockResolvedValue(storeOf(largeSpacesArray));
 
       const startTime = performance.now();
       await listSpaces();
@@ -156,13 +157,11 @@ describe('Performance Tests', () => {
 
   describe('Benchmarks', () => {
     it('should benchmark basic operations', async () => {
-      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
-      mockFs.readJson.mockResolvedValue({ spaces: [] });
+      mockLoadStore.mockResolvedValue(storeOf([]));
 
       const benchmarks = {
         listSpaces: 0,
-        ensureFile: 0,
-        readJson: 0
+        loadStore: 0
       };
 
       // Benchmark listSpaces
@@ -170,22 +169,17 @@ describe('Performance Tests', () => {
       await listSpaces();
       benchmarks.listSpaces = performance.now() - listSpacesStart;
 
-      // Benchmark file operations
-      const fileOpsStart = performance.now();
-      await mockFs.ensureFile(mockConfigPath);
-      benchmarks.ensureFile = performance.now() - fileOpsStart;
-
-      const readJsonStart = performance.now();
-      await mockFs.readJson(mockConfigPath);
-      benchmarks.readJson = performance.now() - readJsonStart;
+      // Benchmark the underlying store load
+      const loadStoreStart = performance.now();
+      await loadStore();
+      benchmarks.loadStore = performance.now() - loadStoreStart;
 
       // Log benchmarks for analysis
       console.log('Performance Benchmarks:', benchmarks);
 
       // Verify reasonable performance thresholds
       expect(benchmarks.listSpaces).toBeLessThan(50);
-      expect(benchmarks.ensureFile).toBeLessThan(10);
-      expect(benchmarks.readJson).toBeLessThan(10);
+      expect(benchmarks.loadStore).toBeLessThan(10);
     });
   });
 });
