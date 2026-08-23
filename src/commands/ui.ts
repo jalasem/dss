@@ -121,7 +121,7 @@ export class UIHelper {
     return str + ' '.repeat(padding);
   }
 
-  static printSpaceTable(spaces: Array<{ name: string; email: string; userName: string; sshKeyPath: string }>, activeSpace?: string): void {
+  static printSpaceTable(spaces: Array<{ name: string; email: string; userName: string; sshKeyPath: string; host?: string }>, activeSpace?: string): void {
     if (spaces.length === 0) {
       this.warning('No spaces have been added yet.');
       return;
@@ -129,63 +129,70 @@ export class UIHelper {
 
     const terminalWidth = process.stdout.columns || 80;
     const maxTableWidth = Math.min(terminalWidth - 4, 120);
-    
+
     // Calculate column widths with responsive sizing
     const minNameWidth = 8;
     const minEmailWidth = 12;
     const minUserWidth = 8;
+    const minHostWidth = 10;
     const statusWidth = 8;
-    
+
     // Get the actual content lengths
     const baseNameWidth = Math.max(minNameWidth, ...spaces.map(s => s.name.length));
     const baseEmailWidth = Math.max(minEmailWidth, ...spaces.map(s => s.email.length));
     const baseUserWidth = Math.max(minUserWidth, ...spaces.map(s => s.userName.length));
-    
-    const totalBaseWidth = baseNameWidth + baseEmailWidth + baseUserWidth + statusWidth + 12; // 12 for borders and padding
-    
+    const baseHostWidth = Math.max(minHostWidth, ...spaces.map(s => (s.host ?? 'github.com').length));
+
+    const totalBaseWidth = baseNameWidth + baseEmailWidth + baseUserWidth + baseHostWidth + statusWidth + 15; // 15 for borders and padding
+
     let nameWidth = baseNameWidth;
     let emailWidth = baseEmailWidth;
     let userWidth = baseUserWidth;
-    
+    let hostWidth = baseHostWidth;
+
     // Adjust widths if table is too wide for terminal
     if (totalBaseWidth > maxTableWidth) {
-      const availableWidth = maxTableWidth - statusWidth - 12;
-      const totalContentWidth = baseNameWidth + baseEmailWidth + baseUserWidth;
-      
+      const availableWidth = maxTableWidth - statusWidth - 15;
+      const totalContentWidth = baseNameWidth + baseEmailWidth + baseUserWidth + baseHostWidth;
+
       // Proportionally reduce each column
       nameWidth = Math.max(minNameWidth, Math.floor((baseNameWidth / totalContentWidth) * availableWidth));
       emailWidth = Math.max(minEmailWidth, Math.floor((baseEmailWidth / totalContentWidth) * availableWidth));
-      userWidth = Math.max(minUserWidth, availableWidth - nameWidth - emailWidth);
+      hostWidth = Math.max(minHostWidth, Math.floor((baseHostWidth / totalContentWidth) * availableWidth));
+      userWidth = Math.max(minUserWidth, availableWidth - nameWidth - emailWidth - hostWidth);
     }
 
     // Create border components
-    const topBorder = `┌${'─'.repeat(nameWidth + 2)}┬${'─'.repeat(emailWidth + 2)}┬${'─'.repeat(userWidth + 2)}┬${'─'.repeat(statusWidth + 2)}┐`;
-    const separator = `├${'─'.repeat(nameWidth + 2)}┼${'─'.repeat(emailWidth + 2)}┼${'─'.repeat(userWidth + 2)}┼${'─'.repeat(statusWidth + 2)}┤`;
-    const bottomBorder = `└${'─'.repeat(nameWidth + 2)}┴${'─'.repeat(emailWidth + 2)}┴${'─'.repeat(userWidth + 2)}┴${'─'.repeat(statusWidth + 2)}┘`;
+    const topBorder = `┌${'─'.repeat(nameWidth + 2)}┬${'─'.repeat(emailWidth + 2)}┬${'─'.repeat(userWidth + 2)}┬${'─'.repeat(hostWidth + 2)}┬${'─'.repeat(statusWidth + 2)}┐`;
+    const separator = `├${'─'.repeat(nameWidth + 2)}┼${'─'.repeat(emailWidth + 2)}┼${'─'.repeat(userWidth + 2)}┼${'─'.repeat(hostWidth + 2)}┼${'─'.repeat(statusWidth + 2)}┤`;
+    const bottomBorder = `└${'─'.repeat(nameWidth + 2)}┴${'─'.repeat(emailWidth + 2)}┴${'─'.repeat(userWidth + 2)}┴${'─'.repeat(hostWidth + 2)}┴${'─'.repeat(statusWidth + 2)}┘`;
 
     // Print table header
     console.log(chalk.cyan(topBorder));
-    
-    const headerRow = `│ ${this.padWithColors(chalk.bold.white('Name'), nameWidth)} │ ${this.padWithColors(chalk.bold.white('Email'), emailWidth)} │ ${this.padWithColors(chalk.bold.white('User'), userWidth)} │ ${this.padWithColors(chalk.bold.white('Status'), statusWidth)} │`;
+
+    const headerRow = `│ ${this.padWithColors(chalk.bold.white('Name'), nameWidth)} │ ${this.padWithColors(chalk.bold.white('Email'), emailWidth)} │ ${this.padWithColors(chalk.bold.white('User'), userWidth)} │ ${this.padWithColors(chalk.bold.white('Host'), hostWidth)} │ ${this.padWithColors(chalk.bold.white('Status'), statusWidth)} │`;
     console.log(headerRow);
     console.log(chalk.cyan(separator));
 
     // Print each space row
     spaces.forEach(space => {
       const isActive = space.name === activeSpace;
-      
+      const host = space.host ?? 'github.com';
+
       // Truncate long values with ellipsis
       const truncatedName = space.name.length > nameWidth ? space.name.substring(0, nameWidth - 3) + '...' : space.name;
       const truncatedEmail = space.email.length > emailWidth ? space.email.substring(0, emailWidth - 3) + '...' : space.email;
       const truncatedUser = space.userName.length > userWidth ? space.userName.substring(0, userWidth - 3) + '...' : space.userName;
-      
+      const truncatedHost = host.length > hostWidth ? host.substring(0, hostWidth - 3) + '...' : host;
+
       // Apply styling based on active state
       const styledName = isActive ? this.activeSpace(truncatedName) : chalk.white(truncatedName);
       const styledEmail = isActive ? chalk.green(truncatedEmail) : chalk.gray(truncatedEmail);
       const styledUser = isActive ? chalk.green(truncatedUser) : chalk.gray(truncatedUser);
+      const styledHost = isActive ? chalk.green(truncatedHost) : chalk.gray(truncatedHost);
       const styledStatus = isActive ? this.badge('ACTIVE', 'success') : chalk.dim('inactive');
-      
-      const row = `│ ${this.padWithColors(styledName, nameWidth)} │ ${this.padWithColors(styledEmail, emailWidth)} │ ${this.padWithColors(styledUser, userWidth)} │ ${this.padWithColors(styledStatus, statusWidth)} │`;
+
+      const row = `│ ${this.padWithColors(styledName, nameWidth)} │ ${this.padWithColors(styledEmail, emailWidth)} │ ${this.padWithColors(styledUser, userWidth)} │ ${this.padWithColors(styledHost, hostWidth)} │ ${this.padWithColors(styledStatus, statusWidth)} │`;
       console.log(row);
     });
 

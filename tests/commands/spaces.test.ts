@@ -5,7 +5,7 @@ import { execFile } from 'child_process';
 import { input, confirm, select, password } from '@inquirer/prompts';
 import { generateKey } from '../../src/infra/keys';
 import { copyToClipboard } from '../../src/infra/clipboard';
-import { testGithubAccess, removeSSHKeyFromAgent, addToAgent } from '../../src/infra/ssh';
+import { testHostAccess, removeSSHKeyFromAgent, addToAgent, setHostSSHKey } from '../../src/infra/ssh';
 import { UIHelper } from '../../src/commands/ui';
 import type { loadStore as LoadStore, saveStore as SaveStore, fromSpace as FromSpace, IStoreV2 } from '../../src/infra/store';
 import type { ISpace, IKeyInfo } from '../../src/core/types';
@@ -74,9 +74,10 @@ const mockSelect = select as jest.MockedFunction<typeof select>;
 const mockPassword = password as jest.MockedFunction<typeof password>;
 const mockGenerateKey = generateKey as jest.MockedFunction<typeof generateKey>;
 const mockCopyToClipboard = copyToClipboard as jest.MockedFunction<typeof copyToClipboard>;
-const mockTestGithubAccess = testGithubAccess as jest.MockedFunction<typeof testGithubAccess>;
+const mockTestHostAccess = testHostAccess as jest.MockedFunction<typeof testHostAccess>;
 const mockRemoveSSHKeyFromAgent = removeSSHKeyFromAgent as jest.MockedFunction<typeof removeSSHKeyFromAgent>;
 const mockAddToAgent = addToAgent as jest.MockedFunction<typeof addToAgent>;
+const mockSetHostSSHKey = setHostSSHKey as jest.MockedFunction<typeof setHostSSHKey>;
 const mockLoadStore = loadStore as jest.MockedFunction<typeof LoadStore>;
 const mockSaveStore = saveStore as jest.MockedFunction<typeof SaveStore>;
 const typedFromSpace = fromSpace as typeof FromSpace;
@@ -286,6 +287,72 @@ describe('commands/spaces', () => {
 
       expect(mockGenerateKey).toHaveBeenCalledWith(expect.objectContaining({ passphrase: '' }));
     });
+
+    it('prompts for a Git host after the username, defaulting to github.com, and persists a selected non-default host', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+      mockSelect.mockResolvedValueOnce('gitlab.com');
+      mockConfirm
+        .mockResolvedValueOnce(false) // Don't generate SSH key
+        .mockResolvedValueOnce(false); // Don't switch to new space
+
+      await addSpace();
+
+      expect(mockSelect).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Git host:',
+        default: 'github.com'
+      }));
+      expect(mockSaveStore).toHaveBeenLastCalledWith(expect.objectContaining({
+        identities: [expect.objectContaining({ name: 'test-space', host: 'gitlab.com' })]
+      }));
+    });
+
+    it('supports a custom host via the "Other…" select choice', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User')
+        .mockResolvedValueOnce('git.example.com'); // custom host input
+      mockSelect.mockResolvedValueOnce('__other__');
+      mockConfirm
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false);
+
+      await addSpace();
+
+      expect(mockSaveStore).toHaveBeenLastCalledWith(expect.objectContaining({
+        identities: [expect.objectContaining({ name: 'test-space', host: 'git.example.com' })]
+      }));
+    });
+
+    it('uses the host-aware key-settings link (not a hardcoded GitHub one) in the success box', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+      mockSelect.mockResolvedValueOnce('gitlab.com');
+      mockConfirm
+        .mockResolvedValueOnce(true) // Generate SSH key
+        .mockResolvedValueOnce(false); // Don't switch to new space
+      mockPassword.mockResolvedValueOnce('');
+      mockGenerateKey.mockResolvedValue(mockKeyInfo);
+      mockCopyToClipboard.mockResolvedValue('copied');
+
+      await addSpace();
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some((call) => call && call.includes && call.includes('https://gitlab.com/-/user_settings/ssh_keys'))).toBe(true);
+      expect(calls.some((call) => call && call.includes && call.includes('github.com/settings/keys'))).toBe(false);
+    });
   });
 
   describe('listSpaces', () => {
@@ -311,6 +378,20 @@ describe('commands/spaces', () => {
       expect(console.log).toHaveBeenCalledTimes(2);
       expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
       expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
+    });
+
+    it('shows each space\'s host in a Host column', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([
+        { name: 'work', email: 'w@example.com', userName: 'W', host: 'gitlab.com', sshKeyPath: '' }
+      ]));
+
+      await listSpaces();
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      const hasHostColumn = calls.some(call => call && call.includes && call.includes('Host'));
+      const hasHostValue = calls.some(call => call && call.includes && call.includes('gitlab.com'));
+      expect(hasHostColumn).toBe(true);
+      expect(hasHostValue).toBe(true);
     });
   });
 
@@ -339,7 +420,20 @@ describe('commands/spaces', () => {
         expect.any(Function)
       );
       expect(mockAddToAgent).toHaveBeenCalledWith(mockSpace.sshKeyPath);
+      expect(mockSetHostSSHKey).toHaveBeenCalledWith(mockSpace.sshKeyPath, 'github.com');
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([mockSpace], 'test-space'));
+    });
+
+    it('calls setHostSSHKey and testHostAccess with the space\'s configured (non-default) host', async () => {
+      const glSpace = { ...mockSpace, host: 'gitlab.com' };
+      mockLoadStore.mockResolvedValue(storeOf([glSpace]));
+      mockConfirm.mockResolvedValue(true); // Test access
+      mockTestHostAccess.mockResolvedValue();
+
+      await switchSpace('test-space');
+
+      expect(mockSetHostSSHKey).toHaveBeenCalledWith(glSpace.sshKeyPath, 'gitlab.com');
+      expect(mockTestHostAccess).toHaveBeenCalledWith(glSpace.sshKeyPath, 'gitlab.com');
     });
 
     it('should handle space not found', async () => {
@@ -612,11 +706,21 @@ describe('commands/spaces', () => {
 
     it('should test the active space', async () => {
       mockLoadStore.mockResolvedValue(storeOf([mockSpace], 'test-space'));
-      mockTestGithubAccess.mockResolvedValue();
+      mockTestHostAccess.mockResolvedValue();
 
       await testSpace();
 
-      expect(mockTestGithubAccess).toHaveBeenCalledWith(mockSshKeyPath);
+      expect(mockTestHostAccess).toHaveBeenCalledWith(mockSshKeyPath, 'github.com');
+    });
+
+    it('should resolve a non-default host onto testHostAccess', async () => {
+      const workSpace = { ...mockSpace, host: 'gitlab.com' };
+      mockLoadStore.mockResolvedValue(storeOf([workSpace], 'test-space'));
+      mockTestHostAccess.mockResolvedValue();
+
+      await testSpace();
+
+      expect(mockTestHostAccess).toHaveBeenCalledWith(mockSshKeyPath, 'gitlab.com');
     });
 
     it('should handle space without SSH key', async () => {
@@ -648,11 +752,11 @@ describe('commands/spaces', () => {
         sshKeyPath: '/mock/home/.dss/spaces/other-space/id_rsa'
       };
       mockLoadStore.mockResolvedValue(storeOf([mockSpace, otherSpace], 'test-space'));
-      mockTestGithubAccess.mockResolvedValue();
+      mockTestHostAccess.mockResolvedValue();
 
       await testSpace('other-space');
 
-      expect(mockTestGithubAccess).toHaveBeenCalledWith(otherSpace.sshKeyPath);
+      expect(mockTestHostAccess).toHaveBeenCalledWith(otherSpace.sshKeyPath, 'github.com');
     });
 
     it('should NOT fall back to the active space when a named space does not exist', async () => {
@@ -660,7 +764,7 @@ describe('commands/spaces', () => {
 
       await testSpace('does-not-exist');
 
-      expect(mockTestGithubAccess).not.toHaveBeenCalled();
+      expect(mockTestHostAccess).not.toHaveBeenCalled();
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Space "does-not-exist" not found.'));
       expect(process.exitCode).toBe(1);
     });
@@ -673,11 +777,11 @@ describe('commands/spaces', () => {
         sshKeyPath: mockSshKeyPath
       };
       mockLoadStore.mockResolvedValue(storeOf([legacySpace], 'Test Space'));
-      mockTestGithubAccess.mockResolvedValue();
+      mockTestHostAccess.mockResolvedValue();
 
       await testSpace('test-space');
 
-      expect(mockTestGithubAccess).toHaveBeenCalledWith(mockSshKeyPath);
+      expect(mockTestHostAccess).toHaveBeenCalledWith(mockSshKeyPath, 'github.com');
     });
   });
 
@@ -689,17 +793,21 @@ describe('commands/spaces', () => {
       sshKeyPath: mockSshKeyPath
     };
 
-    it('should skip the select prompt when a space name is provided', async () => {
+    it('should skip the "which space" select prompt when a space name is provided (host select still fires)', async () => {
       mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
 
       mockInput
         .mockResolvedValueOnce(mockSpace.name)
         .mockResolvedValueOnce(mockSpace.email)
         .mockResolvedValueOnce(mockSpace.userName);
+      mockSelect.mockResolvedValueOnce('github.com');
 
       await modifySpace('test-space');
 
-      expect(mockSelect).not.toHaveBeenCalled();
+      expect(mockSelect).not.toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('Which space')
+      }));
+      expect(mockSelect).toHaveBeenCalledWith(expect.objectContaining({ message: 'Git host:' }));
     });
 
     it('should error when the named space does not exist', async () => {
@@ -986,6 +1094,57 @@ describe('commands/spaces', () => {
         call && call.includes && call.includes('dss bind') && call.includes('old key path')
       )).toBe(true);
     });
+
+    it('prompts for the host with the current value as the select default, and makes no change when re-selecting it', async () => {
+      const spaceWithHost = { ...mockSpace, host: 'gitlab.com' };
+      mockLoadStore.mockResolvedValue(storeOf([spaceWithHost]));
+
+      mockInput
+        .mockResolvedValueOnce(spaceWithHost.name)
+        .mockResolvedValueOnce(spaceWithHost.email)
+        .mockResolvedValueOnce(spaceWithHost.userName);
+      mockSelect.mockResolvedValueOnce('gitlab.com');
+
+      await modifySpace('test-space');
+
+      expect(mockSelect).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Git host:',
+        default: 'gitlab.com'
+      }));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No changes were made to the space.'));
+      expect(mockSaveStore).toHaveBeenCalledWith(storeOf([spaceWithHost]));
+    });
+
+    it('persists an edited host and reports the update as made', async () => {
+      const spaceWithHost = { ...mockSpace, host: 'gitlab.com' };
+      mockLoadStore.mockResolvedValue(storeOf([spaceWithHost]));
+
+      mockInput
+        .mockResolvedValueOnce(spaceWithHost.name)
+        .mockResolvedValueOnce(spaceWithHost.email)
+        .mockResolvedValueOnce(spaceWithHost.userName);
+      mockSelect.mockResolvedValueOnce('bitbucket.org');
+
+      await modifySpace('test-space');
+
+      expect(mockSaveStore).toHaveBeenCalledWith(storeOf([{ ...spaceWithHost, host: 'bitbucket.org' }]));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('updated successfully'));
+    });
+
+    it('supports a custom host via the "Other…" select choice during edit', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
+
+      mockInput
+        .mockResolvedValueOnce(mockSpace.name)
+        .mockResolvedValueOnce(mockSpace.email)
+        .mockResolvedValueOnce(mockSpace.userName)
+        .mockResolvedValueOnce('git.example.com'); // custom host input
+      mockSelect.mockResolvedValueOnce('__other__');
+
+      await modifySpace('test-space');
+
+      expect(mockSaveStore).toHaveBeenCalledWith(storeOf([{ ...mockSpace, host: 'git.example.com' }]));
+    });
   });
 
   describe('persistConfig identity metadata preservation (regression)', () => {
@@ -1060,6 +1219,27 @@ describe('commands/spaces', () => {
           return {} as any;
         }
       );
+    });
+
+    it('prints a Host status row, defaulting to github.com when unset', async () => {
+      const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
+
+      await inspectSpace('test-space');
+
+      const hostCall = printStatusSpy.mock.calls.find(call => call[0] === 'Host');
+      expect(hostCall?.[1]).toBe('github.com');
+      printStatusSpy.mockRestore();
+    });
+
+    it('prints a non-default Host status row', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([{ ...mockSpace, host: 'bitbucket.org' }], 'test-space'));
+      const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
+
+      await inspectSpace('test-space');
+
+      const hostCall = printStatusSpy.mock.calls.find(call => call[0] === 'Host');
+      expect(hostCall?.[1]).toBe('bitbucket.org');
+      printStatusSpy.mockRestore();
     });
 
     it('reports "Key loaded" when the fingerprint is present in ssh-add -l output', async () => {

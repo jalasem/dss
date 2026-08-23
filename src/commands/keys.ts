@@ -7,12 +7,15 @@ import { copyToClipboard } from '../infra/clipboard';
 import { loadStore, saveStore, setIdentityKey } from '../infra/store';
 import { findIdentity } from '../core/identity';
 import { IIdentity, IStoreV2 } from '../core/types';
+import { keySettingsUrl } from '../core/hosts';
 import { UIHelper } from './ui';
 import { fail } from './fail';
 import { safeConfirm } from './prompts';
 
-// Task 4 makes this host-aware; hardcoded to GitHub for now.
-const GITHUB_KEY_SETTINGS_URL = 'https://github.com/settings/keys';
+function keySettingsLine(host: string): string {
+  const url = keySettingsUrl(host);
+  return url ? `${host} SSH Keys: ${url}` : `Add the public key to your ${host} account.`;
+}
 
 async function resolveTargetIdentity(store: IStoreV2, identityName?: string): Promise<IIdentity | undefined> {
   if (identityName) {
@@ -68,7 +71,7 @@ export async function showKey(identityName?: string): Promise<void> {
   console.log(UIHelper.dim('\nPublic SSH Key:'));
   console.log(UIHelper.highlight(publicKey.trim()));
   console.log('');
-  UIHelper.info(`GitHub SSH Keys: ${GITHUB_KEY_SETTINGS_URL}`);
+  UIHelper.info(keySettingsLine(identity.host));
 }
 
 export async function copyKey(identityName?: string): Promise<void> {
@@ -147,7 +150,7 @@ export async function rotateKey(identityName?: string): Promise<void> {
     `✓ Fingerprint: ${keyInfo.fingerprint ?? 'unknown'}`,
     publicKey ? '✓ Public key copied to clipboard' : '⚠ Public key could not be copied to clipboard',
     '',
-    `GitHub SSH Keys: ${GITHUB_KEY_SETTINGS_URL}`
+    keySettingsLine(identity.host)
   ]);
 
   if (publicKey) {

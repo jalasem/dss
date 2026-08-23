@@ -95,6 +95,7 @@ export async function exportSpaceConfiguration() {
         name: space.name,
         email: space.email,
         userName: space.userName,
+        host: space.host ?? 'github.com',
         // Don't export SSH key paths for security
         hasSSHKey: !!space.sshKeyPath
       }))
@@ -162,6 +163,7 @@ export async function importSpaceConfiguration() {
       name: slugify(importSpace.name),
       email: importSpace.email,
       userName: importSpace.userName,
+      host: importSpace.host ?? 'github.com',
       sshKeyPath: '' // Will need to be set up manually
     }));
 

@@ -280,13 +280,19 @@ describe('infra/store', () => {
         name: 'personal',
         email: 'p@x.com',
         userName: 'P',
-        sshKeyPath: '/keys/personal/id_ed25519'
+        sshKeyPath: '/keys/personal/id_ed25519',
+        host: 'github.com'
       });
     });
 
     it('toSpace maps a keyless identity to an empty sshKeyPath', () => {
       const identity = { name: 'keyless', email: 'k@x.com', userName: 'K', host: 'github.com' };
       expect(store.toSpace(identity).sshKeyPath).toBe('');
+    });
+
+    it('toSpace carries a non-default host through', () => {
+      const identity = { name: 'work', email: 'w@x.com', userName: 'W', host: 'gitlab.com' };
+      expect(store.toSpace(identity).host).toBe('gitlab.com');
     });
 
     it('fromSpace infers ed25519 from an id_ed25519 filename', () => {
@@ -315,6 +321,13 @@ describe('infra/store', () => {
       const identity = store.fromSpace({ name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '' });
       expect(identity.key).toBeUndefined();
     });
+
+    it('fromSpace carries an explicit space.host through instead of defaulting', () => {
+      const identity = store.fromSpace({
+        name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '', host: 'bitbucket.org'
+      });
+      expect(identity.host).toBe('bitbucket.org');
+    });
   });
 
   describe('mergeIdentity', () => {
@@ -334,6 +347,17 @@ describe('infra/store', () => {
       expect(merged.host).toBe('gitlab.com');
       expect(merged.email).toBe('new@x.com');
       expect(merged.userName).toBe('New');
+    });
+
+    it('uses the edited space\'s explicit host instead of the original when both are present', () => {
+      const original: IIdentity = {
+        name: 'a', email: 'a@x.com', userName: 'A', host: 'github.com'
+      };
+      const space = { name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '', host: 'gitlab.com' };
+
+      const merged = store.mergeIdentity(space, original);
+
+      expect(merged.host).toBe('gitlab.com');
     });
 
     it('preserves key fingerprint and createdAt when the key path is unchanged', () => {

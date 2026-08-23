@@ -130,6 +130,27 @@ describe('commands/keys', () => {
       expect(calls).toContain('ssh-ed25519 AAAA... test@example.com');
       expect(calls).toContain('https://github.com/settings/keys');
     });
+
+    it('links to the host-specific key-settings page for a non-GitHub identity', async () => {
+      const gitlabIdentity: IIdentity = { ...keyedIdentity, name: 'gl-space', host: 'gitlab.com' };
+      mockLoadStore.mockResolvedValue(storeWith([gitlabIdentity], 'gl-space'));
+
+      await showKey();
+
+      const calls = (console.log as jest.Mock).mock.calls.flat().join('\n');
+      expect(calls).toContain('https://gitlab.com/-/user_settings/ssh_keys');
+      expect(calls).not.toContain('github.com/settings/keys');
+    });
+
+    it('falls back to generic guidance for a host with no known key-settings page', async () => {
+      const customIdentity: IIdentity = { ...keyedIdentity, name: 'custom-space', host: 'git.example.com' };
+      mockLoadStore.mockResolvedValue(storeWith([customIdentity], 'custom-space'));
+
+      await showKey();
+
+      const calls = (console.log as jest.Mock).mock.calls.flat().join('\n');
+      expect(calls).toContain('Add the public key to your git.example.com account.');
+    });
   });
 
   describe('copyKey', () => {

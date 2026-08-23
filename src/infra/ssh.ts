@@ -6,7 +6,7 @@ import path from "path";
 // LAYER VIOLATION (flagged, not fixed — see task-2-report.md "Concerns"):
 // these functions print via UIHelper/fail on success/failure paths that are
 // interleaved with control flow in their callers (e.g. switchSpace keeps
-// going after a failed setGitHubSSHKey/removeSSHKeyFromAgent because these
+// going after a failed setHostSSHKey/removeSSHKeyFromAgent because these
 // call fail() internally instead of throwing). Inverting to "throw/return,
 // print in the command layer" would change that control flow, which the
 // brief says to avoid — so the UIHelper/fail imports stay here.
@@ -16,33 +16,166 @@ import { fail } from "../commands/fail";
 
 const execFileAsync = promisify(execFile);
 
-export async function setGitHubSSHKey(sshKeyPath: string) {
+// ---------------------------------------------------------------------------
+// ssh-config parsing: parse-don't-splice
+// ---------------------------------------------------------------------------
+
+export interface SshConfigBlock {
+  keyword: 'Host' | 'Match';
+  /** Pattern tokens after the keyword (empty for Match blocks). */
+  patterns: string[];
+  /** The exact original "Host ..."/"Match ..." line, unmodified. */
+  headerLine: string;
+  /** Raw body lines belonging to this block (comments, directives, blank lines), unmodified unless this is the target block being updated. */
+  lines: string[];
+}
+
+export interface ParsedSshConfig {
+  /** Raw lines before the first Host/Match directive. */
+  preamble: string[];
+  blocks: SshConfigBlock[];
+}
+
+const HOST_OR_MATCH_LINE = /^\s*(Host|Match)\s+(.*)$/i;
+
+/**
+ * Parses an ssh_config file into an ordered preamble + Host/Match block
+ * list, keeping every line's exact original text so untouched content can
+ * be reproduced byte-for-byte by `serialize`.
+ */
+export function parseSshConfig(content: string): ParsedSshConfig {
+  const lines = content.split('\n');
+  const preamble: string[] = [];
+  const blocks: SshConfigBlock[] = [];
+  let current: SshConfigBlock | null = null;
+
+  for (const line of lines) {
+    const match = line.match(HOST_OR_MATCH_LINE);
+    if (match) {
+      if (current) blocks.push(current);
+      const keyword: 'Host' | 'Match' = match[1].toLowerCase() === 'host' ? 'Host' : 'Match';
+      const patterns = keyword === 'Host' ? match[2].trim().split(/\s+/).filter(Boolean) : [];
+      current = { keyword, patterns, headerLine: line, lines: [] };
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      preamble.push(line);
+    }
+  }
+  if (current) blocks.push(current);
+
+  return { preamble, blocks };
+}
+
+/** Reproduces a ParsedSshConfig back into ssh_config text. Round-trips byte-for-byte when nothing was changed. */
+export function serialize(parsed: ParsedSshConfig): string {
+  const parts: string[] = [...parsed.preamble];
+  for (const block of parsed.blocks) {
+    parts.push(block.headerLine, ...block.lines);
+  }
+  return parts.join('\n');
+}
+
+const MANAGED_DIRECTIVES = ['HostName', 'User', 'IdentityFile', 'IdentitiesOnly'] as const;
+
+function directiveLine(name: string, value: string): string {
+  return `  ${name} ${value}`;
+}
+
+function upsertDirective(lines: string[], name: string, value: string): string[] {
+  const re = new RegExp(`^\\s*${name}\\b`, 'i');
+  const idx = lines.findIndex((line) => re.test(line));
+  const formatted = directiveLine(name, value);
+  if (idx === -1) return [...lines, formatted];
+  const updated = [...lines];
+  updated[idx] = formatted;
+  return updated;
+}
+
+function buildManagedBlockLines(existingLines: string[], sshKeyPath: string, host: string): string[] {
+  const values: Record<typeof MANAGED_DIRECTIVES[number], string> = {
+    HostName: host,
+    User: 'git',
+    IdentityFile: sshKeyPath,
+    IdentitiesOnly: 'yes'
+  };
+  let lines = existingLines;
+  for (const directive of MANAGED_DIRECTIVES) {
+    lines = upsertDirective(lines, directive, values[directive]);
+  }
+  return lines;
+}
+
+/**
+ * Applies the "HostName/User/IdentityFile/IdentitiesOnly" managed lines for
+ * `host`, targeting ONLY a `Host` block whose pattern list is exactly the
+ * single literal `host` (never a multi-pattern list like "Host a b", never
+ * `github.com-work`, never a Match block). All other lines in that block
+ * (ProxyJump, Port, comments, ...) and every other block are left
+ * byte-identical. When no such block exists, a new one is appended at the
+ * end (old splice-created "Host github.com" blocks match exactly and are
+ * adopted in place instead of duplicated).
+ */
+export function applyHostSSHKey(content: string, sshKeyPath: string, host: string): string {
+  const parsed = parseSshConfig(content);
+  const targetIndex = parsed.blocks.findIndex(
+    (block) => block.keyword === 'Host' && block.patterns.length === 1 && block.patterns[0] === host
+  );
+
+  if (targetIndex !== -1) {
+    const target = parsed.blocks[targetIndex];
+    const updatedLines = buildManagedBlockLines(target.lines, sshKeyPath, host);
+    const blocks = [...parsed.blocks];
+    blocks[targetIndex] = { ...target, lines: updatedLines };
+    return serialize({ preamble: parsed.preamble, blocks });
+  }
+
+  const newBlockText = [`Host ${host}`, ...buildManagedBlockLines([], sshKeyPath, host)].join('\n');
+  const existing = serialize(parsed);
+  const trimmedExisting = existing.replace(/\s+$/, '');
+  return trimmedExisting === '' ? newBlockText : `${trimmedExisting}\n\n${newBlockText}`;
+}
+
+/**
+ * Updates (or creates) the SSH config block for `host` to point at
+ * `sshKeyPath`, via parse-don't-splice: reads the existing config, parses it
+ * into blocks, and only rewrites the four managed lines of the matching
+ * `Host <host>` block (or appends a new one), leaving everything else —
+ * comments, ProxyJump/Port lines, other hosts, indentation — untouched.
+ * Writes only when the content actually changed, taking a single rolling
+ * backup at `~/.ssh/config.dss.bak` (overwritten each time) immediately
+ * before every write. A freshly-created config file is chmod'd 600; an
+ * existing file's permissions are left as-is.
+ */
+export async function setHostSSHKey(sshKeyPath: string, host: string): Promise<void> {
   const sshConfigPath = path.join(os.homedir(), '.ssh', 'config');
-  const hostConfig = `Host github.com\n  HostName github.com\n  User git\n  IdentityFile ${sshKeyPath}\n  IdentitiesOnly yes\n`;
+  const backupPath = `${sshConfigPath}.dss.bak`;
 
   try {
+    const existedBefore = await fs.pathExists(sshConfigPath);
     await fs.ensureFile(sshConfigPath);
-
-    let sshConfig = await fs.readFile(sshConfigPath, 'utf8');
-
-    const githubConfigIndex = sshConfig.indexOf('Host github.com');
-    if (githubConfigIndex !== -1) {
-      const nextHostIndex = sshConfig.indexOf('Host ', githubConfigIndex + 1);
-      if (nextHostIndex !== -1) {
-        sshConfig = sshConfig.slice(0, githubConfigIndex) + hostConfig + sshConfig.slice(nextHostIndex);
-      } else {
-        sshConfig = sshConfig.slice(0, githubConfigIndex) + hostConfig;
-      }
-    } else {
-      sshConfig += `\n${hostConfig}`;
+    if (!existedBefore) {
+      await fs.chmod(sshConfigPath, 0o600);
     }
 
-    await fs.writeFile(sshConfigPath, sshConfig);
-    UIHelper.success('SSH config for GitHub updated successfully.');
+    const original = await fs.readFile(sshConfigPath, 'utf8');
+    const updated = applyHostSSHKey(original, sshKeyPath, host);
+
+    if (updated === original) {
+      return;
+    }
+
+    await fs.copy(sshConfigPath, backupPath, { overwrite: true });
+    await fs.writeFile(sshConfigPath, updated);
+    UIHelper.success(`SSH config for ${host} updated successfully.`);
   } catch (error) {
-    fail('Failed to update SSH config for GitHub: ' + (error as Error).message);
+    fail(`Failed to update SSH config for ${host}: ` + (error as Error).message);
   }
 }
+
+// ---------------------------------------------------------------------------
+// ssh-agent
+// ---------------------------------------------------------------------------
 
 /**
  * Adds a key to the ssh-agent. On macOS, prefers `--apple-use-keychain` so
@@ -71,21 +204,40 @@ export async function removeSSHKeyFromAgent(sshKeyPath: string): Promise<void> {
   }
 }
 
-export async function testGithubAccess(sshKeyPath: string): Promise<void> {
-  UIHelper.printHeader("Testing SSH Access to GitHub");
+// ---------------------------------------------------------------------------
+// Host access test
+// ---------------------------------------------------------------------------
+
+// Substrings a host's SSH banner uses to confirm authentication even though
+// the "ssh -T" command itself exits non-zero (none of these hosts grant
+// shell access over SSH, so a non-zero exit is the expected happy path).
+const SUCCESS_MARKERS = [
+  'successfully authenticated', // GitHub
+  'Welcome to GitLab',          // GitLab
+  'logged in as',                // Bitbucket
+  'authenticated via'            // Bitbucket
+];
+
+/**
+ * Tests SSH access to `host` using `sshKeyPath` specifically, via
+ * `-i <path> -o IdentitiesOnly=yes`. This is key-specific and no longer
+ * depends on the ssh-agent or ssh-config being set up for the space, so
+ * (unlike the old testGithubAccess) it does NOT ssh-add the key first.
+ */
+export async function testHostAccess(sshKeyPath: string, host: string): Promise<void> {
+  UIHelper.printHeader(`Testing SSH Access to ${host}`);
 
   try {
-    await execFileAsync('ssh-add', [sshKeyPath]);
-
     try {
-      await execFileAsync('ssh', ['-T', 'git@github.com']);
-      UIHelper.success("🎉 Space configuration works! You've successfully authenticated with GitHub.");
+      await execFileAsync('ssh', ['-i', sshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', `git@${host}`]);
+      UIHelper.success(`🎉 Space configuration works! You've successfully authenticated with ${host}.`);
     } catch (error) {
-      const stderr = (error as { stderr?: string }).stderr ?? '';
-      if (stderr.includes("successfully authenticated")) {
-        UIHelper.success("🎉 Space configuration works! You've successfully authenticated with GitHub.");
+      const { stderr, stdout } = error as { stderr?: string; stdout?: string };
+      const output = `${stderr ?? ''}${stdout ?? ''}`;
+      if (SUCCESS_MARKERS.some((marker) => output.includes(marker))) {
+        UIHelper.success(`🎉 Space configuration works! You've successfully authenticated with ${host}.`);
       } else {
-        fail("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
+        fail(`🚨 Error testing SSH access to ${host}: ` + (error as Error).message);
       }
     }
 
@@ -100,7 +252,7 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
     console.log(UIHelper.dim("\nPublic SSH Key:"));
     console.log(UIHelper.highlight(publicKey));
   } catch (error) {
-    fail("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
-    UIHelper.info("Ensure the SSH key has been added to the ssh-agent and is associated with your GitHub account.");
+    fail(`🚨 Error testing SSH access to ${host}: ` + (error as Error).message);
+    UIHelper.info(`Ensure the public key has been added to your ${host} account.`);
   }
 }

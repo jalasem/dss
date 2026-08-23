@@ -3,6 +3,7 @@ export interface ISpace {
   email: string;
   userName: string;
   sshKeyPath: string;
+  host?: string;
 }
 
 export interface IConfig {

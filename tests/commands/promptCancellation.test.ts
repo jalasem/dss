@@ -1,5 +1,5 @@
 import { confirm } from '@inquirer/prompts';
-import { testGithubAccess } from '../../src/infra/ssh';
+import { testHostAccess } from '../../src/infra/ssh';
 import { generateCompletionScript } from '../../src/commands/completion';
 import { bindSpaceToRepository } from '../../src/commands/binding';
 import { safeConfirm, isPromptExitError } from '../../src/commands/prompts';
@@ -93,7 +93,7 @@ describe('prompt cancellation handling', () => {
     });
   });
 
-  describe('dss test (testGithubAccess)', () => {
+  describe('dss test (testHostAccess)', () => {
     it('does not report an SSH error when the public-key prompt is closed', async () => {
       (mockExecFile as unknown as jest.Mock).mockImplementation(
         (_file: string, _args: string[], callback: (error: Error | null, result: { stdout: string; stderr: string }) => void) => {
@@ -102,7 +102,7 @@ describe('prompt cancellation handling', () => {
       );
       mockConfirm.mockRejectedValue(createExitPromptError());
 
-      await testGithubAccess('/mock/key');
+      await testHostAccess('/mock/key', 'github.com');
 
       expect(errorSpy).not.toHaveBeenCalled();
     });

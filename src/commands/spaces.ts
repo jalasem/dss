@@ -5,10 +5,11 @@ import fs from "fs-extra";
 import path from "path";
 import { generateKey } from "../infra/keys";
 import { copyToClipboard } from "../infra/clipboard";
-import { addToAgent, removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAccess } from "../infra/ssh";
+import { addToAgent, removeSSHKeyFromAgent, setHostSSHKey, testHostAccess } from "../infra/ssh";
 import { setGitUser, getGitUser } from "../infra/git";
-import { isPromptExitError, safePassword } from "./prompts";
+import { isPromptExitError, safePassword, promptHost } from "./prompts";
 import { ISpace, IKeyInfo } from "../core/types";
+import { keySettingsUrl } from "../core/hosts";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
 import { slugify, findSpace } from "../core/identity";
@@ -51,6 +52,8 @@ export async function addSpace() {
     },
   });
 
+  const host = await promptHost();
+
   const shouldGenerateKey = await confirm({
     message: "Generate a new SSH key for this space?",
     default: true,
@@ -90,11 +93,12 @@ export async function addSpace() {
       await copyToClipboard(publicKey);
 
       UIHelper.success("SSH key generated successfully!");
+      const settingsUrl = keySettingsUrl(host);
       UIHelper.printSuccessBox("SSH Key Ready", [
         "✓ Public key copied to clipboard",
-        "✓ Add it to your GitHub account",
+        `✓ Add it to your ${host} account`,
         "",
-        "GitHub SSH Keys: https://github.com/settings/keys"
+        settingsUrl ? `${host} SSH Keys: ${settingsUrl}` : `Add the public key to your ${host} account.`
       ]);
 
       console.log(UIHelper.dim("\nPublic SSH Key:"));
@@ -111,6 +115,7 @@ export async function addSpace() {
     name: slugifiedSpaceName,
     email,
     userName,
+    host,
     sshKeyPath,
   };
 
@@ -201,6 +206,7 @@ export async function switchSpace(
   }
 
   const hasKey = Boolean(space.sshKeyPath);
+  const host = space.host ?? 'github.com';
 
   // Check for dry-run mode
   if (options?.dryRun) {
@@ -212,7 +218,7 @@ export async function switchSpace(
     if (hasKey) {
       previewLines.push(
         `✓ Would activate SSH key: ${space.sshKeyPath}`,
-        `✓ Would update SSH config for GitHub`
+        `✓ Would update SSH config for ${host}`
       );
     } else {
       previewLines.push(`⚠ No key configured — key activation steps would be skipped`);
@@ -233,7 +239,7 @@ export async function switchSpace(
       // Add SSH key to the ssh-agent
       await addToAgent(space.sshKeyPath);
       UIHelper.success(`SSH key added to ssh-agent successfully.`);
-      await setGitHubSSHKey(space.sshKeyPath);
+      await setHostSSHKey(space.sshKeyPath, host);
     } else {
       UIHelper.warning(
         `Space "${space.name}" has no SSH key — Git identity switched, SSH config unchanged. ` +
@@ -254,12 +260,12 @@ export async function switchSpace(
 
     if (hasKey) {
       const confirmTest = await confirm({
-        message: "Test GitHub access for this space?",
+        message: `Test SSH access to ${host} for this space?`,
         default: false,
       });
 
       if (confirmTest) {
-        await testGithubAccess(space.sshKeyPath);
+        await testHostAccess(space.sshKeyPath, host);
       }
     }
 
@@ -396,7 +402,7 @@ export async function testSpace(spaceName?: string) {
     return;
   }
 
-  await testGithubAccess(space.sshKeyPath);
+  await testHostAccess(space.sshKeyPath, space.host ?? 'github.com');
 }
 
 export async function modifySpace(spaceName?: string) {
@@ -425,6 +431,7 @@ export async function modifySpace(spaceName?: string) {
   const wasActive = space.name === config.activeSpace;
   const originalEmail = space.email;
   const originalUserName = space.userName;
+  const originalHost = space.host ?? 'github.com';
 
   const newSpaceName = await input({
     message: `New name for "${space.name}" (leave blank to skip):`,
@@ -438,6 +445,7 @@ export async function modifySpace(spaceName?: string) {
     message: "New user name (leave blank to skip):",
     default: space.userName,
   });
+  const host = await promptHost(originalHost);
 
   let isUpdateMade = false;
   if (slugify(newSpaceName) !== slugify(space.name)) {
@@ -485,6 +493,10 @@ export async function modifySpace(spaceName?: string) {
   }
   if (userName !== originalUserName) {
     space.userName = userName;
+    isUpdateMade = true;
+  }
+  if (host !== originalHost) {
+    space.host = host;
     isUpdateMade = true;
   }
 
@@ -542,6 +554,7 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
   UIHelper.printStatus("Name", space.name, space.name === config.activeSpace ? 'success' : 'info');
   UIHelper.printStatus("Email", space.email, 'info');
   UIHelper.printStatus("Username", space.userName, 'info');
+  UIHelper.printStatus("Host", space.host ?? 'github.com', 'info');
   UIHelper.printStatus("Status", space.name === config.activeSpace ? 'Active' : 'Inactive', space.name === config.activeSpace ? 'success' : 'info');
 
   console.log("");
@@ -574,9 +587,10 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
     const sshConfigPath = path.join(os.homedir(), '.ssh', 'config');
     if (await fs.pathExists(sshConfigPath)) {
       const sshConfig = await fs.readFile(sshConfigPath, 'utf8');
-      const hasGithubConfig = sshConfig.includes('Host github.com');
+      const configuredHost = space.host ?? 'github.com';
+      const hasHostConfig = sshConfig.includes(`Host ${configuredHost}`);
       const usesThisKey = sshConfig.includes(space.sshKeyPath);
-      UIHelper.printStatus("SSH Config", hasGithubConfig ? (usesThisKey ? 'Configured for this key' : 'Configured for different key') : 'No GitHub config', hasGithubConfig ? (usesThisKey ? 'success' : 'warning') : 'warning');
+      UIHelper.printStatus("SSH Config", hasHostConfig ? (usesThisKey ? 'Configured for this key' : 'Configured for different key') : `No ${configuredHost} config`, hasHostConfig ? (usesThisKey ? 'success' : 'warning') : 'warning');
     } else {
       UIHelper.printStatus("SSH Config", 'No SSH config file', 'warning');
     }
@@ -646,7 +660,7 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
   console.log(UIHelper.bold("Available Actions:"));
   console.log(UIHelper.dim("  • " + UIHelper.command(`dss switch ${space.name}`) + " - Switch to this space"));
   console.log(UIHelper.dim("  • " + UIHelper.command(`dss edit ${space.name}`) + " - Edit space configuration"));
-  console.log(UIHelper.dim("  • " + UIHelper.command(`dss test ${space.name}`) + " - Test GitHub access"));
+  console.log(UIHelper.dim("  • " + UIHelper.command(`dss test ${space.name}`) + ` - Test SSH access to ${space.host ?? 'github.com'}`));
 
   if (space.name !== config.activeSpace) {
     console.log(UIHelper.dim("  • " + UIHelper.command(`dss remove ${space.name}`) + " - Remove this space"));

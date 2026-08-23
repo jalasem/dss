@@ -41,7 +41,8 @@ export function toSpace(identity: IIdentity): ISpace {
     name: identity.name,
     email: identity.email,
     userName: identity.userName,
-    sshKeyPath: identity.key?.path ?? ''
+    sshKeyPath: identity.key?.path ?? '',
+    host: identity.host
   };
 }
 
@@ -50,7 +51,7 @@ export function fromSpace(space: ISpace): IIdentity {
     name: space.name,
     email: space.email,
     userName: space.userName,
-    host: 'github.com'
+    host: space.host ?? 'github.com'
   };
   if (space.sshKeyPath) {
     identity.key = {
@@ -63,16 +64,19 @@ export function fromSpace(space: ISpace): IIdentity {
 
 /**
  * Converts an ISpace (as edited via the back-compat view) back into an
- * IIdentity, preserving metadata the ISpace view can't carry — host, key
+ * IIdentity, preserving metadata the ISpace view can't carry — key
  * fingerprint/createdAt, and algorithm when the key path is unchanged —
- * from the identity it was originally derived from. Pass `undefined` for a
- * brand-new space (no prior identity to preserve anything from).
+ * from the identity it was originally derived from. The edited space's own
+ * `host` wins when present (an explicit edit); otherwise the original
+ * identity's host is preserved rather than resetting to the fromSpace
+ * default. Pass `undefined` for a brand-new space (no prior identity to
+ * preserve anything from).
  */
 export function mergeIdentity(space: ISpace, original: IIdentity | undefined): IIdentity {
   const updated = fromSpace(space);
   if (!original) return updated;
 
-  updated.host = original.host;
+  updated.host = space.host ?? original.host;
 
   if (updated.key && original.key) {
     updated.key = {
