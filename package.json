@@ -37,7 +37,7 @@
     "beautiful-cli"
   ],
   "author": "Ajala Abdulsamii <kgasta@gmail.com>",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@inquirer/prompts": "^4.3.0",
     "@inquirer/select": "^2.2.0",
