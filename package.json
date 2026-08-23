@@ -1,6 +1,6 @@
 {
   "name": "@jalasem/dss",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Dev Spaces Switcher (DSS) - Seamlessly manage isolated development environments with separate SSH keys and Git configurations. Enhanced UI with beautiful tables and improved documentation.",
   "main": "build/index.js",
   "bin": {
