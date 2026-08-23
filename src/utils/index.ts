@@ -3,8 +3,8 @@ import { promisify } from 'util';
 import os from "os";
 import fs from "fs-extra";
 import path from "path";
-import { confirm } from "@inquirer/prompts";
 import { UIHelper } from "./ui";
+import { safeConfirm } from "./prompts";
 
 const execAsync = promisify(exec);
 
@@ -63,7 +63,7 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
       }
     }
     
-    const showPublicKey = await confirm({
+    const showPublicKey = await safeConfirm({
       message: "Would you like to see the public SSH key?",
       default: false,
     });

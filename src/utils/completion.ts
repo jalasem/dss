@@ -1,8 +1,9 @@
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { select, confirm } from '@inquirer/prompts';
+import { select } from '@inquirer/prompts';
 import { UIHelper } from './ui';
+import { safeConfirm } from './prompts';
 // import { IConfig } from './types';
 
 // const configPath = path.join(os.homedir(), '.dss', 'spaces', 'config.json');
@@ -43,7 +44,7 @@ export async function generateCompletionScript(shell?: string): Promise<void> {
   // Show installation instructions
   showInstallationInstructions(selectedShell);
 
-  const saveScript = await confirm({
+  const saveScript = await safeConfirm({
     message: 'Would you like to save this script to a file?',
     default: true
   });

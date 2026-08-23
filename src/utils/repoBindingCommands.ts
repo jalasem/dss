@@ -1,4 +1,5 @@
-import { confirm, select } from '@inquirer/prompts';
+import { select } from '@inquirer/prompts';
+import { safeConfirm } from './prompts';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
@@ -100,7 +101,7 @@ export async function bindSpaceToRepository(
     repositories.forEach(repository => console.log(`  ${repository}`));
 
     if (!options.dryRun) {
-      const approved = await confirm({
+      const approved = await safeConfirm({
         message: `Bind ${repositories.length} repositories to "${space.name}"?`,
         default: false
       });

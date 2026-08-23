@@ -23,6 +23,7 @@ import {
   showRepositoryBindingStatus,
   unbindSpaceFromRepository
 } from './utils/repoBindingCommands';
+import { isPromptExitError } from './utils/prompts';
 
 program
   .name("dss")
@@ -115,7 +116,13 @@ program
   .option('-p, --path <repositoryPath>', 'Select an explicit Git repository')
   .action(showRepositoryBindingStatus);
 
-program.parse(process.argv);
+program.parseAsync(process.argv).catch((error) => {
+  if (isPromptExitError(error)) {
+    UIHelper.info('Prompt closed before an answer was given. No changes were made.');
+    process.exit(130);
+  }
+  throw error;
+});
 
 // Show help if no command provided
 if (!process.argv.slice(2).length) {
