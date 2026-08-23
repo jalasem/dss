@@ -11,7 +11,8 @@ import {
   testHostAccess,
   addToAgent,
   checkKeyLoadedInAgent,
-  checkSshConfigHost
+  checkSshConfigHost,
+  checkHostAccess
 } from '../../src/infra/ssh';
 
 jest.mock('child_process');
@@ -481,6 +482,112 @@ Host other.com
         ['-d', spacedKeyPath],
         expect.any(Function)
       );
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // checkHostAccess — the PURE, non-interactive host-auth check doctor
+  // uses instead of testHostAccess, so a script/CI run of `dss doctor`
+  // never blocks on stdin waiting for the "show public key?" prompt.
+  // -------------------------------------------------------------------
+
+  describe('checkHostAccess', () => {
+    it('resolves { ok: true } on a zero exit code, with no console output and no prompt', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      const result = await checkHostAccess(mockSshKeyPath, 'github.com');
+
+      expect(result).toEqual({ ok: true, detail: 'Successfully authenticated with github.com.' });
+      expect(consoleSpy).not.toHaveBeenCalled();
+      expect(mockConfirm).not.toHaveBeenCalled();
+
+      consoleSpy.mockRestore();
+    });
+
+    it('uses -i/-o IdentitiesOnly=yes -T with the given host, same as testHostAccess', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
+
+      await checkHostAccess(mockSshKeyPath, 'github.com');
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh',
+        ['-i', mockSshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', 'git@github.com'],
+        expect.any(Function)
+      );
+    });
+
+    it.each([
+      ['github.com', 'successfully authenticated'],
+      ['gitlab.com', 'Welcome to GitLab'],
+      ['bitbucket.org', 'logged in as'],
+      ['bitbucket.org', 'authenticated via']
+    ])('treats a non-zero exit on %s containing "%s" as ok: true', async (host, marker) => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (file: string, _args: string[], callback: any) => {
+          if (file === 'ssh') {
+            const error: any = new Error('Command failed');
+            error.stderr = `Hi there! ${marker}, but shell access is not provided.`;
+            callback(error);
+          } else {
+            callback(null, { stdout: '', stderr: '' });
+          }
+          return {} as any;
+        }
+      );
+
+      const result = await checkHostAccess(mockSshKeyPath, host);
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('resolves { ok: false, detail: <error message> } on a genuine non-zero exit with no known success marker, without touching process.exitCode itself', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (file: string, _args: string[], callback: any) => {
+          if (file === 'ssh') {
+            const error: any = new Error('Permission denied (publickey).');
+            error.stderr = 'Permission denied (publickey).';
+            callback(error);
+          } else {
+            callback(null, { stdout: '', stderr: '' });
+          }
+          return {} as any;
+        }
+      );
+      process.exitCode = undefined;
+
+      const result = await checkHostAccess(mockSshKeyPath, 'github.com');
+
+      expect(result).toEqual({ ok: false, detail: 'Permission denied (publickey).' });
+      // Pure check: no UI/exit-code side effects — that's the caller's job.
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('does not throw when an "ssh -T" spawn failure has no stderr/stdout property (regression, same as testHostAccess)', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (file: string, _args: string[], callback: any) => {
+          if (file === 'ssh') {
+            callback(new Error('spawn ssh ENOENT'));
+          } else {
+            callback(null, { stdout: '', stderr: '' });
+          }
+          return {} as any;
+        }
+      );
+
+      const result = await checkHostAccess(mockSshKeyPath, 'github.com');
+
+      expect(result).toEqual({ ok: false, detail: 'spawn ssh ENOENT' });
     });
   });
 

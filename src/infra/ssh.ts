@@ -301,27 +301,57 @@ const SUCCESS_MARKERS = [
   'authenticated via'            // Bitbucket
 ];
 
+/** Result of the pure, non-interactive host-auth check. */
+export interface HostAccessCheck {
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * PURE, non-interactive SSH host-auth check: runs `ssh -i <path> -o
+ * IdentitiesOnly=yes -T git@<host>` and applies the same exit-0/success-
+ * marker detection `testHostAccess` uses, but never prompts and never
+ * prints. Safe to call from a script-facing command (`dss doctor`) that
+ * must never block on stdin — unlike `testHostAccess`, which is the
+ * interactive flow built on top of this (header + success/failure message
+ * + the "show public key?" prompt, still used by the deprecated `test`
+ * alias and the post-switch "test access?" prompt).
+ */
+export async function checkHostAccess(sshKeyPath: string, host: string): Promise<HostAccessCheck> {
+  try {
+    await execFileAsync('ssh', ['-i', sshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', `git@${host}`]);
+    return { ok: true, detail: `Successfully authenticated with ${host}.` };
+  } catch (error) {
+    const { stderr, stdout } = error as { stderr?: string; stdout?: string };
+    const output = `${stderr ?? ''}${stdout ?? ''}`;
+    if (SUCCESS_MARKERS.some((marker) => output.includes(marker))) {
+      return { ok: true, detail: `Successfully authenticated with ${host}.` };
+    }
+    return { ok: false, detail: (error as Error).message };
+  }
+}
+
 /**
  * Tests SSH access to `host` using `sshKeyPath` specifically, via
  * `-i <path> -o IdentitiesOnly=yes`. This is key-specific and no longer
  * depends on the ssh-agent or ssh-config being set up for the space, so
  * (unlike the old testGithubAccess) it does NOT ssh-add the key first.
+ * The interactive flow (header, success/failure message, "show public
+ * key?" prompt) built on top of the pure `checkHostAccess` check — kept
+ * for the deprecated `test` alias and the post-switch access-test prompt.
+ * `dss doctor` calls `checkHostAccess` directly instead: it must never
+ * prompt (this always asks to show the public key, which would hang a
+ * script/CI invocation of doctor waiting on stdin).
  */
 export async function testHostAccess(sshKeyPath: string, host: string): Promise<void> {
   UIHelper.printHeader(`Testing SSH Access to ${host}`);
 
   try {
-    try {
-      await execFileAsync('ssh', ['-i', sshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', `git@${host}`]);
+    const result = await checkHostAccess(sshKeyPath, host);
+    if (result.ok) {
       UIHelper.success(`Space configuration works! You've successfully authenticated with ${host}.`);
-    } catch (error) {
-      const { stderr, stdout } = error as { stderr?: string; stdout?: string };
-      const output = `${stderr ?? ''}${stdout ?? ''}`;
-      if (SUCCESS_MARKERS.some((marker) => output.includes(marker))) {
-        UIHelper.success(`Space configuration works! You've successfully authenticated with ${host}.`);
-      } else {
-        fail(`Error testing SSH access to ${host}: ` + (error as Error).message);
-      }
+    } else {
+      fail(`Error testing SSH access to ${host}: ` + result.detail);
     }
 
     const showPublicKey = await safeConfirm({

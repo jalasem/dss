@@ -34,7 +34,7 @@ describe('CLI Integration Tests', () => {
     });
 
     it('should show command help for individual (new primary) commands', () => {
-      const commands = ['new', 'ls', 'use', 'rm', 'edit', 'test'];
+      const commands = ['new', 'ls', 'use', 'rm', 'edit', 'doctor'];
 
       commands.forEach(cmd => {
         try {

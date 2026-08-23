@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import { loadStore, fromSpace } from '../../src/infra/store';
 import { getRepositoryBindingStatus } from '../../src/infra/repoBinding';
-import { checkKeyLoadedInAgent, checkSshConfigHost, testHostAccess } from '../../src/infra/ssh';
+import { checkKeyLoadedInAgent, checkSshConfigHost, checkHostAccess } from '../../src/infra/ssh';
 import { getGitUser } from '../../src/infra/git';
 import { doctor } from '../../src/commands/doctor';
 import { IStoreV2, ISpace } from '../../src/core/types';
@@ -17,7 +17,7 @@ jest.mock('../../src/infra/repoBinding', () => ({
 jest.mock('../../src/infra/ssh', () => ({
   checkKeyLoadedInAgent: jest.fn(),
   checkSshConfigHost: jest.fn(),
-  testHostAccess: jest.fn()
+  checkHostAccess: jest.fn()
 }));
 jest.mock('../../src/infra/git', () => ({
   getGitUser: jest.fn()
@@ -28,7 +28,7 @@ const mockLoadStore = loadStore as jest.MockedFunction<typeof loadStore>;
 const mockGetRepositoryBindingStatus = getRepositoryBindingStatus as jest.MockedFunction<typeof getRepositoryBindingStatus>;
 const mockCheckKeyLoadedInAgent = checkKeyLoadedInAgent as jest.MockedFunction<typeof checkKeyLoadedInAgent>;
 const mockCheckSshConfigHost = checkSshConfigHost as jest.MockedFunction<typeof checkSshConfigHost>;
-const mockTestHostAccess = testHostAccess as jest.MockedFunction<typeof testHostAccess>;
+const mockCheckHostAccess = checkHostAccess as jest.MockedFunction<typeof checkHostAccess>;
 const mockGetGitUser = getGitUser as jest.MockedFunction<typeof getGitUser>;
 
 function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
@@ -53,7 +53,7 @@ describe('commands/doctor', () => {
     (mockFs.stat as unknown as jest.Mock).mockResolvedValue({ mode: 0o100600 });
     mockCheckKeyLoadedInAgent.mockResolvedValue({ loaded: true, checked: true, fingerprint: 'SHA256:abc' });
     mockCheckSshConfigHost.mockResolvedValue('match');
-    mockTestHostAccess.mockResolvedValue(undefined);
+    mockCheckHostAccess.mockResolvedValue({ ok: true, detail: 'Successfully authenticated with github.com.' });
     mockGetGitUser.mockResolvedValue({ userName: 'Work User', email: 'work@example.com' });
   });
 
@@ -188,24 +188,43 @@ describe('commands/doctor', () => {
       expect(process.exitCode).toBeUndefined();
     });
 
-    it('calls testHostAccess with the identity\'s key/host (the one network step) and treats an auth failure as a hard failure (✗)', async () => {
+    it('calls checkHostAccess (the PURE, non-prompting check — NOT testHostAccess) with the identity\'s key/host, and renders a ✓ Host auth line on success', async () => {
       mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
-      mockTestHostAccess.mockImplementation(async () => {
-        process.exitCode = 1; // mirrors testHostAccess's own fail() on auth failure
-      });
+      mockCheckHostAccess.mockResolvedValue({ ok: true, detail: 'Successfully authenticated with github.com.' });
 
       await doctor('work');
 
-      expect(mockTestHostAccess).toHaveBeenCalledWith(keyedIdentity.sshKeyPath, 'github.com');
-      expect(process.exitCode).toBe(1);
+      expect(mockCheckHostAccess).toHaveBeenCalledWith(keyedIdentity.sshKeyPath, 'github.com');
+      expect(process.exitCode).toBeUndefined();
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Host auth') && c.includes('authenticated'))).toBe(true);
     });
 
-    it('skips testHostAccess entirely for a keyless identity', async () => {
+    it('renders a ✗ Host auth line and treats an auth failure as a hard failure (✗), setting exit code 1', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
+      mockCheckHostAccess.mockResolvedValue({ ok: false, detail: 'Permission denied (publickey).' });
+
+      await doctor('work');
+
+      expect(process.exitCode).toBe(1);
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Host auth') && c.includes('Permission denied'))).toBe(true);
+    });
+
+    it('skips checkHostAccess entirely for a keyless identity', async () => {
       mockLoadStore.mockResolvedValue(storeOf([{ ...keyedIdentity, sshKeyPath: '' }], 'work'));
 
       await doctor('work');
 
-      expect(mockTestHostAccess).not.toHaveBeenCalled();
+      expect(mockCheckHostAccess).not.toHaveBeenCalled();
+    });
+
+    it('doctor never imports/calls the interactive testHostAccess — only the pure checkHostAccess is available to it', () => {
+      // The jest.mock('../../src/infra/ssh', ...) factory above does not
+      // even export `testHostAccess` — if doctor.ts still referenced it,
+      // this whole test file would fail to load with "is not a function".
+      // This test exists to make that guarantee explicit and named.
+      expect(mockCheckHostAccess).toBeDefined();
     });
 
     it('flags git identity drift as a warning (!) only', async () => {

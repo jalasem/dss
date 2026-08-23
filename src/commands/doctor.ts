@@ -3,7 +3,7 @@ import { loadStore } from '../infra/store';
 import { findIdentity, slugify } from '../core/identity';
 import { IIdentity, IStoreV2 } from '../core/types';
 import { getRepositoryBindingStatus, RepositoryBindingStatus } from '../infra/repoBinding';
-import { checkKeyLoadedInAgent, checkSshConfigHost, testHostAccess } from '../infra/ssh';
+import { checkKeyLoadedInAgent, checkSshConfigHost, checkHostAccess } from '../infra/ssh';
 import { getGitUser } from '../infra/git';
 import { UIHelper } from './ui';
 import { fail } from './fail';
@@ -56,7 +56,10 @@ function resolveIdentity(
  * `dss doctor [identityName]` — absorbs `test` (host auth) and `inspect`
  * (detailed identity/key/config report), plus a Git-identity-drift check
  * and the repo-binding summary. Unlike the bare-`dss` dashboard, this is
- * allowed to be slow: it makes the one network call (testHostAccess).
+ * allowed to be slow: it makes the one network call, via the PURE
+ * `checkHostAccess` (never `testHostAccess` — that prompts to show the
+ * public key, which would hang a script/CI invocation of doctor waiting
+ * on stdin; doctor must never prompt).
  *
  * Exit-code calibration: ✗ (hard failure — auth failed, key missing) sets
  * process.exitCode = 1; ! (attention — drift, perms, agent-not-loaded,
@@ -156,13 +159,9 @@ export async function doctor(identityName?: string): Promise<void> {
   if (!identity.key) {
     report(run, 'warning', 'Host auth', 'skipped (no key)', 'host auth check skipped — no key to authenticate with');
   } else {
-    const priorExitCode = process.exitCode;
-    await testHostAccess(identity.key.path, identity.host);
-    const hostAuthFailed = process.exitCode === 1 && priorExitCode !== 1;
-    if (hostAuthFailed) {
-      run.sawHardFailure = true;
-      run.issues.push(`SSH authentication to ${identity.host} failed — check the public key is added to your ${identity.host} account`);
-    }
+    const hostAuth = await checkHostAccess(identity.key.path, identity.host);
+    report(run, hostAuth.ok ? 'success' : 'error', 'Host auth', hostAuth.ok ? 'authenticated' : hostAuth.detail,
+      hostAuth.ok ? undefined : `SSH authentication to ${identity.host} failed — check the public key is added to your ${identity.host} account`);
   }
 
   section('Git identity drift');

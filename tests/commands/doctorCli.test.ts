@@ -109,3 +109,151 @@ describe('legacy "test"/"inspect" CLI commands — warn + delegate to doctor', (
     expect(result.stdout).not.toMatch(/^\s+inspect\s/m);
   });
 });
+
+// -----------------------------------------------------------------------
+// KEYED identity, non-TTY, closed stdin — the actual hang regression this
+// review round closes. `dss doctor` on a keyed identity used to call the
+// interactive `testHostAccess`, which unconditionally awaits a "show the
+// public key?" confirm() prompt reading process.stdin; run non-interactively
+// (piped/closed stdin, as any script or CI invocation would), that await
+// never resolves and the process hangs forever. doctor now calls the PURE
+// `checkHostAccess` instead (no prompt at all), so this must complete
+// promptly regardless of stdin. The real `ssh` binary is stubbed out via a
+// fake executable prepended onto PATH so the outcome (auth success/failure)
+// is deterministic and no real network call is made.
+// -----------------------------------------------------------------------
+
+describe('"dss doctor" on a KEYED identity — must not hang on stdin (no interactive prompt)', () => {
+  const temporaryDirectories: string[] = [];
+  let temporaryHome: string;
+  let stubBinDirectory: string;
+  let keyPath: string;
+
+  async function createTemporaryDirectory(prefix: string): Promise<string> {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    temporaryDirectories.push(directory);
+    return fs.realpath(directory);
+  }
+
+  /**
+   * A fake `ssh` executable that never touches the network: exits with
+   * $DSS_TEST_SSH_EXIT_CODE (default 0) after optionally writing
+   * $DSS_TEST_SSH_STDERR to stderr, so a single stub script drives both
+   * the auth-success and auth-failure cases via env vars. Placed on a
+   * directory prepended to PATH — only `ssh` is shadowed; `ssh-keygen`/
+   * `ssh-add` (used elsewhere by doctor's key/agent checks) still resolve
+   * to the real binaries later in PATH.
+   */
+  async function installFakeSsh(): Promise<void> {
+    const scriptPath = path.join(stubBinDirectory, 'ssh');
+    await fs.outputFile(
+      scriptPath,
+      '#!/bin/sh\n' +
+      'if [ -n "$DSS_TEST_SSH_STDERR" ]; then echo "$DSS_TEST_SSH_STDERR" 1>&2; fi\n' +
+      'exit "${DSS_TEST_SSH_EXIT_CODE:-0}"\n'
+    );
+    await fs.chmod(scriptPath, 0o755);
+  }
+
+  function cliEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      HOME: temporaryHome,
+      GIT_CONFIG_GLOBAL: path.join(temporaryHome, 'empty-global.gitconfig'),
+      GIT_CONFIG_NOSYSTEM: '1',
+      XDG_CONFIG_HOME: path.join(temporaryHome, '.config'),
+      PATH: `${stubBinDirectory}:${process.env.PATH}`,
+      ...extra
+    };
+  }
+
+  /** spawnSync with stdin explicitly closed (empty input) — the same
+   * non-interactive shape a script/CI runner uses — and a hard timeout so
+   * a regression fails fast instead of hanging the whole test suite. */
+  function runDoctorNonInteractive(
+    args: string[],
+    extraEnv: NodeJS.ProcessEnv = {}
+  ): { stdout: string; stderr: string; status: number | null; signal: NodeJS.Signals | null; elapsedMs: number } {
+    const startedAt = Date.now();
+    const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+      cwd: temporaryHome,
+      encoding: 'utf8',
+      env: cliEnvironment(extraEnv),
+      input: '',
+      timeout: 10000
+    });
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      status: result.status,
+      signal: result.signal,
+      elapsedMs: Date.now() - startedAt
+    };
+  }
+
+  beforeAll(() => {
+    execFileSync('npm', ['run', 'build'], {
+      cwd: path.join(__dirname, '../..'),
+      stdio: 'inherit'
+    });
+  });
+
+  beforeEach(async () => {
+    temporaryHome = await createTemporaryDirectory('dss-doctor-keyed-');
+    stubBinDirectory = await createTemporaryDirectory('dss-doctor-keyed-bin-');
+    await installFakeSsh();
+    await fs.outputFile(path.join(temporaryHome, 'empty-global.gitconfig'), '');
+    await fs.ensureDir(path.join(temporaryHome, '.config'));
+
+    keyPath = path.join(temporaryHome, '.dss', 'spaces', 'work', 'id_ed25519');
+    await fs.ensureDir(path.dirname(keyPath));
+    execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', keyPath, '-C', 'work@example.com']);
+
+    await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
+      spaces: [{ name: 'work', email: 'work@example.com', userName: 'Work', sshKeyPath: keyPath }]
+    });
+  });
+
+  afterEach(async () => {
+    await Promise.all(temporaryDirectories.splice(0).map(directory => fs.remove(directory)));
+  });
+
+  it('completes promptly (does not hang) and renders "✓ Host auth" when the stubbed ssh call succeeds', () => {
+    const result = runDoctorNonInteractive(['doctor', 'work'], { DSS_TEST_SSH_EXIT_CODE: '0' });
+
+    // Not killed by the 10s timeout — the definitive non-hang proof.
+    expect(result.signal).toBeNull();
+    expect(result.elapsedMs).toBeLessThan(10000);
+    expect(result.stdout).toContain('Doctor: work');
+    expect(result.stdout).toContain('Host auth');
+    expect(result.stdout.toLowerCase()).toContain('authenticated');
+    // No interactive prompt was ever printed (that's testHostAccess-only).
+    expect(result.stdout).not.toContain('Would you like to see the public SSH key?');
+    expect(result.status).toBe(0);
+  });
+
+  it('completes promptly (does not hang) and renders "✗ Host auth" + exit 1 when the stubbed ssh call fails with no success marker', () => {
+    const result = runDoctorNonInteractive(['doctor', 'work'], {
+      DSS_TEST_SSH_EXIT_CODE: '255',
+      DSS_TEST_SSH_STDERR: 'Permission denied (publickey).'
+    });
+
+    expect(result.signal).toBeNull();
+    expect(result.elapsedMs).toBeLessThan(10000);
+    expect(result.stdout).toContain('Doctor: work');
+    expect(result.stdout).toContain('Host auth');
+    expect(result.stdout).toContain('Permission denied');
+    expect(result.stdout).not.toContain('Would you like to see the public SSH key?');
+    // ✗-vs-! calibration preserved: a hard auth failure sets exit code 1.
+    expect(result.status).toBe(1);
+  });
+
+  it('the deprecated "test <name>" alias on a keyed identity also completes promptly without hanging', () => {
+    const result = runDoctorNonInteractive(['test', 'work'], { DSS_TEST_SSH_EXIT_CODE: '0' });
+
+    expect(result.signal).toBeNull();
+    expect(result.elapsedMs).toBeLessThan(10000);
+    expect(result.stderr).toContain('"dss test" is deprecated');
+    expect(result.stdout).toContain('Doctor: work');
+  });
+});
