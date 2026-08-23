@@ -152,15 +152,17 @@ the product's front door.
 
 ### Phase 2 — Identity engine (v2.0 core)
 
-- [ ] Config store v2 (`identities`, versioned, atomic, pretty) + silent v1 migration
-- [ ] `core/` / `infra/` / `commands/` layering; split `SpaceManager.ts`
-- [ ] Ed25519 default via system ssh-keygen; passphrase + macOS keychain support
-- [ ] Host-agnostic identity model (per-identity host: github.com, gitlab.com, bitbucket.org, custom)
-- [ ] includeIf-first identity application; global switch reimplemented on top
-- [ ] ssh-config handling rewritten as parse-don't-splice with backup, per-host blocks
-- [ ] `dss key show|copy|rotate`
-- [ ] Rename integrity for bindings: renaming an identity updates (or prompts re-bind of) repo-local bindings whose `core.sshCommand` references the moved key path (Phase 1 ships a warning only)
+- [x] Config store v2 (`identities`, versioned, atomic, pretty) + silent v1 migration
+- [x] `core/` / `infra/` / `commands/` layering; split `SpaceManager.ts`
+- [x] Ed25519 default via system ssh-keygen; passphrase + macOS keychain support
+- [x] Host-agnostic identity model (per-identity host: github.com, gitlab.com, bitbucket.org, custom)
+- [x] includeIf-first identity application; global switch reimplemented on top
+- [x] ssh-config handling rewritten as parse-don't-splice with backup, per-host blocks
+- [x] `dss key show|copy|rotate`
+- [x] Rename integrity for bindings: renaming an identity updates (or prompts re-bind of) repo-local bindings whose `core.sshCommand` references the moved key path (Phase 1 ships a warning only)
 - [ ] Note for cross-cutting checklist items: name the call sites to sweep explicitly (Phase 1's "slug consistency"/"exit codes" items were scoped by symptom, and batchOperations/repoBindingCommands were initially missed)
+- [ ] Binding refresh completeness: `bulkUpdateSpaces` and `dss key rotate` refresh the global active identity via `reapplyActiveIdentity` but do NOT refresh repo-local `dss bind` bindings for a bound identity they mutate (only `modifySpace` does). Fold binding refresh into `reapplyActiveIdentity` (or a sibling) and call it from all three. (Parked from Phase 2 final review — recoverable via re-bind/switch.)
+- [ ] Harden `loadStore` to error on any non-numeric or unexpected `version`; add defensive infra mocks to `tests/commands/batchExportImport.test.ts` (Phase 2 final-review non-blocking residuals)
 
 ### Phase 3 — Surface & voice (v2.0 UX)
 
