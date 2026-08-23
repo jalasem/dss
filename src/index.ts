@@ -6,8 +6,6 @@ import {
   switchSpace,
   removeSpace,
   modifySpace,
-  testSpace,
-  inspectSpace,
 } from "./commands/spaces";
 import { generateCompletionScript } from "./commands/completion";
 import { keyCommand } from "./commands/keys";
@@ -22,6 +20,8 @@ import {
   unbindSpaceFromRepository
 } from './commands/binding';
 import { isPromptExitError } from './commands/prompts';
+import { dashboard } from './commands/dashboard';
+import { doctor } from './commands/doctor';
 
 program
   .name("dss")
@@ -121,14 +121,9 @@ program
   .action(generateCompletionScript);
 
 program
-  .command("test [spaceName]")
-  .description("Test GitHub access for a specified space, or the active space if omitted")
-  .action(testSpace);
-
-program
-  .command("inspect [spaceName]")
-  .description("Show detailed information about a space")
-  .action(inspectSpace);
+  .command('doctor [identityName]')
+  .description('Run the full health check for an identity (key, ssh-config, host auth, git drift, binding)')
+  .action(doctor);
 
 program
   .command('status')
@@ -167,29 +162,37 @@ deprecatedAlias('unbind', 'unlink', unbindSpaceFromRepository, (cmd) => {
 deprecatedAlias('export [path]', 'config export', exportSpaceConfiguration);
 deprecatedAlias('import [path]', 'config import', importSpaceConfiguration);
 
+// `test` and `inspect` are both absorbed by `doctor` (Phase 3 · Task 3):
+// `test` (host auth) and `inspect` (detailed identity/key/config report)
+// are now sections of doctor's single combined health check.
+deprecatedAlias('test [identityName]', 'doctor', doctor);
+deprecatedAlias('inspect [identityName]', 'doctor', doctor);
+
 // `batch`, `bulk`, and `onboard` are gone (cut, no alias): batch/bulk had
 // no comparable single-identity replacement worth keeping (per-identity
 // `dss key rotate` replaces the SSH-key-regeneration case of `bulk`), and
 // `onboard`'s tutorial is replaced by the automatic first-run flow that
 // `dss ls` / `dss use` trigger when no identities exist yet.
 
-program.parseAsync(process.argv).catch((error) => {
+/**
+ * Shared top-level error handler for both the bare-`dss` dashboard path and
+ * the normal Commander dispatch path: a cancelled prompt exits quietly
+ * (130) with a friendly message instead of an unhandled-rejection stack
+ * trace; anything else rethrows.
+ */
+function handleTopLevelError(error: unknown): void {
   if (isPromptExitError(error)) {
     UIHelper.info('Prompt closed before an answer was given. No changes were made.');
     process.exit(130);
   }
   throw error;
-});
+}
 
-// Show help if no command provided
+// Bare `dss` (no args at all) runs the context dashboard instead of
+// Commander's own dispatch — `dss --help`/`dss <command> --help` are
+// untouched, since those still have an arg for Commander to parse.
 if (!process.argv.slice(2).length) {
-  program.outputHelp();
-  console.log(UIHelper.dim('\nGetting Started:'));
-  console.log(UIHelper.dim('  · ' + UIHelper.command('dss new') + ' - Create your first development space'));
-  console.log(UIHelper.dim('  · ' + UIHelper.command('dss ls') + ' - View all your spaces'));
-  console.log(UIHelper.dim('  · ' + UIHelper.command('dss use') + ' - Switch between spaces'));
-  console.log(UIHelper.dim('  · ' + UIHelper.command('dss link <space>') + ' - Link the current Git repository'));
-  console.log(UIHelper.dim('  · ' + UIHelper.command('dss status') + ' - Show this repository binding'));
-  console.log(UIHelper.dim('  · ' + UIHelper.command('dss test') + ' - Test GitHub access'));
-  console.log(UIHelper.dim('\nFor detailed help: ' + UIHelper.command('dss <command> --help')));
+  dashboard().catch(handleTopLevelError);
+} else {
+  program.parseAsync(process.argv).catch(handleTopLevelError);
 }

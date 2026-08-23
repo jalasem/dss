@@ -26,7 +26,7 @@ describe('CLI Integration Tests', () => {
         expect(output).toContain('use');
         expect(output).toContain('rm');
         expect(output).toContain('edit');
-        expect(output).toContain('test');
+        expect(output).toContain('doctor');
       } catch (error) {
         // Help might exit with non-zero code, that's OK
         expect((error as any).stdout).toContain('Dev Spaces Switcher (DSS)');

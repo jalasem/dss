@@ -9,7 +9,9 @@ import {
   setHostSSHKey,
   removeSSHKeyFromAgent,
   testHostAccess,
-  addToAgent
+  addToAgent,
+  checkKeyLoadedInAgent,
+  checkSshConfigHost
 } from '../../src/infra/ssh';
 
 jest.mock('child_process');
@@ -643,6 +645,116 @@ Host other.com
       );
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // checkKeyLoadedInAgent — the cheap, local-only fingerprint/agent check
+  // shared by the bare-`dss` dashboard and `dss doctor` (extracted from
+  // the old inspectSpace's inline duplicate of this logic).
+  // ---------------------------------------------------------------------
+
+  describe('checkKeyLoadedInAgent', () => {
+    it('reports loaded: true when the fingerprint appears in ssh-add -l output', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation((file: string, _args: string[], cb: any) => {
+        if (file === 'ssh-keygen') {
+          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
+        } else if (file === 'ssh-add') {
+          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
+        }
+      });
+
+      const result = await checkKeyLoadedInAgent(`${mockSshKeyPath}.pub`);
+
+      expect(result).toEqual({ fingerprint: 'SHA256:abc123DEF', loaded: true, checked: true });
+    });
+
+    it('reports loaded: false (but checked: true) when the fingerprint is absent from ssh-add -l', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation((file: string, _args: string[], cb: any) => {
+        if (file === 'ssh-keygen') {
+          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
+        } else if (file === 'ssh-add') {
+          cb(null, { stdout: '2048 SHA256:zzz999OTHER comment (RSA)\n', stderr: '' });
+        }
+      });
+
+      const result = await checkKeyLoadedInAgent(`${mockSshKeyPath}.pub`);
+
+      expect(result).toEqual({ fingerprint: 'SHA256:abc123DEF', loaded: false, checked: true });
+    });
+
+    it('reports checked: false when ssh-keygen/ssh-add fails (e.g. no agent running) rather than a false negative', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation((_file: string, _args: string[], cb: any) =>
+        cb(new Error('Could not open a connection to your authentication agent'))
+      );
+
+      const result = await checkKeyLoadedInAgent(`${mockSshKeyPath}.pub`);
+
+      expect(result).toEqual({ loaded: false, checked: false });
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // checkSshConfigHost — matches doctor's "✓ match / ! points elsewhere /
+  // ! absent" ssh-config check against the same single-pattern `Host
+  // <host>` block applyHostSSHKey manages.
+  // ---------------------------------------------------------------------
+
+  describe('checkSshConfigHost', () => {
+    it('returns "absent" when ~/.ssh/config does not exist', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(false);
+
+      await expect(checkSshConfigHost('github.com', mockSshKeyPath)).resolves.toBe('absent');
+    });
+
+    it('returns "absent" when the config exists but has no matching Host block', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue('Host gitlab.com\n  IdentityFile ~/.ssh/other\n');
+
+      await expect(checkSshConfigHost('github.com', mockSshKeyPath)).resolves.toBe('absent');
+    });
+
+    it('returns "match" when the Host block\'s IdentityFile points at the given key', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(
+        `Host github.com\n  HostName github.com\n  User git\n  IdentityFile ${mockSshKeyPath}\n  IdentitiesOnly yes\n`
+      );
+
+      await expect(checkSshConfigHost('github.com', mockSshKeyPath)).resolves.toBe('match');
+    });
+
+    it('returns "points-elsewhere" when the Host block\'s IdentityFile points at a different key', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(
+        'Host github.com\n  HostName github.com\n  IdentityFile /mock/home/.ssh/id_other\n'
+      );
+
+      await expect(checkSshConfigHost('github.com', mockSshKeyPath)).resolves.toBe('points-elsewhere');
+    });
+
+    it('returns "points-elsewhere" when the Host block exists but has no IdentityFile line', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue('Host github.com\n  User git\n');
+
+      await expect(checkSshConfigHost('github.com', mockSshKeyPath)).resolves.toBe('points-elsewhere');
+    });
+
+    it('strips quotes from a quoted IdentityFile value before comparing', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(
+        `Host github.com\n  IdentityFile "${mockSshKeyPath}"\n`
+      );
+
+      await expect(checkSshConfigHost('github.com', mockSshKeyPath)).resolves.toBe('match');
+    });
+
+    it('ignores a multi-pattern Host block (never a target for the managed check, same as applyHostSSHKey)', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(
+        `Host github.com other.example.com\n  IdentityFile ${mockSshKeyPath}\n`
+      );
+
+      await expect(checkSshConfigHost('github.com', mockSshKeyPath)).resolves.toBe('absent');
     });
   });
 });

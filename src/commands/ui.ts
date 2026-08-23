@@ -290,6 +290,23 @@ export class UIHelper {
     console.log(`${prefix}${chalk.bold(label)}: ${value}`);
   }
 
+  /**
+   * A short glyph-prefixed fragment (not a full label: value line) for
+   * composing several checks onto one compact line — e.g. the bare-`dss`
+   * dashboard's health line (`✓ key ed25519   ✓ agent loaded`). PLAIN mode
+   * drops the Unicode glyph in favor of the same "error: "/"warn: " text
+   * tags printStatus uses, so a success fragment is bare text.
+   */
+  static statusFragment(status: 'success' | 'error' | 'warning', text: string): string {
+    if (this.isPlain()) {
+      const tag = status === 'error' ? 'error: ' : status === 'warning' ? 'warn: ' : '';
+      return `${tag}${text}`;
+    }
+    const glyph = status === 'success' ? GLYPH.success : status === 'error' ? GLYPH.error : GLYPH.warning;
+    const colorFn = status === 'success' ? chalk.green : status === 'error' ? chalk.red : chalk.yellow;
+    return colorFn(`${glyph} ${text}`);
+  }
+
   /** Reserved for the dashboard/help surface (later Phase 3 tasks) — not
    * used in normal command output. */
   static printQuickHelp(): void {

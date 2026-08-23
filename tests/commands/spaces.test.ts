@@ -21,9 +21,8 @@ jest.mock('../../src/infra/clipboard');
 jest.mock('../../src/infra/ssh');
 jest.mock('../../src/infra/repoBinding');
 jest.mock('../../src/infra/git', () => {
-  // getGitUser (used by inspectSpace) keeps its real implementation, which
-  // reads through the mocked child_process execFile — only the includeIf-
-  // first write path is replaced with controllable jest.fn()s.
+  // Only the includeIf-first write path is replaced with controllable
+  // jest.fn()s; everything else keeps its real implementation.
   const actual = jest.requireActual('../../src/infra/git');
   return {
     ...actual,
@@ -74,9 +73,7 @@ const {
   listSpaces,
   switchSpace,
   removeSpace,
-  testSpace,
-  modifySpace,
-  inspectSpace
+  modifySpace
 } = require('../../src/commands/spaces');
 const { loadStore, saveStore, fromSpace } = require('../../src/infra/store');
 
@@ -837,95 +834,6 @@ describe('commands/spaces', () => {
     });
   });
 
-  describe('testSpace', () => {
-    const mockSpace = {
-      name: 'test-space',
-      email: 'test@example.com',
-      userName: 'Test User',
-      sshKeyPath: mockSshKeyPath
-    };
-
-    it('should test the active space', async () => {
-      mockLoadStore.mockResolvedValue(storeOf([mockSpace], 'test-space'));
-      mockTestHostAccess.mockResolvedValue();
-
-      await testSpace();
-
-      expect(mockTestHostAccess).toHaveBeenCalledWith(mockSshKeyPath, 'github.com');
-    });
-
-    it('should resolve a non-default host onto testHostAccess', async () => {
-      const workSpace = { ...mockSpace, host: 'gitlab.com' };
-      mockLoadStore.mockResolvedValue(storeOf([workSpace], 'test-space'));
-      mockTestHostAccess.mockResolvedValue();
-
-      await testSpace();
-
-      expect(mockTestHostAccess).toHaveBeenCalledWith(mockSshKeyPath, 'gitlab.com');
-    });
-
-    it('should handle space without SSH key', async () => {
-      const spaceWithoutKey = { ...mockSpace, sshKeyPath: '' };
-      mockLoadStore.mockResolvedValue(storeOf([spaceWithoutKey], 'test-space'));
-
-      await testSpace();
-
-      expect(console.log).toHaveBeenCalledTimes(2);
-      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('Space "test-space" does not have an associated SSH key.'));
-      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss key rotate'));
-    });
-
-    it('should handle no spaces', async () => {
-      mockLoadStore.mockResolvedValue(storeOf([]));
-
-      await testSpace();
-
-      expect(console.log).toHaveBeenCalledTimes(2);
-      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
-      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss new'));
-    });
-
-    it('should target the named space rather than the active one', async () => {
-      const otherSpace = {
-        name: 'other-space',
-        email: 'other@example.com',
-        userName: 'Other User',
-        sshKeyPath: '/mock/home/.dss/spaces/other-space/id_rsa'
-      };
-      mockLoadStore.mockResolvedValue(storeOf([mockSpace, otherSpace], 'test-space'));
-      mockTestHostAccess.mockResolvedValue();
-
-      await testSpace('other-space');
-
-      expect(mockTestHostAccess).toHaveBeenCalledWith(otherSpace.sshKeyPath, 'github.com');
-    });
-
-    it('should NOT fall back to the active space when a named space does not exist', async () => {
-      mockLoadStore.mockResolvedValue(storeOf([mockSpace], 'test-space'));
-
-      await testSpace('does-not-exist');
-
-      expect(mockTestHostAccess).not.toHaveBeenCalled();
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Space "does-not-exist" not found.'));
-      expect(process.exitCode).toBe(1);
-    });
-
-    it('should find a legacy raw-name space when looked up by its slug', async () => {
-      const legacySpace = {
-        name: 'Test Space',
-        email: 'test@example.com',
-        userName: 'Test User',
-        sshKeyPath: mockSshKeyPath
-      };
-      mockLoadStore.mockResolvedValue(storeOf([legacySpace], 'Test Space'));
-      mockTestHostAccess.mockResolvedValue();
-
-      await testSpace('test-space');
-
-      expect(mockTestHostAccess).toHaveBeenCalledWith(mockSshKeyPath, 'github.com');
-    });
-  });
-
   describe('modifySpace', () => {
     const mockSpace = {
       name: 'test-space',
@@ -1567,108 +1475,4 @@ describe('commands/spaces', () => {
     });
   });
 
-  describe('inspectSpace', () => {
-    const mockSpace = {
-      name: 'test-space',
-      email: 'test@example.com',
-      userName: 'Test User',
-      sshKeyPath: mockSshKeyPath
-    };
-
-    beforeEach(() => {
-      mockOs.homedir.mockReturnValue('/mock/home');
-      mockLoadStore.mockResolvedValue(storeOf([mockSpace], 'test-space'));
-      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
-      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue('Host github.com\n  IdentityFile ' + mockSshKeyPath);
-      (mockFs.stat as unknown as jest.Mock).mockResolvedValue({ mode: 0o100600 });
-      (mockFs.readdir as unknown as jest.Mock).mockResolvedValue(['id_rsa', 'id_rsa.pub']);
-      (mockExecFile as unknown as jest.Mock).mockImplementation(
-        (_file: string, _args: string[], callback: any) => {
-          callback(null, { stdout: 'Test User', stderr: '' });
-          return {} as any;
-        }
-      );
-    });
-
-    it('prints a Host status row, defaulting to github.com when unset', async () => {
-      const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
-
-      await inspectSpace('test-space');
-
-      const hostCall = printStatusSpy.mock.calls.find(call => call[0] === 'Host');
-      expect(hostCall?.[1]).toBe('github.com');
-      printStatusSpy.mockRestore();
-    });
-
-    it('prints a non-default Host status row', async () => {
-      mockLoadStore.mockResolvedValue(storeOf([{ ...mockSpace, host: 'bitbucket.org' }], 'test-space'));
-      const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
-
-      await inspectSpace('test-space');
-
-      const hostCall = printStatusSpy.mock.calls.find(call => call[0] === 'Host');
-      expect(hostCall?.[1]).toBe('bitbucket.org');
-      printStatusSpy.mockRestore();
-    });
-
-    it('reports "Key loaded" when the fingerprint is present in ssh-add -l output', async () => {
-      (mockExecFile as unknown as jest.Mock).mockImplementation((file: string, _args: string[], cb: any) => {
-        if (file === 'ssh-keygen') {
-          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
-        } else if (file === 'ssh-add') {
-          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
-        } else {
-          cb(null, { stdout: 'Test User', stderr: '' });
-        }
-      });
-
-      const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
-
-      await inspectSpace('test-space');
-
-      const agentCall = printStatusSpy.mock.calls.find(call => call[0] === 'SSH Agent');
-      expect(agentCall?.[1]).toBe('Key loaded');
-      printStatusSpy.mockRestore();
-    });
-
-    it('reports "Key not loaded" when the fingerprint is absent from ssh-add -l output', async () => {
-      (mockExecFile as unknown as jest.Mock).mockImplementation((file: string, _args: string[], cb: any) => {
-        if (file === 'ssh-keygen') {
-          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
-        } else if (file === 'ssh-add') {
-          cb(null, { stdout: '2048 SHA256:zzz999OTHER comment (RSA)\n', stderr: '' });
-        } else {
-          cb(null, { stdout: 'Test User', stderr: '' });
-        }
-      });
-
-      const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
-
-      await inspectSpace('test-space');
-
-      const agentCall = printStatusSpy.mock.calls.find(call => call[0] === 'SSH Agent');
-      expect(agentCall?.[1]).toBe('Key not loaded');
-      printStatusSpy.mockRestore();
-    });
-
-    it('reports "Unable to check" when the fingerprint or agent command fails', async () => {
-      (mockExecFile as unknown as jest.Mock).mockImplementation((_file: string, _args: string[], cb: any) =>
-        cb(new Error('ssh-keygen failed'))
-      );
-
-      const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
-
-      await inspectSpace('test-space');
-
-      const agentCall = printStatusSpy.mock.calls.find(call => call[0] === 'SSH Agent');
-      expect(agentCall?.[1]).toBe('Unable to check');
-      printStatusSpy.mockRestore();
-    });
-
-    it('should set process.exitCode = 1 when the named space is not found', async () => {
-      await inspectSpace('does-not-exist');
-
-      expect(process.exitCode).toBe(1);
-    });
-  });
 });

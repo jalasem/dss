@@ -294,5 +294,37 @@ describe('UIHelper', () => {
         expect(line).not.toContain('\n');
       });
     });
+
+    it('statusFragment renders a glyph-prefixed, colored fragment for success/error/warning', () => {
+      withRichMode(() => {
+        const success = UIHelper.statusFragment('success', 'key ed25519');
+        const error = UIHelper.statusFragment('error', 'key missing');
+        const warning = UIHelper.statusFragment('warning', 'agent not loaded');
+
+        expect(success).toContain('✓');
+        expect(success).toContain('key ed25519');
+        expect(success).toMatch(ANSI_RE);
+        expect(error).toContain('✗');
+        expect(error).toMatch(ANSI_RE);
+        expect(warning).toContain('!');
+        expect(warning).toMatch(ANSI_RE);
+      });
+    });
+  });
+
+  describe('statusFragment (PLAIN mode)', () => {
+    it('degrades to greppable ASCII tags with no glyph/ANSI, matching printStatus\'s tag scheme', () => {
+      const success = UIHelper.statusFragment('success', 'key ed25519');
+      const error = UIHelper.statusFragment('error', 'key missing');
+      const warning = UIHelper.statusFragment('warning', 'agent not loaded');
+
+      expect(success).toBe('key ed25519');
+      expect(error).toBe('error: key missing');
+      expect(warning).toBe('warn: agent not loaded');
+      for (const fragment of [success, error, warning]) {
+        expect(fragment).not.toMatch(ANSI_RE);
+        expect(fragment).not.toMatch(/[✓✗]/);
+      }
+    });
   });
 });

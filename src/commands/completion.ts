@@ -88,10 +88,10 @@ _dss_completion() {
     command="\${COMP_WORDS[1]}"
 
     # Main commands
-    opts="ls use new edit rm link unlink key config completion test inspect status --help --version -h -v"
+    opts="ls use new edit rm link unlink key config completion doctor status --help --version -h -v"
 
     # Get space names for relevant commands
-    if [[ \$cur != -* && (\$prev == "use" || \$prev == "rm" || \$prev == "edit" || \$prev == "test" || \$prev == "inspect" || \$prev == "link") ]]; then
+    if [[ \$cur != -* && (\$prev == "use" || \$prev == "rm" || \$prev == "edit" || \$prev == "doctor" || \$prev == "link") ]]; then
         local spaces
         if [ -f ~/.dss/spaces/config.json ]; then
             spaces=$(cat ~/.dss/spaces/config.json | grep -o '"name": *"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')
@@ -155,8 +155,7 @@ _dss() {
         'use:Switch to a specified space'
         'rm:Remove a specified space'
         'edit:Modify an existing space'
-        'test:Test GitHub access for current space'
-        'inspect:Show detailed information about a space'
+        'doctor:Run the full health check for an identity'
         'link:Link a space to one or more Git repositories'
         'unlink:Remove the DSS link from a Git repository'
         'status:Show repository-local DSS binding status'
@@ -182,7 +181,7 @@ _dss() {
             ;;
         args)
             case $words[2] in
-                use|rm|edit|test|inspect)
+                use|rm|edit|doctor)
                     _describe 'spaces' spaces
                     ;;
                 link)
@@ -248,8 +247,7 @@ complete -c dss -n '__fish_use_subcommand' -a 'ls' -d 'List all development spac
 complete -c dss -n '__fish_use_subcommand' -a 'use' -d 'Switch to a specified space'
 complete -c dss -n '__fish_use_subcommand' -a 'rm' -d 'Remove a specified space'
 complete -c dss -n '__fish_use_subcommand' -a 'edit' -d 'Modify an existing space'
-complete -c dss -n '__fish_use_subcommand' -a 'test' -d 'Test GitHub access for current space'
-complete -c dss -n '__fish_use_subcommand' -a 'inspect' -d 'Show detailed information about a space'
+complete -c dss -n '__fish_use_subcommand' -a 'doctor' -d 'Run the full health check for an identity'
 complete -c dss -n '__fish_use_subcommand' -a 'link' -d 'Link a space to one or more Git repositories'
 complete -c dss -n '__fish_use_subcommand' -a 'unlink' -d 'Remove the DSS link from a Git repository'
 complete -c dss -n '__fish_use_subcommand' -a 'status' -d 'Show repository-local DSS binding status'
@@ -262,7 +260,7 @@ complete -c dss -n '__fish_use_subcommand' -l help -s h -d 'Show help informatio
 complete -c dss -n '__fish_use_subcommand' -l version -s v -d 'Show version information'
 
 # Space name completions for relevant commands
-complete -c dss -n '__fish_seen_subcommand_from use rm edit test inspect link' -a '(__dss_get_spaces)'
+complete -c dss -n '__fish_seen_subcommand_from use rm edit doctor link' -a '(__dss_get_spaces)'
 
 # Options for specific commands
 complete -c dss -n '__fish_seen_subcommand_from use rm' -l dry-run -d 'Preview changes without applying them'

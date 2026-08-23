@@ -30,18 +30,24 @@ describe('Integration Tests', () => {
   });
 
   describe('CLI Help', () => {
-    it('should show help when no arguments provided', () => {
-      try {
-        const result = execSync(`node ${CLI_PATH}`, { 
-          encoding: 'utf8',
-          stdio: 'pipe' 
-        });
-        expect(result).toContain('Usage:');
-      } catch (error: any) {
-        // Help command might exit with non-zero code
-        const output = error.stdout || error.stderr || '';
-        expect(output).toContain('Usage:');
-      }
+    // Bare `dss` (no args at all) runs the context dashboard (Phase 3 ·
+    // Task 3), not the old help dump — `dss --help` (tested separately in
+    // tests/cli.test.ts) is what shows "Usage:" now. With zero identities
+    // in this test's fresh home directory, the dashboard delegates to the
+    // first-run flow instead.
+    it('runs the first-run flow (not a help dump) when no arguments are provided and no identities exist yet', () => {
+      // jest.spyOn(os, 'homedir') (set in beforeAll) only patches this test
+      // process's own Node module — it does NOT cross into the spawned
+      // child process, so HOME must be overridden explicitly here too, or
+      // this would read the real developer machine's ~/.dss config instead
+      // of the fresh, empty testHomeDir.
+      const result = execSync(`node ${CLI_PATH}`, {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: { ...process.env, HOME: testHomeDir }
+      });
+      expect(result).toContain('Dev Spaces Switcher');
+      expect(result).not.toContain('Usage:');
     });
 
     it('should show version information', () => {

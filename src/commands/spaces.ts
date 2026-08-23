@@ -1,4 +1,3 @@
-import { execFile } from "child_process";
 import { input, confirm, select } from "@inquirer/prompts";
 import os from "os";
 import fs from "fs-extra";
@@ -6,7 +5,7 @@ import path from "path";
 import { generateKey } from "../infra/keys";
 import { copyToClipboard } from "../infra/clipboard";
 import { addToAgent, removeSSHKeyFromAgent, setHostSSHKey, testHostAccess } from "../infra/ssh";
-import { getGitUser, writeActiveGitconfig, ensureGlobalInclude } from "../infra/git";
+import { writeActiveGitconfig, ensureGlobalInclude } from "../infra/git";
 import { bindRepository } from "../infra/repoBinding";
 import { isPromptExitError, safeConfirm, safePassword, promptHost } from "./prompts";
 import { ISpace, IKeyInfo, IStoreV2 } from "../core/types";
@@ -21,8 +20,6 @@ import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/s
 // the matching note in src/commands/firstRun.ts. Keep any new use of
 // `firstRunFlow` inside a function body.
 import { firstRunFlow } from "./firstRun";
-import { promisify } from 'util';
-const execFileAsync = promisify(execFile);
 
 // A userName/email reaches writeActiveGitconfig (src/infra/git.ts), which
 // hard-rejects an embedded \n/\r as a defense-in-depth last line — but the
@@ -442,35 +439,6 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   }
 }
 
-export async function testSpace(spaceName?: string) {
-  const { config } = await loadConfig();
-
-  if (config.spaces.length === 0) {
-    UIHelper.warning("No spaces have been added yet.");
-    UIHelper.info("Use " + UIHelper.command("dss new") + " to create your first space.");
-    return;
-  }
-
-  const space = spaceName
-    ? findSpace(config, spaceName)
-    : config.spaces.find(s => s.name === config.activeSpace);
-
-  if (!space) {
-    fail(spaceName ? `Space "${spaceName}" not found.` : `Active space "${config.activeSpace}" not found.`);
-    return;
-  }
-
-  if (!space.sshKeyPath) {
-    UIHelper.warning(
-      `Space "${space.name}" does not have an associated SSH key.`
-    );
-    UIHelper.info("Use " + UIHelper.command("dss key rotate") + " to configure SSH keys.");
-    return;
-  }
-
-  await testHostAccess(space.sshKeyPath, space.host ?? 'github.com');
-}
-
 export async function modifySpace(spaceName?: string) {
   const { store, config, originalBySpace } = await loadConfig();
 
@@ -656,149 +624,3 @@ export async function modifySpace(spaceName?: string) {
   }
 }
 
-export async function inspectSpace(spaceName?: string): Promise<void> {
-  const { config } = await loadConfig();
-
-  if (config.spaces.length === 0) {
-    UIHelper.warning("No spaces have been added yet.");
-    UIHelper.info("Use " + UIHelper.command("dss new") + " to create your first space.");
-    return;
-  }
-
-  let selectedSpaceName = spaceName;
-  if (!selectedSpaceName) {
-    selectedSpaceName = await select({
-      message: "Select a space to inspect:",
-      choices: config.spaces.map((space) => ({
-        name: space.name === config.activeSpace ? UIHelper.activeSpace(space.name) : space.name,
-        value: space.name,
-        description: `${space.email} (${space.userName})`
-      })),
-    });
-  }
-
-  const space = findSpace(config, selectedSpaceName);
-  if (!space) {
-    fail(`Space "${selectedSpaceName}" not found.`);
-    return;
-  }
-
-  UIHelper.printHeader(`Space Details: ${space.name}`);
-
-  // Basic Information
-  console.log(UIHelper.bold("Basic Information:"));
-  UIHelper.printStatus("Name", space.name, space.name === config.activeSpace ? 'success' : 'info');
-  UIHelper.printStatus("Email", space.email, 'info');
-  UIHelper.printStatus("Username", space.userName, 'info');
-  UIHelper.printStatus("Host", space.host ?? 'github.com', 'info');
-  UIHelper.printStatus("Status", space.name === config.activeSpace ? 'Active' : 'Inactive', space.name === config.activeSpace ? 'success' : 'info');
-
-  console.log("");
-
-  // SSH Key Status
-  console.log(UIHelper.bold("SSH Configuration:"));
-
-  if (space.sshKeyPath) {
-    const keyExists = await fs.pathExists(space.sshKeyPath);
-    const pubKeyExists = await fs.pathExists(`${space.sshKeyPath}.pub`);
-
-    UIHelper.printStatus("SSH Key Path", space.sshKeyPath, keyExists ? 'success' : 'error');
-    UIHelper.printStatus("Private Key", keyExists ? 'Found' : 'Missing', keyExists ? 'success' : 'error');
-    UIHelper.printStatus("Public Key", pubKeyExists ? 'Found' : 'Missing', pubKeyExists ? 'success' : 'error');
-
-    // Check if key is loaded in ssh-agent by comparing fingerprints
-    try {
-      const { stdout: fingerprintOutput } = await execFileAsync('ssh-keygen', ['-lf', `${space.sshKeyPath}.pub`]);
-      const fingerprintMatch = fingerprintOutput.match(/SHA256:\S+/);
-      const fingerprint = fingerprintMatch?.[0];
-
-      const { stdout: agentOutput } = await execFileAsync('ssh-add', ['-l']);
-      const keyInAgent = Boolean(fingerprint) && agentOutput.includes(fingerprint as string);
-      UIHelper.printStatus("SSH Agent", keyInAgent ? 'Key loaded' : 'Key not loaded', keyInAgent ? 'success' : 'warning');
-    } catch {
-      UIHelper.printStatus("SSH Agent", 'Unable to check', 'warning');
-    }
-
-    // Check SSH config
-    const sshConfigPath = path.join(os.homedir(), '.ssh', 'config');
-    if (await fs.pathExists(sshConfigPath)) {
-      const sshConfig = await fs.readFile(sshConfigPath, 'utf8');
-      const configuredHost = space.host ?? 'github.com';
-      const hasHostConfig = sshConfig.includes(`Host ${configuredHost}`);
-      const usesThisKey = sshConfig.includes(space.sshKeyPath);
-      UIHelper.printStatus("SSH Config", hasHostConfig ? (usesThisKey ? 'Configured for this key' : 'Configured for different key') : `No ${configuredHost} config`, hasHostConfig ? (usesThisKey ? 'success' : 'warning') : 'warning');
-    } else {
-      UIHelper.printStatus("SSH Config", 'No SSH config file', 'warning');
-    }
-
-    // Check key file permissions
-    if (keyExists) {
-      try {
-        const stats = await fs.stat(space.sshKeyPath);
-        const permissions = (stats.mode & parseInt('777', 8)).toString(8);
-        const isSecure = permissions === '600';
-        UIHelper.printStatus("Key Permissions", permissions, isSecure ? 'success' : 'warning');
-      } catch {
-        UIHelper.printStatus("Key Permissions", 'Unable to check', 'warning');
-      }
-    }
-  } else {
-    UIHelper.printStatus("SSH Key", 'Not configured', 'error');
-  }
-
-  console.log("");
-
-  // Git Status
-  console.log(UIHelper.bold("Git Configuration:"));
-
-  try {
-    const { userName: currentGitUser, email: currentGitEmail } = await getGitUser();
-
-    const userMatches = currentGitUser === space.userName;
-    const emailMatches = currentGitEmail === space.email;
-
-    UIHelper.printStatus("Git User", currentGitUser, userMatches ? 'success' : 'warning');
-    UIHelper.printStatus("Git Email", currentGitEmail, emailMatches ? 'success' : 'warning');
-
-    if (userMatches && emailMatches) {
-      UIHelper.printStatus("Git Config", 'Matches this space', 'success');
-    } else {
-      UIHelper.printStatus("Git Config", 'Does not match this space', 'warning');
-    }
-  } catch {
-    UIHelper.printStatus("Git Config", 'Unable to check', 'warning');
-  }
-
-  console.log("");
-
-  // File System Info
-  console.log(UIHelper.bold("File System:"));
-
-  if (space.sshKeyPath) {
-    const keyDir = path.dirname(space.sshKeyPath);
-    const keyDirExists = await fs.pathExists(keyDir);
-    UIHelper.printStatus("Key Directory", keyDir, keyDirExists ? 'success' : 'error');
-
-    if (keyDirExists) {
-      try {
-        const files = await fs.readdir(keyDir);
-        const keyFiles = files.filter(file => file.includes(path.basename(space.sshKeyPath)));
-        UIHelper.printStatus("Key Files", `${keyFiles.length} files found`, keyFiles.length >= 2 ? 'success' : 'warning');
-      } catch {
-        UIHelper.printStatus("Key Files", 'Unable to check', 'warning');
-      }
-    }
-  }
-
-  console.log("");
-
-  // Action suggestions
-  console.log(UIHelper.bold("Available Actions:"));
-  console.log(UIHelper.dim("  · " + UIHelper.command(`dss use ${space.name}`) + " - Switch to this space"));
-  console.log(UIHelper.dim("  · " + UIHelper.command(`dss edit ${space.name}`) + " - Edit space configuration"));
-  console.log(UIHelper.dim("  · " + UIHelper.command(`dss test ${space.name}`) + ` - Test SSH access to ${space.host ?? 'github.com'}`));
-
-  if (space.name !== config.activeSpace) {
-    console.log(UIHelper.dim("  · " + UIHelper.command(`dss rm ${space.name}`) + " - Remove this space"));
-  }
-}

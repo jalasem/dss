@@ -199,6 +199,63 @@ export async function setHostSSHKey(sshKeyPath: string, host: string): Promise<v
   }
 }
 
+/** Result of the cheap, local-only agent fingerprint check. */
+export interface AgentKeyCheck {
+  fingerprint?: string;
+  loaded: boolean;
+  /** false when the fingerprint/agent probe itself failed (e.g. no agent
+   * running, ssh-keygen unavailable) — render as "unable to check" rather
+   * than a false "not loaded". */
+  checked: boolean;
+}
+
+/**
+ * Cheap, local-only check for whether the key at `publicKeyPath` is
+ * currently loaded in the ssh-agent: extracts its fingerprint via
+ * `ssh-keygen -lf` and compares it against `ssh-add -l` output. No network
+ * calls — safe for the bare-`dss` dashboard's fast path as well as `dss
+ * doctor`. Extracted from the inspect/test flows' inline duplicate of this
+ * logic so both share one implementation.
+ */
+export async function checkKeyLoadedInAgent(publicKeyPath: string): Promise<AgentKeyCheck> {
+  try {
+    const { stdout: fingerprintOutput } = await execFileAsync('ssh-keygen', ['-lf', publicKeyPath]);
+    const fingerprint = fingerprintOutput.match(/SHA256:\S+/)?.[0];
+    const { stdout: agentOutput } = await execFileAsync('ssh-add', ['-l']);
+    const loaded = Boolean(fingerprint) && agentOutput.includes(fingerprint as string);
+    return { fingerprint, loaded, checked: true };
+  } catch {
+    return { loaded: false, checked: false };
+  }
+}
+
+/** Result of matching an identity's key against ~/.ssh/config's `Host <host>` block. */
+export type SshConfigCheck = 'match' | 'points-elsewhere' | 'absent';
+
+/**
+ * Checks whether ~/.ssh/config has a single-pattern `Host <host>` block
+ * (the same shape applyHostSSHKey manages) whose IdentityFile points at
+ * `sshKeyPath`. Reuses the parse-don't-splice reader so this stays in sync
+ * with what `dss use`/`dss key rotate` actually write.
+ */
+export async function checkSshConfigHost(host: string, sshKeyPath: string): Promise<SshConfigCheck> {
+  const sshConfigPath = path.join(os.homedir(), '.ssh', 'config');
+  if (!(await fs.pathExists(sshConfigPath))) return 'absent';
+
+  const content = await fs.readFile(sshConfigPath, 'utf8');
+  const parsed = parseSshConfig(content);
+  const block = parsed.blocks.find(
+    (candidate) => candidate.keyword === 'Host' && candidate.patterns.length === 1 && candidate.patterns[0] === host
+  );
+  if (!block) return 'absent';
+
+  const identityLine = block.lines.find((line) => /^\s*IdentityFile\b/i.test(line));
+  if (!identityLine) return 'points-elsewhere';
+
+  const value = identityLine.replace(/^\s*IdentityFile\s+/i, '').trim().replace(/^"(.*)"$/, '$1');
+  return value === sshKeyPath ? 'match' : 'points-elsewhere';
+}
+
 // ---------------------------------------------------------------------------
 // ssh-agent
 // ---------------------------------------------------------------------------

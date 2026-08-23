@@ -152,6 +152,19 @@ describe('completion script generation', () => {
 
   it.each([
     ['bash'],
+    ['zsh'],
+    ['fish']
+  ])('advertises "doctor" (not the deprecated "test"/"inspect" subcommands) in %s output', async (shell) => {
+    const script = extractGeneratedScript(await captureCompletionOutput(shell));
+
+    expect(script).toContain('doctor');
+    // Matches the dss subcommand specifically (quoted/word-listed), not
+    // fish's own unrelated `test` builtin used inside the generated script.
+    expect(script).not.toMatch(/['"]test['":]|\binspect\b/);
+  });
+
+  it.each([
+    ['bash'],
     ['fish']
   ])('includes link options in %s output', async (shell) => {
     const output = await captureCompletionOutput(shell);
