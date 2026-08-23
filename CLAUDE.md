@@ -24,7 +24,6 @@ DSS (Dev Spaces Switcher) is a CLI tool for managing isolated development enviro
 - **SSH Key Generation** (`src/utils/sshKeyGen.ts`): Handles SSH key generation using the `ssh-keygen` package
 - **Utility Functions** (`src/utils/index.ts`): SSH configuration, clipboard operations, and GitHub access testing
 - **UI Helper** (`src/utils/ui.ts`): Rich UI components with colored output and formatting
-- **Fuzzy Search** (`src/utils/fuzzySearch.ts`): Intelligent search functionality for spaces
 - **Batch Operations** (`src/utils/batchOperations.ts`): Bulk operations and import/export functionality
 
 ### Data Model
@@ -51,7 +50,7 @@ interface IConfig {
 2. **Space Switching**: Updates global Git config and SSH agent with space-specific credentials
 3. **SSH Configuration**: Modifies `~/.ssh/config` to use the appropriate SSH key for GitHub
 4. **GitHub Integration**: Tests SSH access and provides public key for GitHub setup
-5. **Fuzzy Search**: Quickly find spaces by name, email, or username
+5. **Interactive Selection**: Selection menus with per-space descriptions for better UX
 6. **Batch Operations**: Switch between multiple spaces, export/import configurations
 7. **UI Enhancements**: Rich colored output, progress indicators, and better error messages
 
@@ -77,5 +76,5 @@ The project includes comprehensive test coverage:
 - All space names are automatically slugified (lowercase with hyphens)
 - The active space cannot be removed without switching to another space first
 - Uses Chalk v4.1.2 for colored output (CommonJS compatible)
-- Fuzzy search powered by fuzzy-search library
+- Interactive selection menus provide per-space descriptions for enhanced UX
 - All tests use Jest with ts-jest for TypeScript support

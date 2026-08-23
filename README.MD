@@ -5,7 +5,7 @@
 *Seamlessly manage isolated development environments with separate SSH keys and Git configurations*
 
 [![npm version](https://badge.fury.io/js/%40jalasem%2Fdss.svg)](https://badge.fury.io/js/%40jalasem%2Fdss)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
 [![TypeScript](https://img.shields.io/badge/Built%20with-TypeScript-blue.svg)](https://www.typescriptlang.org/)
 
 ---
@@ -24,7 +24,7 @@ DSS provides isolated development environments that automatically handle SSH aut
 | 🔐 **SSH Key Automation** | Automatically generate and switch SSH keys when changing spaces |
 | 📝 **Git Configuration** | Streamlined GitHub user configuration for each space |
 | 🎨 **Rich CLI Interface** | Beautiful command-line interface with colors and progress indicators |
-| 🔍 **Fuzzy Search** | Intelligent search functionality for quick space discovery |
+| 🔄 **Interactive Selection** | Smart selection menus with per-space descriptions |
 | 📦 **Batch Operations** | Perform operations on multiple spaces efficiently |
 | 💾 **Import/Export** | Backup and restore space configurations |
 | ⚡ **Performance** | Fast operations with comprehensive test coverage |
@@ -130,7 +130,7 @@ dss remove [spaceName]
 Safely remove a development space:
 - Interactive confirmation required
 - Cannot remove active space
-- Cleans up SSH keys and configurations
+- Removes space from config and SSH agent, but key files remain on disk (`~/.dss/spaces/<name>/`)
 
 </details>
 
@@ -191,20 +191,6 @@ bindings created with that approximation.
 ### Advanced Features
 
 <details>
-<summary><b>🔍 Fuzzy Search Spaces</b></summary>
-
-```bash
-dss search [query]
-```
-
-Quickly find spaces using intelligent search:
-- Search by name, email, or username
-- Fuzzy matching for typos
-- Fast results display
-
-</details>
-
-<details>
 <summary><b>📦 Batch Operations</b></summary>
 
 ```bash
@@ -223,18 +209,18 @@ Perform operations on multiple spaces:
 
 Export your configuration:
 ```bash
-dss export [--output config.json]
+dss export
 ```
 
 Import from backup:
 ```bash
-dss import [--file config.json]
+dss import
 ```
 
-Perfect for:
-- Moving between machines
-- Backup strategies
-- Team configuration sharing
+Both commands are interactive and use the fixed path `~/dss-export.json`:
+- Export saves space configurations (SSH keys are excluded)
+- Import creates spaces from exported config (without SSH keys)
+- Perfect for moving between machines or backing up your setup
 
 </details>
 
@@ -319,7 +305,6 @@ Verify GitHub SSH connectivity:
 | Feature | Description | Impact |
 |---------|-------------|---------|
 | 🎨 **Enhanced UI** | Rich colored output with progress indicators | Better user experience |
-| 🔍 **Fuzzy Search** | Intelligent search functionality | Faster space discovery |
 | 📦 **Batch Operations** | Multi-space switching and operations | Improved workflow efficiency |
 | 🔄 **Import/Export** | Backup and restore configurations | Data portability |
 | ⚡ **Performance** | Optimized operations and memory usage | Faster execution |
@@ -366,9 +351,10 @@ src/
 │   ├── SpaceManager.ts   # Core business logic
 │   ├── ui.ts            # Rich UI components
 │   ├── sshKeyGen.ts     # SSH key generation
-│   ├── fuzzySearch.ts   # Search functionality
 │   └── batchOperations.ts # Bulk operations
-└── __tests__/           # Test suites
+tests/
+├── utils/                # Test suites
+└── ...                   # Additional tests
 ```
 
 ## 🙏 Acknowledgments
