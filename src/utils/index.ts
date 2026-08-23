@@ -4,6 +4,7 @@ import os from "os";
 import fs from "fs-extra";
 import path from "path";
 import { confirm } from "@inquirer/prompts";
+import { UIHelper } from "./ui";
 
 const execAsync = promisify(exec);
 
@@ -29,36 +30,36 @@ export async function setGitHubSSHKey(sshKeyPath: string) {
     }
 
     await fs.writeFile(sshConfigPath, sshConfig);
-    console.log('SSH config for GitHub updated successfully.');
+    UIHelper.success('SSH config for GitHub updated successfully.');
   } catch (error) {
-    console.error('Failed to update SSH config for GitHub:', error);
+    UIHelper.error('Failed to update SSH config for GitHub: ' + (error as Error).message);
   }
 }
 
 export async function removeSSHKeyFromAgent(sshKeyPath: string): Promise<void> {
   try {
     await execAsync(`ssh-add -d ${sshKeyPath}`);
-    console.log("SSH key removed from ssh-agent successfully.");
+    UIHelper.success("SSH key removed from ssh-agent successfully.");
   } catch (error) {
-    console.error("Error removing SSH key from ssh-agent:", (error as Error).message);
+    UIHelper.error("Error removing SSH key from ssh-agent: " + (error as Error).message);
   }
 }
 
 export async function testGithubAccess(sshKeyPath: string): Promise<void> {
-  console.log("Testing SSH access to GitHub...\n");
+  UIHelper.printHeader("Testing SSH Access to GitHub");
 
   try {
     await execAsync(`ssh-add ${sshKeyPath}`);
 
     try {
-      const { stdout } = await execAsync('ssh -T git@github.com');
-      console.log("🎉 Space configuration works! You've successfully authenticated with GitHub.");
+      await execAsync('ssh -T git@github.com');
+      UIHelper.success("🎉 Space configuration works! You've successfully authenticated with GitHub.");
     } catch (error) {
       const { stderr } = error as { stderr: string };
       if (stderr.includes("successfully authenticated")) {
-        console.log("🎉 Space configuration works! You've successfully authenticated with GitHub.\n");
+        UIHelper.success("🎉 Space configuration works! You've successfully authenticated with GitHub.");
       } else {
-        console.error("🚨 Error testing SSH access to GitHub:", (error as Error).message);
+        UIHelper.error("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
       }
     }
     
@@ -70,10 +71,11 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
     if (!showPublicKey) return;
     const publicKeyPath = `${sshKeyPath}.pub`;
     const publicKey = await fs.readFile(publicKeyPath, 'utf8');
-    console.log("Here is your public SSH key:\n", publicKey);
+    console.log(UIHelper.dim("\nPublic SSH Key:"));
+    console.log(UIHelper.highlight(publicKey));
   } catch (error) {
-    console.error("🚨 Error testing SSH access to GitHub:", (error as Error).message);
-    console.log("Ensure the SSH key has been added to the ssh-agent and is associated with your GitHub account.");
+    UIHelper.error("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
+    UIHelper.info("Ensure the SSH key has been added to the ssh-agent and is associated with your GitHub account.");
   }
 }
 
@@ -92,7 +94,7 @@ export const copyToClipboard = (publicKey: string) => {
         copyCommand = "xclip -selection clipboard";
         break;
       default:
-        console.error(
+        UIHelper.error(
           `Platform ${process.platform} is not supported for clipboard operations.`
         );
         reject(new Error("Unsupported platform for clipboard operations."));
