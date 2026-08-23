@@ -189,8 +189,8 @@ describe('commands/batch export/import — host carry', () => {
 
       await importSpaceConfiguration();
 
-      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space 'Injected' contains a line break"));
-      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space 'Also Injected' contains a line break"));
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Identity 'Injected' contains a line break"));
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Identity 'Also Injected' contains a line break"));
       expect(mockSaveStore).toHaveBeenCalledWith(expect.objectContaining({
         identities: [expect.objectContaining({ name: 'clean' })]
       }));
@@ -219,7 +219,7 @@ describe('commands/batch export/import — host carry', () => {
 
       await importSpaceConfiguration();
 
-      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space 'Poisoned' contains a line break"));
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Identity 'Poisoned' contains a line break"));
       expect(mockSaveStore).toHaveBeenCalledWith(expect.objectContaining({
         identities: [expect.objectContaining({ name: 'clean' })]
       }));
@@ -244,7 +244,7 @@ describe('commands/batch export/import — host carry', () => {
 
       await importSpaceConfiguration();
 
-      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space '../../../tmp/evil' has an invalid name"));
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Identity '../../../tmp/evil' has an invalid name"));
       expect(mockSaveStore).toHaveBeenCalledWith(expect.objectContaining({
         identities: [expect.objectContaining({ name: 'clean' })]
       }));

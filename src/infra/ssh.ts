@@ -349,7 +349,7 @@ export async function testHostAccess(sshKeyPath: string, host: string): Promise<
   try {
     const result = await checkHostAccess(sshKeyPath, host);
     if (result.ok) {
-      UIHelper.success(`Space configuration works! You've successfully authenticated with ${host}.`);
+      UIHelper.success(`Identity configuration works! You've successfully authenticated with ${host}.`);
     } else {
       fail(`Error testing SSH access to ${host}: ` + result.detail);
     }

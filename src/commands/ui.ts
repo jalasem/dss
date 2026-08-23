@@ -123,7 +123,7 @@ export class UIHelper {
 
   static printSpaceTable(spaces: Array<{ name: string; email: string; userName: string; sshKeyPath: string; host?: string }>, activeSpace?: string): void {
     if (spaces.length === 0) {
-      this.warning('No spaces have been added yet.');
+      this.warning('No identities yet.');
       return;
     }
 
@@ -312,9 +312,9 @@ export class UIHelper {
   static printQuickHelp(): void {
     console.log(this.isPlain() ? 'Quick commands:' : chalk.dim('Quick commands:'));
     const lines: Array<[string, string]> = [
-      ['dss list', 'Show all spaces'],
-      ['dss add', 'Add new space'],
-      ['dss switch', 'Switch between spaces'],
+      ['dss ls', 'Show all identities'],
+      ['dss new', 'Add new identity'],
+      ['dss use', 'Switch between identities'],
       ['dss --help', 'Show detailed help'],
     ];
     lines.forEach(([cmd, desc]) => {

@@ -90,7 +90,7 @@ _dss_completion() {
     # Main commands
     opts="ls use new edit rm link unlink key config completion doctor status --help --version -h -v"
 
-    # Get space names for relevant commands
+    # Get identity names for relevant commands
     if [[ \$cur != -* && (\$prev == "use" || \$prev == "rm" || \$prev == "edit" || \$prev == "doctor" || \$prev == "link") ]]; then
         local spaces
         if [ -f ~/.dss/spaces/config.json ]; then
@@ -150,13 +150,13 @@ _dss() {
     local -a commands spaces
     
     commands=(
-        'new:Create a new development space'
-        'ls:List all development spaces'
-        'use:Switch to a specified space'
-        'rm:Remove a specified space'
-        'edit:Modify an existing space'
+        'new:Create a new identity'
+        'ls:List all identities'
+        'use:Switch to a specified identity'
+        'rm:Remove a specified identity'
+        'edit:Modify an existing identity'
         'doctor:Run the full health check for an identity'
-        'link:Link a space to one or more Git repositories'
+        'link:Link an identity to one or more Git repositories'
         'unlink:Remove the DSS link from a Git repository'
         'status:Show repository-local DSS binding status'
         'key:Manage SSH keys for an identity (show, copy, rotate)'
@@ -166,7 +166,7 @@ _dss() {
         '--version:Show version information'
     )
 
-    # Get space names
+    # Get identity names
     if [[ -f ~/.dss/spaces/config.json ]]; then
         spaces=($(grep -o '"name": *"[^"]*"' ~/.dss/spaces/config.json | cut -d'"' -f4))
     fi
@@ -231,7 +231,7 @@ function generateFishScript(): string {
   return `#!/usr/bin/env fish
 # DSS (Dev Spaces Switcher) Fish Completion Script
 
-# Function to get space names
+# Function to get identity names
 function __dss_get_spaces
     if test -f ~/.dss/spaces/config.json
         cat ~/.dss/spaces/config.json | grep -o '"name": *"[^"]*"' | cut -d'"' -f4
@@ -242,13 +242,13 @@ end
 complete -c dss -f
 
 # Commands
-complete -c dss -n '__fish_use_subcommand' -a 'new' -d 'Create a new development space'
-complete -c dss -n '__fish_use_subcommand' -a 'ls' -d 'List all development spaces'
-complete -c dss -n '__fish_use_subcommand' -a 'use' -d 'Switch to a specified space'
-complete -c dss -n '__fish_use_subcommand' -a 'rm' -d 'Remove a specified space'
-complete -c dss -n '__fish_use_subcommand' -a 'edit' -d 'Modify an existing space'
+complete -c dss -n '__fish_use_subcommand' -a 'new' -d 'Create a new identity'
+complete -c dss -n '__fish_use_subcommand' -a 'ls' -d 'List all identities'
+complete -c dss -n '__fish_use_subcommand' -a 'use' -d 'Switch to a specified identity'
+complete -c dss -n '__fish_use_subcommand' -a 'rm' -d 'Remove a specified identity'
+complete -c dss -n '__fish_use_subcommand' -a 'edit' -d 'Modify an existing identity'
 complete -c dss -n '__fish_use_subcommand' -a 'doctor' -d 'Run the full health check for an identity'
-complete -c dss -n '__fish_use_subcommand' -a 'link' -d 'Link a space to one or more Git repositories'
+complete -c dss -n '__fish_use_subcommand' -a 'link' -d 'Link an identity to one or more Git repositories'
 complete -c dss -n '__fish_use_subcommand' -a 'unlink' -d 'Remove the DSS link from a Git repository'
 complete -c dss -n '__fish_use_subcommand' -a 'status' -d 'Show repository-local DSS binding status'
 complete -c dss -n '__fish_use_subcommand' -a 'key' -d 'Manage SSH keys for an identity (show, copy, rotate)'
@@ -259,7 +259,7 @@ complete -c dss -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell co
 complete -c dss -n '__fish_use_subcommand' -l help -s h -d 'Show help information'
 complete -c dss -n '__fish_use_subcommand' -l version -s v -d 'Show version information'
 
-# Space name completions for relevant commands
+# Identity name completions for relevant commands
 complete -c dss -n '__fish_seen_subcommand_from use rm edit doctor link' -a '(__dss_get_spaces)'
 
 # Options for specific commands

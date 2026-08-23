@@ -22,14 +22,14 @@ export async function exportSpaceConfiguration(exportPath?: string) {
   const { config } = await loadConfig();
 
   if (config.spaces.length === 0) {
-    UIHelper.warning('No spaces to export.');
+    UIHelper.warning('No identities to export.');
     return;
   }
 
-  UIHelper.printHeader('Export Space Configuration');
+  UIHelper.printHeader('Export Identity Configuration');
 
   const selectedSpaces = await checkbox({
-    message: 'Select spaces to export:',
+    message: 'Select identities to export:',
     choices: config.spaces.map(space => ({
       name: space.name,
       value: space.name,
@@ -38,7 +38,7 @@ export async function exportSpaceConfiguration(exportPath?: string) {
   });
 
   if (selectedSpaces.length === 0) {
-    UIHelper.info('No spaces selected for export.');
+    UIHelper.info('No identities selected for export.');
     return;
   }
 
@@ -60,14 +60,14 @@ export async function exportSpaceConfiguration(exportPath?: string) {
   await fs.writeJson(resolvedExportPath, exportData, { spaces: 2 });
 
   UIHelper.printSuccessBox('Configuration Exported', [
-    `${selectedSpaces.length} spaces exported`,
+    `${selectedSpaces.length} identities exported`,
     `Saved to: ${resolvedExportPath}`,
     'Note: SSH keys not included for security'
   ]);
 }
 
 export async function importSpaceConfiguration(importPathArg?: string) {
-  UIHelper.printHeader('Import Space Configuration');
+  UIHelper.printHeader('Import Identity Configuration');
 
   const importPath = importPathArg ?? defaultExportPath();
 
@@ -85,7 +85,7 @@ export async function importSpaceConfiguration(importPathArg?: string) {
       return;
     }
 
-    UIHelper.info(`Found ${importData.spaces.length} spaces in import file.`);
+    UIHelper.info(`Found ${importData.spaces.length} identities in import file.`);
 
     const { store, config, originalBySpace } = await loadConfig();
 
@@ -104,7 +104,7 @@ export async function importSpaceConfiguration(importPathArg?: string) {
         || hasLineBreak(importSpace.host)
         || hasLineBreak(importSpace.sshKeyPath)
       ) {
-        UIHelper.warning(`Space '${importSpace.name}' contains a line break in its name/email/userName/host - skipping.`);
+        UIHelper.warning(`Identity '${importSpace.name}' contains a line break in its name/email/userName/host - skipping.`);
         return false;
       }
 
@@ -113,24 +113,24 @@ export async function importSpaceConfiguration(importPathArg?: string) {
       // charset rule (e.g. "../../../tmp/x") rather than only slugifying it.
       const nameValidation = validateIdentityName(importSpace.name);
       if (nameValidation !== true) {
-        UIHelper.warning(`Space '${importSpace.name}' has an invalid name (${nameValidation}) - skipping.`);
+        UIHelper.warning(`Identity '${importSpace.name}' has an invalid name (${nameValidation}) - skipping.`);
         return false;
       }
 
       const exists = Boolean(findSpace(config, importSpace.name));
       if (exists) {
-        UIHelper.warning(`Space '${importSpace.name}' already exists - skipping.`);
+        UIHelper.warning(`Identity '${importSpace.name}' already exists - skipping.`);
       }
       return !exists;
     });
 
     if (spacesToImport.length === 0) {
-      UIHelper.info('No new spaces to import.');
+      UIHelper.info('No new identities to import.');
       return;
     }
 
     const confirmImport = await confirm({
-      message: `Import ${spacesToImport.length} new spaces?`,
+      message: `Import ${spacesToImport.length} new identities?`,
       default: true
     });
 
@@ -152,9 +152,9 @@ export async function importSpaceConfiguration(importPathArg?: string) {
     await persistConfig(store, config, originalBySpace);
 
     UIHelper.printSuccessBox('Import Completed', [
-      `${spacesToImport.length} spaces imported`,
+      `${spacesToImport.length} identities imported`,
       'Note: SSH keys need to be set up manually',
-      'Use `dss edit <space>` to configure SSH keys'
+      'Use `dss edit <identity>` to configure SSH keys'
     ]);
 
   } catch (error) {

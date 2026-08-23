@@ -10,9 +10,9 @@ export function slugify(name: string): string {
 // path in batch.ts — both of which can otherwise hand a name straight to
 // fs.move/a key directory join (e.g. "../../../tmp/x" escaping ~/.dss).
 export function validateIdentityName(name: unknown): true | string {
-  if (typeof name !== "string" || !name.trim()) return "Space name is required!";
-  if (name.length < 2) return "Space name must be at least 2 characters long";
-  if (!/^[a-zA-Z0-9\s\-_]+$/.test(name)) return "Space name can only contain letters, numbers, spaces, hyphens, and underscores";
+  if (typeof name !== "string" || !name.trim()) return "Identity name is required!";
+  if (name.length < 2) return "Identity name must be at least 2 characters long";
+  if (!/^[a-zA-Z0-9\s\-_]+$/.test(name)) return "Identity name can only contain letters, numbers, spaces, hyphens, and underscores";
   return true;
 }
 

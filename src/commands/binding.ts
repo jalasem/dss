@@ -32,7 +32,7 @@ async function resolveSpace(spaceName?: string): Promise<ISpace | undefined> {
   if (config.spaces.length === 0) return undefined;
 
   const selectedName = spaceName || await select({
-    message: 'Choose a space to bind:',
+    message: 'Choose an identity to bind:',
     choices: config.spaces.map(space => ({
       name: space.name,
       value: space.name,
@@ -78,11 +78,11 @@ export async function bindSpaceToRepository(
 
     const space = await resolveSpace(spaceName);
     if (!space) {
-      fail(spaceName ? `Space "${spaceName}" was not found.` : 'No spaces have been configured.');
+      fail(spaceName ? `Identity "${spaceName}" was not found.` : 'No identities have been configured.');
       return;
     }
     if (!space.sshKeyPath?.trim()) {
-      fail(`Space "${space.name}" does not have an SSH key.`);
+      fail(`Identity "${space.name}" does not have an SSH key.`);
       return;
     }
 

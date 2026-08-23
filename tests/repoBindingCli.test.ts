@@ -223,12 +223,12 @@ describe('repository binding CLI commands', () => {
 
     await fs.remove(spacesConfigPath);
     let result = runCliFailure(['link', '--path', repository]);
-    expect(result.output).toContain('No spaces have been configured.');
+    expect(result.output).toContain('No identities have been configured.');
     expect(result.output).not.toContain('ENOENT');
 
     await fs.outputJson(spacesConfigPath, { spaces: {} });
     result = runCliFailure(['link', '--path', repository]);
-    expect(result.output).toContain('No spaces have been configured.');
+    expect(result.output).toContain('No identities have been configured.');
 
     await fs.outputJson(spacesConfigPath, {
       spaces: [{ name: 'personal', email: 'personal@example.com', userName: 'Personal User' }]

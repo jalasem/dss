@@ -109,7 +109,7 @@ describe('legacy alias CLI commands (switch/add/remove) — warn + delegate', ()
     //
     // Closing stdin immediately instead is deterministic: the very first
     // prompt gets an immediate ExitPromptError, and addSpace's own
-    // unconditional opening output — "Create New Development Space",
+    // unconditional opening output — "Create New Identity",
     // printed by UIHelper.printHeader as literally the first statement in
     // addSpace() — is real, content-specific proof the deprecatedAlias
     // wrapper actually delegated into addSpace rather than merely not
@@ -119,7 +119,7 @@ describe('legacy alias CLI commands (switch/add/remove) — warn + delegate', ()
     expect(result.status).toBe(130); // isPromptExitError path in index.ts
     expect(result.stderr).toContain('"dss add" is deprecated');
     expect(result.stderr).toContain('Use "dss new"');
-    expect(result.stdout).toContain('Create New Development Space');
+    expect(result.stdout).toContain('Create New Identity');
   });
 
   it('legacy "remove" delegates to removeSpace (persists the removal, prints its success output) and warns to point at "dss rm"', async () => {

@@ -77,7 +77,7 @@ describe('CLI Integration Tests', () => {
 
         // Delegation proof: listSpaces' actual output.
         expect(result.status).toBe(0);
-        expect(result.stdout).toContain('Your Development Spaces');
+        expect(result.stdout).toContain('Your Identities');
         expect(result.stdout).toContain('alias-proof-space');
         // Deprecation-warning proof.
         expect(result.stderr).toContain('"dss list" is deprecated');

@@ -54,11 +54,11 @@ export async function reapplyActiveIdentity(space: ISpace, store: IStoreV2): Pro
 }
 
 export async function addSpace() {
-  UIHelper.printHeader("Create New Development Space");
+  UIHelper.printHeader("Create New Identity");
   UIHelper.info("Please provide the following information:");
 
   const name = await input({
-    message: "Space name:",
+    message: "Identity name:",
     validate: (input) => validateIdentityName(input),
   });
 
@@ -87,7 +87,7 @@ export async function addSpace() {
   const host = await promptHost();
 
   const shouldGenerateKey = await confirm({
-    message: "Generate a new SSH key for this space?",
+    message: "Generate a new SSH key for this identity?",
     default: true,
   });
 
@@ -99,8 +99,8 @@ export async function addSpace() {
   const slugifiedSpaceName = slugify(name);
 
   if (findSpace(config, slugifiedSpaceName)) {
-    fail(`A space with the name "${name}" already exists.`);
-    UIHelper.info("Please choose a different name or use " + UIHelper.command("dss edit") + " to modify the existing space.");
+    fail(`An identity with the name "${name}" already exists.`);
+    UIHelper.info("Please choose a different name or use " + UIHelper.command("dss edit") + " to modify the existing identity.");
     return;
   }
 
@@ -163,15 +163,15 @@ export async function addSpace() {
   }
 
   const switchToNewSpace = await confirm({
-    message: `Do you want to switch to the newly added space "${slugifiedSpaceName}" now?`,
+    message: `Do you want to switch to the newly added identity "${slugifiedSpaceName}" now?`,
     default: true,
   });
 
   if (switchToNewSpace) {
-    UIHelper.info("Switching to new space...");
+    UIHelper.info("Switching to new identity...");
     await switchSpace(slugifiedSpaceName);
   } else {
-    UIHelper.success(`Space "${UIHelper.highlight(slugifiedSpaceName)}" added successfully!`);
+    UIHelper.success(`Identity "${UIHelper.highlight(slugifiedSpaceName)}" added successfully!`);
     UIHelper.info("Use " + UIHelper.command(`dss use ${slugifiedSpaceName}`) + " to activate it.");
   }
 }
@@ -184,7 +184,7 @@ export async function listSpaces() {
     return;
   }
 
-  UIHelper.printHeader("Your Development Spaces");
+  UIHelper.printHeader("Your Identities");
   UIHelper.printSpaceTable(config.spaces, config.activeSpace);
 }
 
@@ -202,11 +202,11 @@ export async function switchSpace(
   let selectedSpaceName = spaceName;
 
   if (!selectedSpaceName) {
-    UIHelper.printHeader("Switch Development Space");
+    UIHelper.printHeader("Switch Identity");
 
     // Use enhanced selection with fuzzy search
     selectedSpaceName = await select({
-      message: "Choose a space to switch to:",
+      message: "Choose an identity to switch to:",
       choices: config.spaces.map((space) => ({
         name: space.name === config.activeSpace ? UIHelper.activeSpace(space.name) : UIHelper.inactiveSpace(space.name),
         value: space.name,
@@ -222,8 +222,8 @@ export async function switchSpace(
 
   const space = findSpace(config, selectedSpaceName);
   if (!space) {
-    fail(`Space "${selectedSpaceName}" not found.`);
-    UIHelper.info("Available spaces:");
+    fail(`Identity "${selectedSpaceName}" not found.`);
+    UIHelper.info("Available identities:");
     config.spaces.forEach(s => {
       console.log(`  · ${UIHelper.highlight(s.name)} (${s.email})`);
     });
@@ -231,7 +231,7 @@ export async function switchSpace(
   }
 
   if (config.activeSpace === space.name) {
-    UIHelper.warning(`Space "${UIHelper.highlight(space.name)}" is already active.`);
+    UIHelper.warning(`Identity "${UIHelper.highlight(space.name)}" is already active.`);
     return;
   }
 
@@ -254,12 +254,12 @@ export async function switchSpace(
       previewLines.push(`No key configured — key activation steps would be skipped`);
     }
     previewLines.push(`Would save configuration`, 'Use without --dry-run to apply changes');
-    UIHelper.printInfoBox("Dry Run: Switch Space Preview", previewLines);
+    UIHelper.printInfoBox("Dry Run: Switch Identity Preview", previewLines);
     return;
   }
 
   try {
-    UIHelper.printProgress("Switching to space");
+    UIHelper.printProgress("Switching to identity");
 
     // Set Git configuration (includeIf-first: write the DSS-managed
     // active.gitconfig and make sure the user's global config includes it,
@@ -284,7 +284,7 @@ export async function switchSpace(
       await setHostSSHKey(space.sshKeyPath, host);
     } else {
       UIHelper.warning(
-        `Space "${space.name}" has no SSH key — Git identity switched, SSH config unchanged. ` +
+        `Identity "${space.name}" has no SSH key — Git identity switched, SSH config unchanged. ` +
         `Use ${UIHelper.command('dss key rotate')} (regenerate SSH keys) to add one.`
       );
     }
@@ -293,7 +293,7 @@ export async function switchSpace(
     await persistConfig(store, config, originalBySpace);
 
     UIHelper.clearProgress();
-    UIHelper.printSuccessBox("Space Activated", [
+    UIHelper.printSuccessBox("Identity Activated", [
       `Switched to: ${space.name}`,
       `Git user: ${space.userName}`,
       `Email: ${space.email}`,
@@ -307,7 +307,7 @@ export async function switchSpace(
       // here would fall into the catch below and fail() the whole command
       // after the real work is already done.
       const confirmTest = await safeConfirm({
-        message: `Test SSH access to ${host} for this space?`,
+        message: `Test SSH access to ${host} for this identity?`,
         default: false,
       });
 
@@ -320,7 +320,7 @@ export async function switchSpace(
     await listSpaces();
   } catch (error) {
     UIHelper.clearProgress();
-    fail(`Failed to switch to space "${selectedSpaceName}": ${(error as Error).message}`);
+    fail(`Failed to switch to identity "${selectedSpaceName}": ${(error as Error).message}`);
   }
 }
 
@@ -328,12 +328,12 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
-    UIHelper.warning("No spaces have been added yet.");
-    UIHelper.info("Use " + UIHelper.command("dss new") + " to create your first space.");
+    UIHelper.warning("No identities yet.");
+    UIHelper.info("Use " + UIHelper.command("dss new") + " to create your first identity.");
     return;
   }
 
-  UIHelper.printHeader("Remove Development Space");
+  UIHelper.printHeader("Remove Identity");
   if (!options?.dryRun) {
     UIHelper.warning("This action cannot be undone!");
   }
@@ -341,7 +341,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   let selectedSpaceName = spaceName;
   if (!selectedSpaceName) {
     selectedSpaceName = await select({
-      message: "Select a space to remove:",
+      message: "Select an identity to remove:",
       choices: config.spaces.map((space) => ({
         name: space.name === config.activeSpace ? UIHelper.activeSpace(space.name) + " (active)" : space.name,
         value: space.name,
@@ -352,18 +352,18 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
 
   const spaceToRemove = findSpace(config, selectedSpaceName);
   if (!spaceToRemove) {
-    fail(`Space "${selectedSpaceName}" not found.`);
+    fail(`Identity "${selectedSpaceName}" not found.`);
     return;
   }
 
   if (spaceToRemove.name === config.activeSpace) {
-    fail(`Cannot remove the active space '${UIHelper.highlight(spaceToRemove.name)}'.`);
-    UIHelper.info("Please switch to another space first using " + UIHelper.command("dss use") + ".");
+    fail(`Cannot remove the active identity '${UIHelper.highlight(spaceToRemove.name)}'.`);
+    UIHelper.info("Please switch to another identity first using " + UIHelper.command("dss use") + ".");
     return;
   }
 
   // Show details of what will be removed
-  console.log(UIHelper.dim("\nSpace to be removed:"));
+  console.log(UIHelper.dim("\nIdentity to be removed:"));
   console.log(`  Name: ${UIHelper.highlight(spaceToRemove.name)}`);
   console.log(`  Email: ${spaceToRemove.email}`);
   console.log(`  User: ${spaceToRemove.userName}`);
@@ -372,8 +372,8 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   // Check for dry-run mode
   if (options?.dryRun) {
     const hasKey = Boolean(spaceToRemove.sshKeyPath);
-    UIHelper.printInfoBox("Dry Run: Remove Space Preview", [
-      `Would remove space: ${spaceToRemove.name}`,
+    UIHelper.printInfoBox("Dry Run: Remove Identity Preview", [
+      `Would remove identity: ${spaceToRemove.name}`,
       `Would remove from configuration`,
       hasKey ? `Would remove SSH key from agent` : `No SSH key configured — agent removal skipped`,
       `SSH key files would remain on disk`,
@@ -393,7 +393,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   }
 
   try {
-    UIHelper.printProgress("Removing space");
+    UIHelper.printProgress("Removing identity");
 
     // Remove SSH key from agent
     if (spaceToRemove.sshKeyPath) {
@@ -405,7 +405,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     await persistConfig(store, config, originalBySpace);
 
     UIHelper.clearProgress();
-    UIHelper.success(`Space '${UIHelper.highlight(spaceToRemove.name)}' has been removed successfully.`);
+    UIHelper.success(`Identity '${UIHelper.highlight(spaceToRemove.name)}' has been removed successfully.`);
 
     // Registered repo-local bindings aren't removed here — only `dss unlink`
     // clears a registry entry — so warn that they still reference this
@@ -424,18 +424,18 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
       UIHelper.info(`Run ${UIHelper.command('dss unlink')} in each repository to clear the binding.`);
     }
 
-    // Show remaining spaces
+    // Show remaining identities
     if (config.spaces.length > 0) {
-      console.log(UIHelper.dim("\nRemaining spaces:"));
+      console.log(UIHelper.dim("\nRemaining identities:"));
       config.spaces.forEach(space => {
         console.log(`  · ${UIHelper.highlight(space.name)} (${space.email})`);
       });
     } else {
-      UIHelper.info("No spaces remaining. Use " + UIHelper.command("dss new") + " to create a new one.");
+      UIHelper.info("No identities remaining. Use " + UIHelper.command("dss new") + " to create a new one.");
     }
   } catch (error) {
     UIHelper.clearProgress();
-    fail(`Failed to remove space: ${(error as Error).message}`);
+    fail(`Failed to remove identity: ${(error as Error).message}`);
   }
 }
 
@@ -443,13 +443,13 @@ export async function modifySpace(spaceName?: string) {
   const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
-    UIHelper.warning("No spaces have been added yet.");
-    UIHelper.info("Use " + UIHelper.command("dss new") + " to create your first space.");
+    UIHelper.warning("No identities yet.");
+    UIHelper.info("Use " + UIHelper.command("dss new") + " to create your first identity.");
     return;
   }
 
   const selectedSpace = spaceName ?? await select({
-    message: "Which space would you like to modify?",
+    message: "Which identity would you like to modify?",
     choices: config.spaces.map((space) => ({
       name: space.name,
       value: space.name,
@@ -458,7 +458,7 @@ export async function modifySpace(spaceName?: string) {
 
   const space = findSpace(config, selectedSpace);
   if (!space) {
-    fail(`Space "${selectedSpace}" not found.`);
+    fail(`Identity "${selectedSpace}" not found.`);
     return;
   }
 
@@ -510,7 +510,7 @@ export async function modifySpace(spaceName?: string) {
       (s) => s !== space && slugify(s.name) === newSlug
     );
     if (isDuplicate) {
-      fail(`Another space with the name "${newSpaceName}" already exists.`);
+      fail(`Another identity with the name "${newSpaceName}" already exists.`);
       return;
     }
 
@@ -592,7 +592,7 @@ export async function modifySpace(spaceName?: string) {
     }
   } else if (keyDirMoved) {
     UIHelper.warning(
-      `Repositories bound to this space via ${UIHelper.command('dss link')} may still reference the old key path — ` +
+      `Repositories bound to this identity via ${UIHelper.command('dss link')} may still reference the old key path — ` +
       `re-bind them with ${UIHelper.command(`dss link ${space.name}`)}.`
     );
   }
@@ -618,9 +618,9 @@ export async function modifySpace(spaceName?: string) {
   }
 
   if (isUpdateMade) {
-    UIHelper.success(`Space "${UIHelper.highlight(space.name)}" updated successfully.`);
+    UIHelper.success(`Identity "${UIHelper.highlight(space.name)}" updated successfully.`);
   } else {
-    UIHelper.info("No changes were made to the space.");
+    UIHelper.info("No changes were made to the identity.");
   }
 }
 

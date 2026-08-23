@@ -26,7 +26,7 @@ import { doctor } from './commands/doctor';
 program
   .name("dss")
   .description(
-    UIHelper.highlight("Dev Spaces Switcher (DSS)") + ": Manage your development spaces easily."
+    UIHelper.highlight("Dev Spaces Switcher (DSS)") + ": Manage your development identities easily."
   )
   .version(require('../package.json').version, '-v, --version', 'output the current version');
 
@@ -60,30 +60,30 @@ function deprecatedAlias(
 
 // --- Primary command surface -------------------------------------------
 
-program.command("ls").description("List all spaces").action(listSpaces);
+program.command("ls").description("List all identities").action(listSpaces);
 
 program
-  .command("use [spaceName]")
-  .description("Switch to a specified space")
+  .command("use [identityName]")
+  .description("Switch to a specified identity")
   .option('--dry-run', 'Preview changes without applying them')
   .action(switchSpace);
 
-program.command("new").description("Add a new space").action(addSpace);
+program.command("new").description("Add a new identity").action(addSpace);
 
 program
-  .command("edit [spaceName]")
-  .description("Modify an existing space")
+  .command("edit [identityName]")
+  .description("Modify an existing identity")
   .action(modifySpace);
 
 program
-  .command("rm [spaceName]")
-  .description("Remove a specified space")
+  .command("rm [identityName]")
+  .description("Remove a specified identity")
   .option('--dry-run', 'Preview what would be removed without actually removing it')
   .action(removeSpace);
 
 program
-  .command('link [spaceName]')
-  .description('Link a space to one or more Git repositories')
+  .command('link [identityName]')
+  .description('Link an identity to one or more Git repositories')
   .option('-p, --path <repositoryPath>', 'Link an explicit Git repository')
   .option('-r, --recursive [parentPath]', 'Link repositories beneath a parent directory')
   .option('--dry-run', 'Preview changes without applying them')
@@ -107,12 +107,12 @@ const configCommand = program
 
 configCommand
   .command('export [path]')
-  .description('Export space configuration')
+  .description('Export identity configuration')
   .action(exportSpaceConfiguration);
 
 configCommand
   .command('import [path]')
-  .description('Import space configuration')
+  .description('Import identity configuration')
   .action(importSpaceConfiguration);
 
 program
@@ -138,17 +138,17 @@ program
 
 deprecatedAlias('list', 'ls', listSpaces);
 
-deprecatedAlias('switch [spaceName]', 'use', switchSpace, (cmd) => {
+deprecatedAlias('switch [identityName]', 'use', switchSpace, (cmd) => {
   cmd.option('--dry-run', 'Preview changes without applying them');
 });
 
 deprecatedAlias('add', 'new', addSpace);
 
-deprecatedAlias('remove [spaceName]', 'rm', removeSpace, (cmd) => {
+deprecatedAlias('remove [identityName]', 'rm', removeSpace, (cmd) => {
   cmd.option('--dry-run', 'Preview what would be removed without actually removing it');
 });
 
-deprecatedAlias('bind [spaceName]', 'link', bindSpaceToRepository, (cmd) => {
+deprecatedAlias('bind [identityName]', 'link', bindSpaceToRepository, (cmd) => {
   cmd.option('-p, --path <repositoryPath>', 'Bind an explicit Git repository');
   cmd.option('-r, --recursive [parentPath]', 'Bind repositories beneath a parent directory');
   cmd.option('--dry-run', 'Preview changes without applying them');

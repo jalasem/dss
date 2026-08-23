@@ -544,7 +544,7 @@ describe('commands/spaces', () => {
       await switchSpace();
 
       expect(mockSelect).toHaveBeenCalledWith({
-        message: 'Choose a space to switch to:',
+        message: 'Choose an identity to switch to:',
         choices: [{ name: expect.any(String), value: 'test-space', description: 'test@example.com (Test User)' }]
       });
     });
@@ -731,7 +731,7 @@ describe('commands/spaces', () => {
 
       // Check for the error message (UIHelper.error uses console.log with red color)
       expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining("Cannot remove the active space")
+        expect.stringContaining("Cannot remove the active identity")
       );
     });
 
@@ -764,7 +764,7 @@ describe('commands/spaces', () => {
       await removeSpace('test-space');
 
       expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining('Cannot remove the active space')
+        expect.stringContaining('Cannot remove the active identity')
       );
       expect(mockSaveStore).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
@@ -790,7 +790,7 @@ describe('commands/spaces', () => {
 
       await removeSpace('does-not-exist');
 
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Space "does-not-exist" not found.'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Identity "does-not-exist" not found.'));
       expect(process.exitCode).toBe(1);
     });
 
@@ -801,7 +801,7 @@ describe('commands/spaces', () => {
 
       await removeSpace('test-space');
 
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to remove space'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to remove identity'));
       expect(process.exitCode).toBe(1);
     });
 
@@ -865,7 +865,7 @@ describe('commands/spaces', () => {
       await modifySpace('nonexistent-space');
 
       expect(mockSelect).not.toHaveBeenCalled();
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Space "nonexistent-space" not found.'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Identity "nonexistent-space" not found.'));
     });
 
     it('should still prompt for selection when no name is provided', async () => {
@@ -1156,7 +1156,7 @@ describe('commands/spaces', () => {
 
       expect(mockFs.move).not.toHaveBeenCalled();
       expect(mockSaveStore).not.toHaveBeenCalled();
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Another space with the name "Other Space" already exists.'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Another identity with the name "Other Space" already exists.'));
       expect(process.exitCode).toBe(1);
     });
 
@@ -1314,7 +1314,7 @@ describe('commands/spaces', () => {
         message: 'Git host:',
         default: 'gitlab.com'
       }));
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No changes were made to the space.'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No changes were made to the identity.'));
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([spaceWithHost]));
     });
 
