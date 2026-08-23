@@ -25,10 +25,10 @@ const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 
 function createMockChildProcess() {
   const child: any = new EventEmitter();
-  child.stdin = {
-    write: jest.fn(),
-    end: jest.fn()
-  };
+  const stdin: any = new EventEmitter();
+  stdin.write = jest.fn();
+  stdin.end = jest.fn();
+  child.stdin = stdin;
   return child;
 }
 
@@ -311,6 +311,29 @@ Host other.com
       child.emit('close', 1);
 
       await expect(promise).rejects.toThrow('pbcopy exited with code 1');
+    });
+
+    it('rejects (instead of crashing) when the stdin pipe emits an error (regression)', async () => {
+      const child = createMockChildProcess();
+      mockSpawn.mockImplementation(() => child);
+
+      const promise = copyToClipboard(mockPublicKey);
+      const stdinError = new Error('EPIPE: write after end');
+      child.stdin.emit('error', stdinError);
+
+      await expect(promise).rejects.toThrow(stdinError);
+    });
+
+    it('does not double-settle when both a stdin error and a close event fire', async () => {
+      const child = createMockChildProcess();
+      mockSpawn.mockImplementation(() => child);
+
+      const promise = copyToClipboard(mockPublicKey);
+      const stdinError = new Error('EPIPE: write after end');
+      child.stdin.emit('error', stdinError);
+      child.emit('close', 0);
+
+      await expect(promise).rejects.toThrow(stdinError);
     });
   });
 });

@@ -106,17 +106,34 @@ export const copyToClipboard = (publicKey: string) => {
     }
 
     const child = spawn(command, args);
+    let settled = false;
+
+    const settleOnce = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      action();
+    };
 
     child.on("error", (error) => {
-      reject(error);
+      settleOnce(() => reject(error));
+    });
+
+    // Without this handler, an error on the stdin pipe (e.g. the binary
+    // exits before the write completes) is an unhandled 'error' event on
+    // the stream, which Node treats as an uncaught exception and crashes
+    // the process instead of surfacing as a rejected promise.
+    child.stdin.on("error", (error) => {
+      settleOnce(() => reject(error));
     });
 
     child.on("close", (code) => {
-      if (code === 0) {
-        resolve("Public SSH key copied to clipboard.");
-      } else {
-        reject(new Error(`${command} exited with code ${code}`));
-      }
+      settleOnce(() => {
+        if (code === 0) {
+          resolve("Public SSH key copied to clipboard.");
+        } else {
+          reject(new Error(`${command} exited with code ${code}`));
+        }
+      });
     });
 
     child.stdin.write(publicKey);
