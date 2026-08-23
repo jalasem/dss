@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
@@ -50,6 +50,18 @@ describe('repository binding CLI commands', () => {
       encoding: 'utf8',
       env: cliEnvironment()
     });
+  }
+
+  /** Like runCli, but returns stdout AND stderr separately (execFileSync
+   * only surfaces stdout on success) — needed to assert on the deprecation
+   * warning a legacy alias prints to stderr. */
+  function runCliCapture(args: string[], cwd: string = temporaryHome): { stdout: string; stderr: string; status: number | null } {
+    const result = spawnSync(process.execPath, ['--require', homedirPreloadPath, CLI_PATH, ...args], {
+      cwd,
+      encoding: 'utf8',
+      env: cliEnvironment()
+    });
+    return { stdout: result.stdout, stderr: result.stderr, status: result.status };
   }
 
   function runCliWithInput(args: string[], input: string, cwd: string = temporaryHome): string {
@@ -127,13 +139,37 @@ describe('repository binding CLI commands', () => {
   it('registers repository binding commands', () => {
     const output = runCli(['--help']);
 
-    expect(output).toContain('bind');
-    expect(output).toContain('unbind');
+    expect(output).toContain('link');
+    expect(output).toContain('unlink');
     expect(output).toContain('status');
+    // The legacy names are hidden from the top-level command listing.
+    expect(output).not.toMatch(/^\s+bind\s/m);
+    expect(output).not.toMatch(/^\s+unbind\s/m);
+  });
+
+  it('still binds via the legacy "bind" alias, printing a deprecation warning to stderr', () => {
+    const result = runCliCapture(['bind', 'personal', '--path', repository]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('personal');
+    expect(result.stderr).toContain('"dss bind" is deprecated');
+    expect(result.stderr).toContain('Use "dss link"');
+    expect(runGit(repository, ['config', 'dss.space'])).toBe('personal');
+  });
+
+  it('still unbinds via the legacy "unbind" alias, printing a deprecation warning to stderr', () => {
+    runCli(['link', 'personal', '--path', repository]);
+
+    const result = runCliCapture(['unbind', '--path', repository]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('"dss unbind" is deprecated');
+    expect(result.stderr).toContain('Use "dss unlink"');
+    expect(() => runGit(repository, ['config', 'dss.space'])).toThrow();
   });
 
   it('binds an explicit repository path without changing the process working directory', () => {
-    const output = runCli(['bind', 'personal', '--path', repository]);
+    const output = runCli(['link', 'personal', '--path', repository]);
 
     expect(output).toContain('personal');
     expect(runGit(repository, ['config', 'user.email'])).toBe('personal@example.com');
@@ -141,7 +177,7 @@ describe('repository binding CLI commands', () => {
   });
 
   it('records the binding in the store registry (config.json bindings) after a successful bind', async () => {
-    runCli(['bind', 'personal', '--path', repository]);
+    runCli(['link', 'personal', '--path', repository]);
 
     const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
     const config = await fs.readJson(spacesConfigPath);
@@ -152,8 +188,8 @@ describe('repository binding CLI commands', () => {
   });
 
   it('removes the binding from the store registry after a successful unbind', async () => {
-    runCli(['bind', 'personal', '--path', repository]);
-    runCli(['unbind', '--path', repository]);
+    runCli(['link', 'personal', '--path', repository]);
+    runCli(['unlink', '--path', repository]);
 
     const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
     const config = await fs.readJson(spacesConfigPath);
@@ -161,7 +197,7 @@ describe('repository binding CLI commands', () => {
     expect(config.bindings).toEqual([]);
   });
 
-  it('resolves a legacy raw-name space by its slug (dss bind my-work)', async () => {
+  it('resolves a legacy raw-name space by its slug (dss link my-work)', async () => {
     // The v1 config below is migrated to v2 (silently, on first read), which
     // slugifies stored identity names — so the legacy "My Work" display name
     // becomes "my-work" in the persisted store from this point on.
@@ -175,7 +211,7 @@ describe('repository binding CLI commands', () => {
       }]
     });
 
-    const output = runCli(['bind', 'my-work', '--path', repository]);
+    const output = runCli(['link', 'my-work', '--path', repository]);
 
     expect(output).toContain('my-work');
     expect(runGit(repository, ['config', 'user.email'])).toBe('work@example.com');
@@ -186,18 +222,18 @@ describe('repository binding CLI commands', () => {
     const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
 
     await fs.remove(spacesConfigPath);
-    let result = runCliFailure(['bind', '--path', repository]);
+    let result = runCliFailure(['link', '--path', repository]);
     expect(result.output).toContain('No spaces have been configured.');
     expect(result.output).not.toContain('ENOENT');
 
     await fs.outputJson(spacesConfigPath, { spaces: {} });
-    result = runCliFailure(['bind', '--path', repository]);
+    result = runCliFailure(['link', '--path', repository]);
     expect(result.output).toContain('No spaces have been configured.');
 
     await fs.outputJson(spacesConfigPath, {
       spaces: [{ name: 'personal', email: 'personal@example.com', userName: 'Personal User' }]
     });
-    result = runCliFailure(['bind', 'personal', '--path', repository]);
+    result = runCliFailure(['link', 'personal', '--path', repository]);
     expect(result.output).toContain('does not have an SSH key.');
   });
 
@@ -207,7 +243,7 @@ describe('repository binding CLI commands', () => {
     fs.ensureDirSync(sibling);
     runGit(sibling, ['init']);
 
-    runCli(['bind', 'personal'], repository);
+    runCli(['link', 'personal'], repository);
 
     expect(runGit(repository, ['config', 'dss.space'])).toBe('personal');
     expect(() => runGit(sibling, ['config', 'dss.space'])).toThrow();
@@ -218,7 +254,7 @@ describe('repository binding CLI commands', () => {
     const alpha = await createRepository(recursiveParent, 'alpha');
     const beta = await createRepository(recursiveParent, 'beta');
 
-    const output = runCli(['bind', 'personal', '-r', '--dry-run'], recursiveParent);
+    const output = runCli(['link', 'personal', '-r', '--dry-run'], recursiveParent);
 
     expect(output).toContain(alpha);
     expect(output).toContain(beta);
@@ -231,7 +267,7 @@ describe('repository binding CLI commands', () => {
     const alpha = await createRepository(recursiveParent, 'alpha');
     const beta = await createRepository(recursiveParent, 'beta');
 
-    const output = runCliWithInput(['bind', 'personal', '-r'], 'y\n', recursiveParent);
+    const output = runCliWithInput(['link', 'personal', '-r'], 'y\n', recursiveParent);
 
     expect(output.indexOf(alpha)).toBeLessThan(output.indexOf(beta));
     expect(output).toContain('Bind 2 repositories to "personal"?');
@@ -247,7 +283,7 @@ describe('repository binding CLI commands', () => {
     await fs.ensureDir(externalDssDirectory);
     await fs.symlink(externalDssDirectory, path.join(unsafeRepository, '.git', 'dss'));
 
-    const result = runCliFailure(['bind', 'personal', '-r'], recursiveParent, 'y\n');
+    const result = runCliFailure(['link', 'personal', '-r'], recursiveParent, 'y\n');
 
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('1 succeeded, 1 failed');
@@ -256,7 +292,7 @@ describe('repository binding CLI commands', () => {
   });
 
   it('shows binding status for a bound repository', () => {
-    runCli(['bind', 'personal', '--path', repository]);
+    runCli(['link', 'personal', '--path', repository]);
 
     const output = runCli(['status', '--path', repository]);
 
@@ -271,31 +307,31 @@ describe('repository binding CLI commands', () => {
   });
 
   it('unbinds only the repository DSS binding', () => {
-    runCli(['bind', 'personal', '--path', repository]);
+    runCli(['link', 'personal', '--path', repository]);
 
-    runCli(['unbind', '--path', repository]);
+    runCli(['unlink', '--path', repository]);
 
     expect(() => runGit(repository, ['config', 'dss.space'])).toThrow();
   });
 
   it('previews unbinding without removing the DSS binding', () => {
-    runCli(['bind', 'personal', '--path', repository]);
+    runCli(['link', 'personal', '--path', repository]);
 
-    const output = runCli(['unbind', '--path', repository, '--dry-run']);
+    const output = runCli(['unlink', '--path', repository, '--dry-run']);
 
     expect(output).toContain('Dry run');
     expect(runGit(repository, ['config', 'dss.space'])).toBe('personal');
   });
 
   it('reports that there is nothing to remove for an unbound dry-run', () => {
-    const output = runCli(['unbind', '--path', repository, '--dry-run']);
+    const output = runCli(['unlink', '--path', repository, '--dry-run']);
 
     expect(output).toContain('Dry run: there is no binding to remove.');
     expect(output).not.toContain('the existing binding would be removed');
   });
 
   it('rejects mutually exclusive repository selection options', () => {
-    const result = runCliFailure(['bind', 'personal', '--path', repository, '-r']);
+    const result = runCliFailure(['link', 'personal', '--path', repository, '-r']);
 
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('mutually exclusive');

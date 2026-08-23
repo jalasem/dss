@@ -58,7 +58,7 @@ describe('Integration Tests', () => {
     });
 
     it('should show help for specific commands', () => {
-      const commands = ['add', 'list', 'switch', 'remove', 'edit', 'test'];
+      const commands = ['new', 'ls', 'use', 'rm', 'edit', 'test'];
       
       commands.forEach(command => {
         try {
@@ -95,7 +95,7 @@ describe('Integration Tests', () => {
       
       // The config should be created when we run any command
       try {
-        const result = execSync(`node ${CLI_PATH} list`, { 
+        const result = execSync(`node ${CLI_PATH} ls`, {
           encoding: 'utf8',
           stdio: 'pipe',
           env: { ...process.env, HOME: testHomeDir }
@@ -110,17 +110,21 @@ describe('Integration Tests', () => {
   });
 
   describe('Space Operations', () => {
-    it('should handle list command when no spaces exist', () => {
+    it('runs the first-run flow (welcome + creation prompt) when no spaces exist', () => {
+      // Piped stdin closes immediately (no `input` supplied), so the
+      // creation prompt's safeConfirm() treats it as declined rather than
+      // hanging — see src/commands/prompts.ts's isPromptExitError handling.
       try {
-        const result = execSync(`node ${CLI_PATH} list`, { 
+        const result = execSync(`node ${CLI_PATH} ls`, {
           encoding: 'utf8',
           stdio: 'pipe',
           env: { ...process.env, HOME: testHomeDir }
         });
-        expect(result).toMatch(/no spaces|empty/i);
+        expect(result).toMatch(/dev spaces switcher/i);
+        expect(result).toContain('dss new');
       } catch (error: any) {
         const output = error.stdout || error.stderr || '';
-        expect(output).toMatch(/no spaces|empty/i);
+        expect(output).toMatch(/dev spaces switcher/i);
       }
     });
   });

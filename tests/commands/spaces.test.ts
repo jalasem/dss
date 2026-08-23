@@ -448,14 +448,15 @@ describe('commands/spaces', () => {
       expect(hasActiveSpace).toBe(true);
     });
 
-    it('should handle no spaces', async () => {
+    it('runs the first-run flow (welcome banner + creation prompt) when there are no spaces', async () => {
       mockLoadStore.mockResolvedValue(storeOf([]));
+      mockConfirm.mockResolvedValue(false); // decline creating an identity now
 
       await listSpaces();
 
-      expect(console.log).toHaveBeenCalledTimes(2);
-      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
-      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('Dev Spaces Switcher'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('dss new'))).toBe(true);
     });
 
     it('shows each space\'s host in a Host column', async () => {
@@ -519,14 +520,15 @@ describe('commands/spaces', () => {
       expect(mockTestHostAccess).toHaveBeenCalledWith(glSpace.sshKeyPath, 'gitlab.com');
     });
 
-    it('should handle space not found', async () => {
+    it('runs the first-run flow (welcome banner + creation prompt) when there are no spaces yet, regardless of the requested name', async () => {
       mockLoadStore.mockResolvedValue(storeOf([]));
+      mockConfirm.mockResolvedValue(false); // decline creating an identity now
 
       await switchSpace('nonexistent-space');
 
-      expect(console.log).toHaveBeenCalledTimes(2);
-      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
-      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('Dev Spaces Switcher'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('dss new'))).toBe(true);
     });
 
     it('should handle already active space', async () => {
@@ -831,7 +833,7 @@ describe('commands/spaces', () => {
       expect(calls.some(call => call && call.includes && call.includes('still bound to the removed identity "test-space"'))).toBe(true);
       expect(calls.some(call => call && call.includes && call.includes('/repos/one'))).toBe(true);
       expect(calls.some(call => call && call.includes && call.includes('/repos/two'))).toBe(true);
-      expect(calls.some(call => call && call.includes && call.includes('dss unbind'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('dss unlink'))).toBe(true);
     });
   });
 
@@ -870,7 +872,7 @@ describe('commands/spaces', () => {
 
       expect(console.log).toHaveBeenCalledTimes(2);
       expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('Space "test-space" does not have an associated SSH key.'));
-      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss bulk'));
+      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss key rotate'));
     });
 
     it('should handle no spaces', async () => {
@@ -880,7 +882,7 @@ describe('commands/spaces', () => {
 
       expect(console.log).toHaveBeenCalledTimes(2);
       expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
-      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
+      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss new'));
     });
 
     it('should target the named space rather than the active one', async () => {
@@ -1303,7 +1305,7 @@ describe('commands/spaces', () => {
 
       const calls = (console.log as jest.Mock).mock.calls.flat();
       expect(calls.some(call =>
-        call && call.includes && call.includes('dss bind') && call.includes('old key path')
+        call && call.includes && call.includes('dss link') && call.includes('old key path')
       )).toBe(true);
     });
 

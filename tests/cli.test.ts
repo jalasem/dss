@@ -20,10 +20,10 @@ describe('CLI Integration Tests', () => {
       try {
         const output = execSync(`node ${CLI_PATH} --help`, { encoding: 'utf8' });
         expect(output).toContain('Dev Spaces Switcher (DSS)');
-        expect(output).toContain('add');
-        expect(output).toContain('list');
-        expect(output).toContain('switch');
-        expect(output).toContain('remove');
+        expect(output).toContain('new');
+        expect(output).toContain('ls');
+        expect(output).toContain('use');
+        expect(output).toContain('rm');
         expect(output).toContain('edit');
         expect(output).toContain('test');
       } catch (error) {
@@ -32,9 +32,9 @@ describe('CLI Integration Tests', () => {
       }
     });
 
-    it('should show command help for individual commands', () => {
-      const commands = ['add', 'list', 'switch', 'remove', 'edit', 'test'];
-      
+    it('should show command help for individual (new primary) commands', () => {
+      const commands = ['new', 'ls', 'use', 'rm', 'edit', 'test'];
+
       commands.forEach(cmd => {
         try {
           const output = execSync(`node ${CLI_PATH} ${cmd} --help`, { encoding: 'utf8' });
@@ -44,6 +44,41 @@ describe('CLI Integration Tests', () => {
           expect((error as any).stdout).toContain(cmd);
         }
       });
+    });
+
+    it('hides legacy aliases from the top-level --help listing, but their own --help still works', () => {
+      const output = execSync(`node ${CLI_PATH} --help`, { encoding: 'utf8' });
+      // The top-level command list should not advertise the deprecated names.
+      expect(output).not.toMatch(/^\s+add\s/m);
+      expect(output).not.toMatch(/^\s+list\s/m);
+      expect(output).not.toMatch(/^\s+switch\s/m);
+
+      // But the alias command itself is still registered and reachable.
+      const switchHelp = execSync(`node ${CLI_PATH} switch --help`, { encoding: 'utf8' });
+      expect(switchHelp).toContain('switch');
+    });
+
+    it('invoking a legacy alias prints a deprecation warning to stderr and still runs the same handler', () => {
+      const result = require('child_process').spawnSync(
+        process.execPath,
+        [CLI_PATH, 'list'],
+        { encoding: 'utf8' }
+      );
+
+      expect(result.stderr).toContain('"dss list" is deprecated');
+      expect(result.stderr).toContain('Use "dss ls"');
+    });
+
+    it('cut commands (batch, bulk, onboard) no longer exist', () => {
+      for (const cmd of ['batch', 'bulk', 'onboard']) {
+        const result = require('child_process').spawnSync(
+          process.execPath,
+          [CLI_PATH, cmd],
+          { encoding: 'utf8' }
+        );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain('unknown command');
+      }
     });
   });
 

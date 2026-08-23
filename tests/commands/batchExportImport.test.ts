@@ -99,6 +99,35 @@ describe('commands/batch export/import — host carry', () => {
       expect(data.spaces[0].sshKeyPath).toBeUndefined();
       expect(data.spaces[0].hasSSHKey).toBe(true);
     });
+
+    // `dss config export [path]`: an optional path argument overrides the
+    // default `~/dss-export.json`, reached both via the new `config export`
+    // grouping and the legacy top-level `export` alias (same handler).
+    it('writes to a caller-supplied path instead of the default ~/dss-export.json when one is given', async () => {
+      const space: ISpace = { name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' };
+      mockLoadStore.mockResolvedValue(storeOf([space]));
+      mockCheckbox.mockResolvedValue(['personal']);
+      (mockFs.writeJson as unknown as jest.Mock).mockResolvedValue(undefined);
+
+      await exportSpaceConfiguration('/custom/export-location.json');
+
+      expect(mockFs.writeJson).toHaveBeenCalledWith(
+        '/custom/export-location.json',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('still defaults to ~/dss-export.json when no path argument is given', async () => {
+      const space: ISpace = { name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' };
+      mockLoadStore.mockResolvedValue(storeOf([space]));
+      mockCheckbox.mockResolvedValue(['personal']);
+      (mockFs.writeJson as unknown as jest.Mock).mockResolvedValue(undefined);
+
+      await exportSpaceConfiguration();
+
+      expect(mockFs.writeJson).toHaveBeenCalledWith(exportPath, expect.anything(), expect.anything());
+    });
   });
 
   describe('importSpaceConfiguration', () => {
@@ -221,6 +250,31 @@ describe('commands/batch export/import — host carry', () => {
       }));
 
       warningSpy.mockRestore();
+    });
+
+    // `dss config import [path]`: an optional path argument overrides the
+    // default `~/dss-export.json`, reached both via the new `config import`
+    // grouping and the legacy top-level `import` alias (same handler).
+    it('reads from a caller-supplied path instead of the default ~/dss-export.json when one is given', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readJson as unknown as jest.Mock).mockResolvedValue({
+        spaces: [{ name: 'fromcustom', email: 'c@x.com', userName: 'C' }]
+      });
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      mockConfirm.mockResolvedValue(true);
+
+      await importSpaceConfiguration('/custom/export-location.json');
+
+      expect(mockFs.pathExists).toHaveBeenCalledWith('/custom/export-location.json');
+      expect(mockFs.readJson).toHaveBeenCalledWith('/custom/export-location.json');
+    });
+
+    it('still defaults to ~/dss-export.json when no path argument is given', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(false);
+
+      await importSpaceConfiguration();
+
+      expect(mockFs.pathExists).toHaveBeenCalledWith(exportPath);
     });
   });
 });

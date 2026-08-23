@@ -145,15 +145,15 @@ describe('completion script generation', () => {
   ])('includes repository binding commands in %s output', async (shell) => {
     const output = await captureCompletionOutput(shell);
 
-    expect(output).toContain('bind');
-    expect(output).toContain('unbind');
+    expect(output).toContain('link');
+    expect(output).toContain('unlink');
     expect(output).toContain('status');
   });
 
   it.each([
     ['bash'],
     ['fish']
-  ])('includes bind options in %s output', async (shell) => {
+  ])('includes link options in %s output', async (shell) => {
     const output = await captureCompletionOutput(shell);
 
     expect(output).toContain('--path');
@@ -161,15 +161,15 @@ describe('completion script generation', () => {
     expect(output).toContain('--dry-run');
   });
 
-  it('includes bind, unbind, and status aliases in bash output', async () => {
+  it('includes link, unlink, and status aliases in bash output', async () => {
     const script = extractGeneratedScript(await captureCompletionOutput('bash'));
 
-    expect(script).toMatch(/bind\)[\s\S]*opts="[^"]*-p[^"]*--path[^"]*-r[^"]*--recursive[^"]*--dry-run"/);
-    expect(script).toMatch(/unbind\)[\s\S]*opts="[^"]*-p[^"]*--path[^"]*--dry-run"/);
+    expect(script).toMatch(/link\)[\s\S]*opts="[^"]*-p[^"]*--path[^"]*-r[^"]*--recursive[^"]*--dry-run"/);
+    expect(script).toMatch(/unlink\)[\s\S]*opts="[^"]*-p[^"]*--path[^"]*--dry-run"/);
     expect(script).toMatch(/status\)[\s\S]*opts="[^"]*-p[^"]*--path"/);
   });
 
-  it('includes bind, unbind, and status aliases in zsh output', async () => {
+  it('includes link, unlink, and status aliases in zsh output', async () => {
     const script = extractGeneratedScript(await captureCompletionOutput('zsh'));
 
     expect(script).toContain("'-p[Bind an explicit Git repository]'");
@@ -180,7 +180,7 @@ describe('completion script generation', () => {
     expect(script).toContain("'--path[Select an explicit Git repository]'");
   });
 
-  it('includes bind, unbind, and status aliases in fish output', async () => {
+  it('includes link, unlink, and status aliases in fish output', async () => {
     const script = extractGeneratedScript(await captureCompletionOutput('fish'));
 
     expect(script).toContain("-s p -l path -r");
@@ -188,7 +188,7 @@ describe('completion script generation', () => {
     expect(script).toContain("-s p -l path -r -d 'Select an explicit Git repository");
   });
 
-  it('sources bash completions and completes configured spaces and bind options', async () => {
+  it('sources bash completions and completes configured spaces and link options', async () => {
     const script = extractGeneratedScript(await captureCompletionOutput('bash'));
     const environment = createCompletionHome('dss-bash-completion-');
     const scriptPath = path.join(environment.scriptDirectory, 'dss-completion.bash');
@@ -211,11 +211,11 @@ describe('completion script generation', () => {
         '-c',
         [
           `source ${JSON.stringify(scriptPath)}`,
-          'COMP_WORDS=(dss bind aw)',
+          'COMP_WORDS=(dss link aw)',
           'COMP_CWORD=2',
           '_dss_completion',
           'printf "space:%s\\n" "${COMPREPLY[@]}"',
-          'COMP_WORDS=(dss bind --r)',
+          'COMP_WORDS=(dss link --r)',
           'COMP_CWORD=2',
           '_dss_completion',
           'printf "option:%s\\n" "${COMPREPLY[@]}"'
@@ -343,7 +343,7 @@ describe('completion script generation', () => {
       const runtimeOutput = execFileSync('fish', [
         '--no-config',
         '-c',
-        `source ${JSON.stringify(scriptPath)}; __dss_get_spaces; complete -C 'dss bind --r'`
+        `source ${JSON.stringify(scriptPath)}; __dss_get_spaces; complete -C 'dss link --r'`
       ], {
         encoding: 'utf8',
         env: childEnvironment,
@@ -385,7 +385,7 @@ describe('completion script generation', () => {
     }
   });
 
-  zshIt('sources zsh completions and offers configured spaces for bind', async () => {
+  zshIt('sources zsh completions and offers configured spaces for link', async () => {
     const output = await captureCompletionOutput('zsh');
     const script = extractGeneratedScript(output);
     const environment = createZshEnvironment('dss-zsh-runtime-', true);
@@ -420,7 +420,7 @@ describe('completion script generation', () => {
         '  return 0',
         '}',
         `source ${JSON.stringify(scriptPath)}`,
-        'words=(dss bind aw)',
+        'words=(dss link aw)',
         'CURRENT=3',
         '_dss',
         ''

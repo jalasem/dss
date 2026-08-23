@@ -1,0 +1,42 @@
+import { IConfig } from '../core/types';
+import { loadConfig } from '../infra/store';
+import { UIHelper } from './ui';
+import { safeConfirm } from './prompts';
+import { addSpace } from './spaces';
+
+/**
+ * The automatic first-run flow: replaces the old `dss onboard` tutorial.
+ * Triggered by a caller (currently `dss ls` / `dss use` when the store has
+ * zero identities; Task 3's bare-`dss` dashboard will call it too) rather
+ * than being its own command. Prints a short calm welcome and offers to
+ * create the first identity right away — no multi-step tutorial.
+ *
+ * Self-contained: loads its own config unless the caller already has one
+ * (avoids a redundant loadConfig() when the caller just checked
+ * `config.spaces.length` itself), and makes no assumption about being
+ * called from only one place.
+ *
+ * Returns true when the flow ran (the store was empty), false otherwise —
+ * callers use this to decide whether to fall through to their normal
+ * behavior.
+ */
+export async function firstRunFlow(config?: IConfig): Promise<boolean> {
+  const resolvedConfig = config ?? (await loadConfig()).config;
+  if (resolvedConfig.spaces.length > 0) return false;
+
+  UIHelper.printWelcome();
+  console.log('');
+
+  const shouldCreate = await safeConfirm({
+    message: 'No identities yet — create your first one now?',
+    default: true,
+  });
+
+  if (shouldCreate) {
+    await addSpace();
+  } else {
+    UIHelper.info('Use ' + UIHelper.command('dss new') + ' anytime to create your first identity.');
+  }
+
+  return true;
+}
