@@ -140,6 +140,24 @@ describe('repository binding CLI commands', () => {
     expect(runGit(repository, ['config', 'dss.space'])).toBe('personal');
   });
 
+  it('resolves a legacy raw-name space by its slug (dss bind my-work)', async () => {
+    const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
+    await fs.outputJson(spacesConfigPath, {
+      spaces: [{
+        name: 'My Work',
+        email: 'work@example.com',
+        userName: 'Work User',
+        sshKeyPath: '/tmp/work-key'
+      }]
+    });
+
+    const output = runCli(['bind', 'my-work', '--path', repository]);
+
+    expect(output).toContain('My Work');
+    expect(runGit(repository, ['config', 'user.email'])).toBe('work@example.com');
+    expect(runGit(repository, ['config', 'dss.space'])).toBe('My Work');
+  });
+
   it('reports missing or malformed space configuration without a raw filesystem error', async () => {
     const spacesConfigPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
 

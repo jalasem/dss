@@ -6,6 +6,8 @@ import { IConfig, ISpace } from './types';
 import { UIHelper } from './ui';
 import { switchSpace } from './SpaceManager';
 import { generateSSHKey } from './sshKeyGen';
+import { fail } from './fail';
+import { slugify, findSpace } from './spaceLookup';
 
 const configPath = path.join(os.homedir(), '.dss', 'spaces', 'config.json');
 
@@ -116,16 +118,16 @@ export async function importSpaceConfiguration() {
   const importPath = path.join(os.homedir(), 'dss-export.json');
   
   if (!await fs.pathExists(importPath)) {
-    UIHelper.error(`Import file not found: ${importPath}`);
+    fail(`Import file not found: ${importPath}`);
     UIHelper.info('Please ensure the export file exists in your home directory.');
     return;
   }
 
   try {
     const importData = await fs.readJson(importPath);
-    
+
     if (!importData.spaces || !Array.isArray(importData.spaces)) {
-      UIHelper.error('Invalid import file format.');
+      fail('Invalid import file format.');
       return;
     }
 
@@ -134,7 +136,7 @@ export async function importSpaceConfiguration() {
     const config: IConfig = await fs.readJson(configPath).catch(() => ({ spaces: [] }));
     
     const spacesToImport = importData.spaces.filter((importSpace: any) => {
-      const exists = config.spaces.some(existing => existing.name === importSpace.name);
+      const exists = Boolean(findSpace(config, importSpace.name));
       if (exists) {
         UIHelper.warning(`Space '${importSpace.name}' already exists - skipping.`);
       }
@@ -158,7 +160,7 @@ export async function importSpaceConfiguration() {
 
     // Convert import format to internal format
     const newSpaces: ISpace[] = spacesToImport.map((importSpace: any) => ({
-      name: importSpace.name,
+      name: slugify(importSpace.name),
       email: importSpace.email,
       userName: importSpace.userName,
       sshKeyPath: '' // Will need to be set up manually
@@ -175,7 +177,7 @@ export async function importSpaceConfiguration() {
     ]);
 
   } catch (error) {
-    UIHelper.error(`Failed to import configuration: ${(error as Error).message}`);
+    fail(`Failed to import configuration: ${(error as Error).message}`);
   }
 }
 
@@ -351,6 +353,6 @@ export async function bulkUpdateSpaces() {
     
   } catch (error) {
     UIHelper.clearProgress();
-    UIHelper.error(`Bulk update failed: ${(error as Error).message}`);
+    fail(`Bulk update failed: ${(error as Error).message}`);
   }
 }

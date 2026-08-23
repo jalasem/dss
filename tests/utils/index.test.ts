@@ -43,6 +43,10 @@ describe('Utility Functions', () => {
     mockConfirm.mockResolvedValue(false as never);
   });
 
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
   describe('setGitHubSSHKey', () => {
     it('should create SSH config for GitHub with new key', async () => {
       (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
@@ -189,6 +193,30 @@ Host other.com
         'ssh',
         ['-T', 'git@github.com'],
         expect.any(Function)
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('does not throw when an "ssh -T" spawn failure has no stderr property (regression)', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (file: string, _args: string[], callback: any) => {
+          if (file === 'ssh') {
+            // A spawn-level failure (e.g. ENOENT, killed by signal) yields
+            // an error object with no `stderr` at all.
+            callback(new Error('spawn ssh ENOENT'));
+          } else {
+            callback(null, { stdout: '', stderr: '' });
+          }
+          return {} as any;
+        }
+      );
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      await expect(testGithubAccess(mockSshKeyPath)).resolves.toBeUndefined();
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error testing SSH access to GitHub: spawn ssh ENOENT')
       );
 
       consoleSpy.mockRestore();

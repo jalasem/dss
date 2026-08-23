@@ -5,6 +5,7 @@ import fs from "fs-extra";
 import path from "path";
 import { UIHelper } from "./ui";
 import { safeConfirm } from "./prompts";
+import { fail } from "./fail";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,7 +33,7 @@ export async function setGitHubSSHKey(sshKeyPath: string) {
     await fs.writeFile(sshConfigPath, sshConfig);
     UIHelper.success('SSH config for GitHub updated successfully.');
   } catch (error) {
-    UIHelper.error('Failed to update SSH config for GitHub: ' + (error as Error).message);
+    fail('Failed to update SSH config for GitHub: ' + (error as Error).message);
   }
 }
 
@@ -41,7 +42,7 @@ export async function removeSSHKeyFromAgent(sshKeyPath: string): Promise<void> {
     await execFileAsync('ssh-add', ['-d', sshKeyPath]);
     UIHelper.success("SSH key removed from ssh-agent successfully.");
   } catch (error) {
-    UIHelper.error("Error removing SSH key from ssh-agent: " + (error as Error).message);
+    fail("Error removing SSH key from ssh-agent: " + (error as Error).message);
   }
 }
 
@@ -55,11 +56,11 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
       await execFileAsync('ssh', ['-T', 'git@github.com']);
       UIHelper.success("🎉 Space configuration works! You've successfully authenticated with GitHub.");
     } catch (error) {
-      const { stderr } = error as { stderr: string };
+      const stderr = (error as { stderr?: string }).stderr ?? '';
       if (stderr.includes("successfully authenticated")) {
         UIHelper.success("🎉 Space configuration works! You've successfully authenticated with GitHub.");
       } else {
-        UIHelper.error("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
+        fail("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
       }
     }
     
@@ -74,7 +75,7 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
     console.log(UIHelper.dim("\nPublic SSH Key:"));
     console.log(UIHelper.highlight(publicKey));
   } catch (error) {
-    UIHelper.error("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
+    fail("🚨 Error testing SSH access to GitHub: " + (error as Error).message);
     UIHelper.info("Ensure the SSH key has been added to the ssh-agent and is associated with your GitHub account.");
   }
 }

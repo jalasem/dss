@@ -13,6 +13,8 @@ import {
 } from './repoBinding';
 import { IConfig, ISpace } from './types';
 import { UIHelper } from './ui';
+import { fail } from './fail';
+import { findSpace } from './spaceLookup';
 
 export interface BindCommandOptions {
   path?: string;
@@ -42,7 +44,7 @@ async function resolveSpace(spaceName?: string): Promise<ISpace | undefined> {
     }))
   });
 
-  return config.spaces.find(space => space.name === selectedName);
+  return findSpace(config as IConfig, selectedName);
 }
 
 function printStatus(status: RepositoryBindingStatus): void {
@@ -51,11 +53,6 @@ function printStatus(status: RepositoryBindingStatus): void {
   if (status.userName) UIHelper.printStatus('Git User', status.userName, 'info');
   if (status.email) UIHelper.printStatus('Git Email', status.email, 'info');
   if (status.sshCommand) UIHelper.printStatus('SSH Command', status.sshCommand, 'info');
-}
-
-function fail(message: string): void {
-  UIHelper.error(message);
-  process.exitCode = 1;
 }
 
 export async function bindSpaceToRepository(

@@ -4,7 +4,7 @@ import os from 'os';
 import { execFile } from 'child_process';
 import { input, confirm, select } from '@inquirer/prompts';
 import { generateSSHKey } from '../../src/utils/sshKeyGen';
-import { copyToClipboard, testGithubAccess } from '../../src/utils/index';
+import { copyToClipboard, testGithubAccess, removeSSHKeyFromAgent } from '../../src/utils/index';
 import { UIHelper } from '../../src/utils/ui';
 
 jest.mock('fs-extra');
@@ -37,6 +37,7 @@ const mockSelect = select as jest.MockedFunction<typeof select>;
 const mockGenerateSSHKey = generateSSHKey as jest.MockedFunction<typeof generateSSHKey>;
 const mockCopyToClipboard = copyToClipboard as jest.MockedFunction<typeof copyToClipboard>;
 const mockTestGithubAccess = testGithubAccess as jest.MockedFunction<typeof testGithubAccess>;
+const mockRemoveSSHKeyFromAgent = removeSSHKeyFromAgent as jest.MockedFunction<typeof removeSSHKeyFromAgent>;
 
 // Mirrors @inquirer/core exactly: the class does NOT override `name`,
 // so isPromptExitError detection cannot rely on error.name === 'ExitPromptError'.
@@ -390,6 +391,33 @@ describe('SpaceManager', () => {
       expect(hasRemoveMessage).toBe(true);
     });
 
+    it('should not call removeSSHKeyFromAgent when removing a keyless space (no spurious ssh-add -d error)', async () => {
+      const keylessSpace = { ...mockSpace, sshKeyPath: '' };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [keylessSpace] });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      mockSelect.mockResolvedValue('test-space');
+      mockConfirm.mockResolvedValue(true);
+
+      await removeSpace();
+
+      expect(mockRemoveSSHKeyFromAgent).not.toHaveBeenCalled();
+      expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, { spaces: [] });
+    });
+
+    it('should reflect a keyless space in the dry-run preview instead of promising agent removal', async () => {
+      const keylessSpace = { ...mockSpace, sshKeyPath: '' };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [keylessSpace] });
+      mockSelect.mockResolvedValue('test-space');
+
+      await removeSpace(undefined, { dryRun: true });
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('Would remove SSH key from agent'))).toBe(false);
+      expect(calls.some(call => call && call.includes && call.includes('No SSH key configured'))).toBe(true);
+    });
+
     it('should prevent removing active space', async () => {
       (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ 
@@ -518,8 +546,8 @@ describe('SpaceManager', () => {
       await testSpace();
 
       expect(console.log).toHaveBeenCalledTimes(2);
-      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('Active space "test-space" does not have an associated SSH key.'));
-      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss edit test-space'));
+      expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('Space "test-space" does not have an associated SSH key.'));
+      expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss bulk'));
     });
 
     it('should handle no spaces', async () => {
@@ -859,6 +887,69 @@ describe('SpaceManager', () => {
       expect(mockFs.writeJson).not.toHaveBeenCalled();
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Another space with the name "Other Space" already exists.'));
       expect(process.exitCode).toBe(1);
+    });
+
+    it('should not abort the edit or attempt a key move when the typed name is only cosmetically different (slug unchanged, incl. legacy raw names)', async () => {
+      // Regression: a rename whose slug is unchanged used to fire the rename
+      // branch on a raw-name comparison, derive the move destination from
+      // the slug, and hit fs-extra's "Source and destination must not be
+      // the same" because oldKeyDir === newKeyDir — aborting before the
+      // email/userName edits below were persisted.
+      const legacySpace = {
+        name: 'Test Space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [legacySpace] });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+
+      mockInput
+        .mockResolvedValueOnce('test-space') // types the normalized slug; same slug as "Test Space"
+        .mockResolvedValueOnce('new-email@example.com')
+        .mockResolvedValueOnce(legacySpace.userName);
+
+      await modifySpace('Test Space');
+
+      expect(mockFs.pathExists).not.toHaveBeenCalled();
+      expect(mockFs.move).not.toHaveBeenCalled();
+      expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, {
+        spaces: [{
+          name: 'Test Space',
+          email: 'new-email@example.com',
+          userName: legacySpace.userName,
+          sshKeyPath: mockSshKeyPath
+        }]
+      });
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('updated successfully'));
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('should warn that repo bindings may reference the old key path when a rename actually moves the key directory', async () => {
+      const spaceToRename = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [spaceToRename] });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
+
+      mockInput
+        .mockResolvedValueOnce('New Name')
+        .mockResolvedValueOnce(spaceToRename.email)
+        .mockResolvedValueOnce(spaceToRename.userName);
+
+      await modifySpace('test-space');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call =>
+        call && call.includes && call.includes('dss bind') && call.includes('old key path')
+      )).toBe(true);
     });
   });
 

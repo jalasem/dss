@@ -8,25 +8,12 @@ import { copyToClipboard, removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAcce
 import { isPromptExitError } from "./prompts";
 import { IConfig, ISpace } from "./types";
 import { UIHelper } from "./ui";
+import { fail } from "./fail";
+import { slugify, findSpace } from "./spaceLookup";
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
 const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
-
-function slugify(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, "-");
-}
-
-function findSpace(config: IConfig, name: string): ISpace | undefined {
-  return config.spaces.find(
-    (space) => space.name === name || slugify(space.name) === slugify(name)
-  );
-}
-
-function fail(message: string): void {
-  UIHelper.error(message);
-  process.exitCode = 1;
-}
 
 async function ensureConfigFileExists() {
   await fs.ensureFile(configPath);
@@ -244,7 +231,7 @@ export async function switchSpace(
     } else {
       UIHelper.warning(
         `Space "${space.name}" has no SSH key — Git identity switched, SSH config unchanged. ` +
-        `Use ${UIHelper.command(`dss edit ${space.name}`)} to add one.`
+        `Use ${UIHelper.command('dss bulk')} (regenerate SSH keys) to add one.`
       );
     }
 
@@ -326,10 +313,11 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
 
   // Check for dry-run mode
   if (options?.dryRun) {
+    const hasKey = Boolean(spaceToRemove.sshKeyPath);
     UIHelper.printInfoBox("Dry Run: Remove Space Preview", [
       `✓ Would remove space: ${spaceToRemove.name}`,
       `✓ Would remove from configuration`,
-      `✓ Would remove SSH key from agent`,
+      hasKey ? `✓ Would remove SSH key from agent` : `⚠ No SSH key configured — agent removal skipped`,
       `✓ SSH key files would remain on disk`,
       '',
       'Use without --dry-run to actually remove'
@@ -351,7 +339,9 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     UIHelper.printProgress("Removing space");
 
     // Remove SSH key from agent
-    await removeSSHKeyFromAgent(spaceToRemove.sshKeyPath);
+    if (spaceToRemove.sshKeyPath) {
+      await removeSSHKeyFromAgent(spaceToRemove.sshKeyPath);
+    }
 
     // Remove from config
     config.spaces = config.spaces.filter((space) => space.name !== spaceToRemove.name);
@@ -396,9 +386,9 @@ export async function testSpace(spaceName?: string) {
 
   if (!space.sshKeyPath) {
     UIHelper.warning(
-      `Active space "${config.activeSpace}" does not have an associated SSH key.`
+      `Space "${space.name}" does not have an associated SSH key.`
     );
-    UIHelper.info("Use " + UIHelper.command("dss edit " + space.name) + " to configure SSH keys.");
+    UIHelper.info("Use " + UIHelper.command("dss bulk") + " (regenerate SSH keys) to configure SSH keys.");
     return;
   }
 
@@ -447,7 +437,7 @@ export async function modifySpace(spaceName?: string) {
   });
 
   let isUpdateMade = false;
-  if (newSpaceName !== space.name) {
+  if (slugify(newSpaceName) !== slugify(space.name)) {
     const newSlug = slugify(newSpaceName);
     const isDuplicate = config.spaces.some(
       (s) => s !== space && slugify(s.name) === newSlug
@@ -457,10 +447,11 @@ export async function modifySpace(spaceName?: string) {
       return;
     }
 
+    let keyDirMoved = false;
     if (space.sshKeyPath) {
       const oldKeyDir = path.dirname(space.sshKeyPath);
       const newKeyDir = path.join(path.dirname(oldKeyDir), newSlug);
-      if (await fs.pathExists(oldKeyDir)) {
+      if (oldKeyDir !== newKeyDir && await fs.pathExists(oldKeyDir)) {
         try {
           await fs.move(oldKeyDir, newKeyDir);
         } catch (error) {
@@ -468,6 +459,7 @@ export async function modifySpace(spaceName?: string) {
           return;
         }
         space.sshKeyPath = path.join(newKeyDir, path.basename(space.sshKeyPath));
+        keyDirMoved = true;
       }
     }
 
@@ -476,6 +468,13 @@ export async function modifySpace(spaceName?: string) {
       config.activeSpace = newSlug;
     }
     isUpdateMade = true;
+
+    if (keyDirMoved) {
+      UIHelper.warning(
+        `Repositories bound to this space via ${UIHelper.command('dss bind')} may still reference the old key path — ` +
+        `re-bind them with ${UIHelper.command(`dss bind ${newSlug}`)}.`
+      );
+    }
   }
   if (email !== originalEmail) {
     space.email = email;

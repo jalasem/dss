@@ -142,9 +142,9 @@ dss edit [spaceName]
 ```
 
 Modify existing space settings:
-- Update email and username
-- Regenerate SSH keys if needed
+- Update name, email, and username
 - Interactive editing workflow
+- Does not regenerate SSH keys — use `dss bulk` for that
 
 </details>
 

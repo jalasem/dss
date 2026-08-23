@@ -138,17 +138,17 @@ the product's front door.
 ### Phase 1 — Truth & safety (ships v1.3)
 
 - [x] Save this plan verbatim to `PLANS.md` (this file)
-- [ ] Fix `dss edit <name>`: pass and honor the name argument
-- [ ] Fix `dss test <name>`: declare `[spaceName]` on the command; remove the `SpaceNameArg` unwrapping hack
-- [ ] Slug consistency: store slugified name at creation; slugify lookups for compatibility with existing raw-name configs
-- [ ] Keyless-identity trap: `switch` works for a keyless space (sets git config, skips SSH steps, warns) instead of refusing
-- [ ] Fix `inspect` ssh-agent detection logic
-- [ ] `modifySpace` rename integrity: move key directory, update `sshKeyPath`, update global git config when renaming/editing the active space, update `activeSpace`
-- [ ] Exit codes: all failure paths set `process.exitCode = 1`; stop swallowing non-cancel errors in `select().catch()`
-- [ ] Replace string-interpolated `exec`/`execSync` with `execFile` in `SpaceManager.ts` and `utils/index.ts` (git config, ssh-add, ssh -T); clipboard via stdin, not `echo`
-- [ ] README reconciliation: remove `search` claims; document real export/import behavior; fix `remove` copy (keys stay on disk); align license badge with package.json (flag to owner if MIT was intended)
-- [ ] Remove dead code: commented `FuzzySpaceSearch` import; unused deps if trivially safe
-- [ ] Tests updated/added for every fix; `npm run build`, `npm run lint`, `npm test` green
+- [x] Fix `dss edit <name>`: pass and honor the name argument
+- [x] Fix `dss test <name>`: declare `[spaceName]` on the command; remove the `SpaceNameArg` unwrapping hack
+- [x] Slug consistency: store slugified name at creation; slugify lookups for compatibility with existing raw-name configs
+- [x] Keyless-identity trap: `switch` works for a keyless space (sets git config, skips SSH steps, warns) instead of refusing
+- [x] Fix `inspect` ssh-agent detection logic
+- [x] `modifySpace` rename integrity: move key directory, update `sshKeyPath`, update global git config when renaming/editing the active space, update `activeSpace`
+- [x] Exit codes: all failure paths set `process.exitCode = 1`; stop swallowing non-cancel errors in `select().catch()`
+- [x] Replace string-interpolated `exec`/`execSync` with `execFile` in `SpaceManager.ts` and `utils/index.ts` (git config, ssh-add, ssh -T); clipboard via stdin, not `echo`
+- [x] README reconciliation: remove `search` claims; document real export/import behavior; fix `remove` copy (keys stay on disk); align license badge with package.json (flag to owner if MIT was intended)
+- [x] Remove dead code: commented `FuzzySpaceSearch` import; unused deps if trivially safe
+- [x] Tests updated/added for every fix; `npm run build`, `npm run lint`, `npm test` green
 
 ### Phase 2 — Identity engine (v2.0 core)
 
@@ -159,6 +159,8 @@ the product's front door.
 - [ ] includeIf-first identity application; global switch reimplemented on top
 - [ ] ssh-config handling rewritten as parse-don't-splice with backup, per-host blocks
 - [ ] `dss key show|copy|rotate`
+- [ ] Rename integrity for bindings: renaming an identity updates (or prompts re-bind of) repo-local bindings whose `core.sshCommand` references the moved key path (Phase 1 ships a warning only)
+- [ ] Note for cross-cutting checklist items: name the call sites to sweep explicitly (Phase 1's "slug consistency"/"exit codes" items were scoped by symptom, and batchOperations/repoBindingCommands were initially missed)
 
 ### Phase 3 — Surface & voice (v2.0 UX)
 
