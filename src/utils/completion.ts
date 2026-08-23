@@ -4,9 +4,6 @@ import os from 'os';
 import { select } from '@inquirer/prompts';
 import { UIHelper } from './ui';
 import { safeConfirm } from './prompts';
-// import { IConfig } from './types';
-
-// const configPath = path.join(os.homedir(), '.dss', 'spaces', 'config.json');
 
 export async function generateCompletionScript(shell?: string): Promise<void> {
   UIHelper.printHeader('Shell Completion Setup');

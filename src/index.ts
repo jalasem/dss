@@ -69,8 +69,8 @@ program
   .action(modifySpace);
 
 program
-    .command("test")
-    .description("Test the current space's access to GitHub")
+    .command("test [spaceName]")
+    .description("Test GitHub access for a specified space, or the active space if omitted")
     .action(testSpace)
 
 // Batch operations

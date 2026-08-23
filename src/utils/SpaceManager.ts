@@ -5,9 +5,8 @@ import fs from "fs-extra";
 import path from "path";
 import { generateSSHKey } from "./sshKeyGen";
 import { copyToClipboard, removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAccess } from ".";
-import { IConfig, ISpace, SpaceNameArg } from "./types";
+import { IConfig, ISpace } from "./types";
 import { UIHelper } from "./ui";
-// import { FuzzySpaceSearch } from "./fuzzySearch";
 import { promisify } from 'util';
 const execAsync = promisify(require('child_process').exec);
 
@@ -142,15 +141,9 @@ export async function listSpaces() {
 }
 
 export async function switchSpace(
-  spaceName?: string | { name: string },
+  spaceName?: string,
   options?: { dryRun?: boolean }
 ): Promise<void> {
-  const spaceNameProvided = spaceName
-    ? typeof spaceName === "string"
-      ? spaceName
-      : spaceName.name
-    : null;
-
   await ensureConfigFileExists();
   const config: IConfig = await fs.readJson(configPath);
 
@@ -160,8 +153,8 @@ export async function switchSpace(
     return;
   }
 
-  let selectedSpaceName = spaceNameProvided;
-  
+  let selectedSpaceName = spaceName;
+
   if (!selectedSpaceName) {
     UIHelper.printHeader("Switch Development Space");
     UIHelper.printKeyInstruction();
@@ -174,7 +167,7 @@ export async function switchSpace(
         value: space.name,
         description: `${space.email} (${space.userName})`
       })),
-    }).catch(() => null);
+    }).catch(() => undefined);
   }
   
   if (!selectedSpaceName) return;
@@ -346,9 +339,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   }
 }
 
-export async function testSpace(spaceName?: SpaceNameArg) {
-  spaceName = spaceName ? typeof spaceName === "string" ? spaceName : spaceName?.name : null;
-
+export async function testSpace(spaceName?: string) {
   await ensureConfigFileExists();
   const config: IConfig = await fs.readJson(configPath);
 
@@ -376,7 +367,7 @@ export async function testSpace(spaceName?: SpaceNameArg) {
   await testGithubAccess(space.sshKeyPath);
 }
 
-export async function modifySpace() {
+export async function modifySpace(spaceName?: string) {
   await ensureConfigFileExists();
   const config: IConfig = await fs.readJson(configPath);
 
@@ -386,7 +377,7 @@ export async function modifySpace() {
     return;
   }
 
-  const selectedSpace = await select({
+  const selectedSpace = spaceName ?? await select({
     message: "Which space would you like to modify?",
     choices: config.spaces.map((space) => ({
       name: space.name,
@@ -400,7 +391,7 @@ export async function modifySpace() {
     return;
   }
 
-  const spaceName = await input({
+  const newSpaceName = await input({
     message: `New name for "${space.name}" (leave blank to skip):`,
     default: space.name,
   });
@@ -414,12 +405,12 @@ export async function modifySpace() {
   });
 
   let isUpdateMade = false;
-  if (spaceName !== space.name) {
-    if (config.spaces.some((s) => s.name === spaceName)) {
-      UIHelper.error(`Another space with the name "${spaceName}" already exists.`);
+  if (newSpaceName !== space.name) {
+    if (config.spaces.some((s) => s.name === newSpaceName)) {
+      UIHelper.error(`Another space with the name "${newSpaceName}" already exists.`);
       return;
     }
-    space.name = spaceName;
+    space.name = newSpaceName;
     isUpdateMade = true;
   }
   if (email !== space.email) {

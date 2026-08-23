@@ -18,12 +18,13 @@ const mockOs = os as jest.Mocked<typeof os>;
 mockOs.homedir.mockReturnValue('/mock/home');
 
 // Now import SpaceManager after mocks are set
-const { 
-  addSpace, 
-  listSpaces, 
-  switchSpace, 
-  removeSpace, 
-  testSpace 
+const {
+  addSpace,
+  listSpaces,
+  switchSpace,
+  removeSpace,
+  testSpace,
+  modifySpace
 } = require('../../src/utils/SpaceManager');
 
 const mockFs = fs as jest.Mocked<typeof fs>;
@@ -315,6 +316,75 @@ describe('SpaceManager', () => {
       expect(console.log).toHaveBeenCalledTimes(2);
       expect(console.log).toHaveBeenNthCalledWith(1, expect.stringContaining('No spaces have been added yet.'));
       expect(console.log).toHaveBeenNthCalledWith(2, expect.stringContaining('dss add'));
+    });
+
+    it('should target the named space rather than the active one', async () => {
+      const otherSpace = {
+        name: 'other-space',
+        email: 'other@example.com',
+        userName: 'Other User',
+        sshKeyPath: '/mock/home/.dss/spaces/other-space/id_rsa'
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({
+        spaces: [mockSpace, otherSpace],
+        activeSpace: 'test-space'
+      });
+      mockTestGithubAccess.mockResolvedValue();
+
+      await testSpace('other-space');
+
+      expect(mockTestGithubAccess).toHaveBeenCalledWith(otherSpace.sshKeyPath);
+    });
+  });
+
+  describe('modifySpace', () => {
+    const mockSpace = {
+      name: 'test-space',
+      email: 'test@example.com',
+      userName: 'Test User',
+      sshKeyPath: mockSshKeyPath
+    };
+
+    it('should skip the select prompt when a space name is provided', async () => {
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+
+      mockInput
+        .mockResolvedValueOnce(mockSpace.name)
+        .mockResolvedValueOnce(mockSpace.email)
+        .mockResolvedValueOnce(mockSpace.userName);
+
+      await modifySpace('test-space');
+
+      expect(mockSelect).not.toHaveBeenCalled();
+    });
+
+    it('should error when the named space does not exist', async () => {
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
+
+      await modifySpace('nonexistent-space');
+
+      expect(mockSelect).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Space "nonexistent-space" not found.'));
+    });
+
+    it('should still prompt for selection when no name is provided', async () => {
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      mockSelect.mockResolvedValue('test-space');
+
+      mockInput
+        .mockResolvedValueOnce(mockSpace.name)
+        .mockResolvedValueOnce(mockSpace.email)
+        .mockResolvedValueOnce(mockSpace.userName);
+
+      await modifySpace();
+
+      expect(mockSelect).toHaveBeenCalled();
     });
   });
 });
