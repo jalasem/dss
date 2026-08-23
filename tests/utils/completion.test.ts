@@ -42,6 +42,25 @@ function hasFish(): boolean {
   }
 }
 
+// Matches the store's real on-disk shape and formatting: fs-extra's
+// writeJson({ spaces: 2 }) is JSON.stringify(obj, null, 2), which always
+// puts a space after each key's colon (`"name": "value"`) — unlike the
+// legacy v1 config these completion scripts were originally written
+// against, which was written compact (`"name":"value"`, no space).
+function v2ConfigJson(spaceNames: string[]): string {
+  const store = {
+    version: 2,
+    identities: spaceNames.map(name => ({
+      name,
+      email: `${name}@example.com`,
+      userName: name,
+      host: 'github.com'
+    })),
+    bindings: []
+  };
+  return JSON.stringify(store, null, 2);
+}
+
 function createCompletionHome(prefix: string): {
   temporaryDirectory: string;
   homeDirectory: string;
@@ -54,7 +73,7 @@ function createCompletionHome(prefix: string): {
   fs.mkdirSync(scriptDirectory, { recursive: true });
   fs.writeFileSync(
     path.join(homeDirectory, '.dss', 'spaces', 'config.json'),
-    JSON.stringify({ spaces: [{ name: 'aweds-personal' }, { name: 'client-work' }] })
+    v2ConfigJson(['aweds-personal', 'client-work'])
   );
   return { temporaryDirectory, homeDirectory, scriptDirectory };
 }
@@ -214,6 +233,96 @@ describe('completion script generation', () => {
     }
   });
 
+  // Pulls the literal name-extraction statement out of a generated script
+  // (not a hand-copied guess at it) and runs it verbatim under bash with
+  // HOME redirected at a temp config directory, so `~` resolves there.
+  // Proves the actual shipped grep/cut pipeline — not an assumption about
+  // it — tolerates the store's pretty-printed `"name": "value"` (space
+  // after the colon), not only the legacy compact `"name":"value"`.
+  //
+  // The bash variant's statement embeds a *literal* newline byte (not the
+  // two characters `\`+`n`) inside `tr '<newline>' ' '` — the template
+  // literal in completion.ts writes an actual `\n` escape, which the JS
+  // engine turns into a real newline character in the generated script, and
+  // `tr` translates it to a space just the same as it would `tr '\n' ' '`
+  // with an escape sequence. A naive line-split trips over that embedded
+  // byte, so bash gets its own regex spanning it; fish/zsh have no `tr`
+  // call and split cleanly on real line boundaries.
+  function extractSpaceLine(script: string, shell: 'bash' | 'fish' | 'zsh'): string {
+    if (shell === 'bash') {
+      const match = script.match(/spaces=\$\(cat ~\/\.dss\/spaces\/config\.json[\s\S]*?\| tr '\n' ' '\)/);
+      if (!match) throw new Error('Could not find the bash space-extraction statement in the generated script.');
+      return match[0];
+    }
+    const line = script.split('\n').find(candidate => candidate.includes('grep -o'));
+    if (!line) throw new Error('Could not find the grep -o space-extraction line in the generated script.');
+    return line.trim();
+  }
+
+  function runEmbeddedLine(line: string, homeDirectory: string, suffix: string): string {
+    return execFileSync('bash', [
+      '--noprofile',
+      '--norc',
+      '-c',
+      `${line}${suffix}`
+    ], {
+      encoding: 'utf8',
+      env: { HOME: homeDirectory, PATH: process.env.PATH }
+    }).trim();
+  }
+
+  it('extracts space names from a pretty-printed (v2) config.json using the exact line embedded in the bash script', async () => {
+    const script = extractGeneratedScript(await captureCompletionOutput('bash'));
+    const line = extractSpaceLine(script, 'bash');
+    expect(line).toContain('grep -o');
+
+    const environment = createCompletionHome('dss-bash-pipeline-');
+
+    try {
+      const output = runEmbeddedLine(line, environment.homeDirectory, '; echo "$spaces"');
+      const names = output.split(/\s+/).filter(Boolean).sort();
+      expect(names).toEqual(['aweds-personal', 'client-work'].sort());
+    } finally {
+      fs.rmSync(environment.temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('extracts space names from a pretty-printed (v2) config.json using the exact line embedded in the fish script', async () => {
+    const script = extractGeneratedScript(await captureCompletionOutput('fish'));
+    const line = extractSpaceLine(script, 'fish');
+    expect(line).toContain('grep -o');
+
+    const environment = createCompletionHome('dss-fish-pipeline-');
+
+    try {
+      // The fish script's line is a bare pipeline (no assignment) that
+      // prints directly — also valid syntax under bash.
+      const output = runEmbeddedLine(line, environment.homeDirectory, '');
+      const names = output.split(/\s+/).filter(Boolean).sort();
+      expect(names).toEqual(['aweds-personal', 'client-work'].sort());
+    } finally {
+      fs.rmSync(environment.temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('extracts space names from a pretty-printed (v2) config.json using the exact line embedded in the zsh script', async () => {
+    const script = extractGeneratedScript(await captureCompletionOutput('zsh'));
+    const line = extractSpaceLine(script, 'zsh');
+    expect(line).toContain('grep -o');
+
+    const environment = createCompletionHome('dss-zsh-pipeline-');
+
+    try {
+      // bash also supports `arr=($(cmd))` array-literal assignment, so the
+      // zsh script's line runs unmodified here too.
+      const output = runEmbeddedLine(line, environment.homeDirectory, '; printf "%s\\n" "${spaces[@]}"');
+      const names = output.split(/\s+/).filter(Boolean).sort();
+      expect(names).toEqual(['aweds-personal', 'client-work'].sort());
+    } finally {
+      fs.rmSync(environment.temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   fishIt('parses and sources fish completions with configured spaces', async () => {
     const script = extractGeneratedScript(await captureCompletionOutput('fish'));
     const environment = createCompletionHome('dss-fish-completion-');
@@ -289,12 +398,7 @@ describe('completion script generation', () => {
     fs.writeFileSync(scriptPath, script);
     fs.writeFileSync(
       path.join(spacesDirectory, 'config.json'),
-      JSON.stringify({
-        spaces: [
-          { name: 'aweds-personal' },
-          { name: 'client-work' }
-        ]
-      })
+      v2ConfigJson(['aweds-personal', 'client-work'])
     );
     fs.writeFileSync(
       harnessPath,

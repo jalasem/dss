@@ -856,6 +856,57 @@ describe('SpaceManager', () => {
     });
   });
 
+  describe('persistConfig identity metadata preservation (regression)', () => {
+    // persistConfig used to wholesale-replace store.identities from the
+    // ISpace[] view on every write, which — as ISpace carries no host or
+    // key.fingerprint/createdAt fields — silently reset an untouched
+    // identity's host to 'github.com' and dropped its key metadata any time
+    // a *different* identity was edited. Guards against that regressing.
+    it('keeps an untouched identity\'s host, key fingerprint, and key createdAt when another identity is edited', async () => {
+      const identityA = {
+        name: 'space-a',
+        email: 'a@example.com',
+        userName: 'A User',
+        host: 'github.com',
+        key: { path: '/mock/home/.dss/spaces/space-a/id_rsa', algorithm: 'rsa' as const }
+      };
+      const identityB = {
+        name: 'space-b',
+        email: 'b@example.com',
+        userName: 'B User',
+        host: 'gitlab.com',
+        key: {
+          path: '/mock/home/.dss/spaces/space-b/id_ed25519',
+          algorithm: 'ed25519' as const,
+          fingerprint: 'SHA256:deadbeef',
+          createdAt: '2024-01-01T00:00:00.000Z'
+        }
+      };
+      mockLoadStore.mockResolvedValue({
+        version: 2,
+        identities: [identityA, identityB],
+        bindings: []
+      });
+
+      mockInput
+        .mockResolvedValueOnce(identityA.name) // name unchanged
+        .mockResolvedValueOnce('new-a-email@example.com') // email changed
+        .mockResolvedValueOnce(identityA.userName); // userName unchanged
+
+      await modifySpace('space-a');
+
+      expect(mockSaveStore).toHaveBeenCalledWith({
+        version: 2,
+        identities: [
+          { ...identityA, email: 'new-a-email@example.com' },
+          identityB
+        ],
+        active: undefined,
+        bindings: []
+      });
+    });
+  });
+
   describe('inspectSpace', () => {
     const mockSpace = {
       name: 'test-space',

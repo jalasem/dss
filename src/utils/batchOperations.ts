@@ -8,19 +8,36 @@ import { switchSpace } from './SpaceManager';
 import { generateSSHKey } from './sshKeyGen';
 import { fail } from './fail';
 import { slugify, findSpace } from './spaceLookup';
-import { loadStore, saveStore, toSpace, fromSpace, IStoreV2 } from '../infra/store';
+import { loadStore, saveStore, toSpace, mergeIdentity, IStoreV2, IIdentity } from '../infra/store';
 
-async function loadConfig(): Promise<{ store: IStoreV2; config: IConfig }> {
-  const store = await loadStore();
-  const config: IConfig = {
-    spaces: store.identities.map(toSpace),
-    activeSpace: store.active
-  };
-  return { store, config };
+interface ILoadedConfig {
+  store: IStoreV2;
+  config: IConfig;
+  // Tracks which identity each ISpace was derived from (by object identity,
+  // stable across in-place edits, filters, and appends) so persistConfig can
+  // preserve metadata the ISpace view can't carry (host, key fingerprint/
+  // createdAt, ...) instead of wholesale-replacing every identity.
+  originalBySpace: Map<ISpace, IIdentity>;
 }
 
-async function persistConfig(store: IStoreV2, config: IConfig): Promise<void> {
-  store.identities = config.spaces.map(fromSpace);
+async function loadConfig(): Promise<ILoadedConfig> {
+  const store = await loadStore();
+  const originalBySpace = new Map<ISpace, IIdentity>();
+  const spaces = store.identities.map(identity => {
+    const space = toSpace(identity);
+    originalBySpace.set(space, identity);
+    return space;
+  });
+  const config: IConfig = { spaces, activeSpace: store.active };
+  return { store, config, originalBySpace };
+}
+
+async function persistConfig(
+  store: IStoreV2,
+  config: IConfig,
+  originalBySpace: Map<ISpace, IIdentity>
+): Promise<void> {
+  store.identities = config.spaces.map(space => mergeIdentity(space, originalBySpace.get(space)));
   store.active = config.activeSpace;
   await saveStore(store);
 }
@@ -147,7 +164,7 @@ export async function importSpaceConfiguration() {
 
     UIHelper.info(`Found ${importData.spaces.length} spaces in import file.`);
     
-    const { store, config } = await loadConfig();
+    const { store, config, originalBySpace } = await loadConfig();
 
     const spacesToImport = importData.spaces.filter((importSpace: any) => {
       const exists = Boolean(findSpace(config, importSpace.name));
@@ -181,7 +198,7 @@ export async function importSpaceConfiguration() {
     }));
 
     config.spaces.push(...newSpaces);
-    await persistConfig(store, config);
+    await persistConfig(store, config, originalBySpace);
 
     UIHelper.printSuccessBox('Import Completed', [
       `✓ ${spacesToImport.length} spaces imported`,
@@ -196,7 +213,7 @@ export async function importSpaceConfiguration() {
 }
 
 export async function bulkUpdateSpaces() {
-  const { store, config } = await loadConfig();
+  const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning('No spaces available for bulk update.');
@@ -354,7 +371,7 @@ export async function bulkUpdateSpaces() {
     UIHelper.clearProgress();
     
     if (updatedCount > 0) {
-      await persistConfig(store, config);
+      await persistConfig(store, config, originalBySpace);
       UIHelper.printSuccessBox('Bulk Update Complete', [
         `✓ ${updatedCount} spaces updated successfully`,
         `✓ Operation: ${updateType}`,

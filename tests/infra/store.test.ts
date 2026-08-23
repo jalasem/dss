@@ -316,4 +316,92 @@ describe('infra/store', () => {
       expect(identity.key).toBeUndefined();
     });
   });
+
+  describe('mergeIdentity', () => {
+    it('returns a plain fromSpace result when there is no original identity (brand-new space)', () => {
+      const space = { name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '/keys/a/id_rsa' };
+      expect(store.mergeIdentity(space, undefined)).toEqual(store.fromSpace(space));
+    });
+
+    it('preserves the original host instead of resetting to the fromSpace default', () => {
+      const original: IIdentity = {
+        name: 'a', email: 'old@x.com', userName: 'Old', host: 'gitlab.com'
+      };
+      const space = { name: 'a', email: 'new@x.com', userName: 'New', sshKeyPath: '' };
+
+      const merged = store.mergeIdentity(space, original);
+
+      expect(merged.host).toBe('gitlab.com');
+      expect(merged.email).toBe('new@x.com');
+      expect(merged.userName).toBe('New');
+    });
+
+    it('preserves key fingerprint and createdAt when the key path is unchanged', () => {
+      const original: IIdentity = {
+        name: 'a',
+        email: 'a@x.com',
+        userName: 'A',
+        host: 'github.com',
+        key: {
+          path: '/keys/a/id_ed25519',
+          algorithm: 'ed25519',
+          fingerprint: 'SHA256:deadbeef',
+          createdAt: '2024-01-01T00:00:00.000Z'
+        }
+      };
+      const space = { name: 'a', email: 'a2@x.com', userName: 'A2', sshKeyPath: '/keys/a/id_ed25519' };
+
+      const merged = store.mergeIdentity(space, original);
+
+      expect(merged.key).toEqual(original.key);
+    });
+
+    it('preserves fingerprint/createdAt but recomputes algorithm when the key path changes', () => {
+      const original: IIdentity = {
+        name: 'a',
+        email: 'a@x.com',
+        userName: 'A',
+        host: 'github.com',
+        key: {
+          path: '/keys/a/id_rsa',
+          algorithm: 'rsa',
+          fingerprint: 'SHA256:deadbeef',
+          createdAt: '2024-01-01T00:00:00.000Z'
+        }
+      };
+      // Same identity, key relocated (e.g. a rename) to a differently-named file.
+      const space = { name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '/keys/a-new/id_ed25519' };
+
+      const merged = store.mergeIdentity(space, original);
+
+      expect(merged.key?.path).toBe('/keys/a-new/id_ed25519');
+      expect(merged.key?.algorithm).toBe('ed25519');
+      expect(merged.key?.fingerprint).toBe('SHA256:deadbeef');
+      expect(merged.key?.createdAt).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('drops key metadata when the edited space becomes keyless', () => {
+      const original: IIdentity = {
+        name: 'a',
+        email: 'a@x.com',
+        userName: 'A',
+        host: 'github.com',
+        key: { path: '/keys/a/id_rsa', algorithm: 'rsa', fingerprint: 'SHA256:deadbeef' }
+      };
+      const space = { name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '' };
+
+      const merged = store.mergeIdentity(space, original);
+
+      expect(merged.key).toBeUndefined();
+    });
+
+    it('sets fresh key metadata (no fingerprint/createdAt) when a previously-keyless space gains a key', () => {
+      const original: IIdentity = { name: 'a', email: 'a@x.com', userName: 'A', host: 'github.com' };
+      const space = { name: 'a', email: 'a@x.com', userName: 'A', sshKeyPath: '/keys/a/id_rsa' };
+
+      const merged = store.mergeIdentity(space, original);
+
+      expect(merged.key).toEqual({ path: '/keys/a/id_rsa', algorithm: 'rsa' });
+    });
+  });
 });

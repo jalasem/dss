@@ -10,21 +10,38 @@ import { IConfig, ISpace } from "./types";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
 import { slugify, findSpace } from "./spaceLookup";
-import { loadStore, saveStore, toSpace, fromSpace, IStoreV2 } from "../infra/store";
+import { loadStore, saveStore, toSpace, mergeIdentity, IStoreV2, IIdentity } from "../infra/store";
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
-async function loadConfig(): Promise<{ store: IStoreV2; config: IConfig }> {
-  const store = await loadStore();
-  const config: IConfig = {
-    spaces: store.identities.map(toSpace),
-    activeSpace: store.active
-  };
-  return { store, config };
+interface ILoadedConfig {
+  store: IStoreV2;
+  config: IConfig;
+  // Tracks which identity each ISpace was derived from (by object identity,
+  // stable across in-place edits, filters, and appends) so persistConfig can
+  // preserve metadata the ISpace view can't carry (host, key fingerprint/
+  // createdAt, ...) instead of wholesale-replacing every identity.
+  originalBySpace: Map<ISpace, IIdentity>;
 }
 
-async function persistConfig(store: IStoreV2, config: IConfig): Promise<void> {
-  store.identities = config.spaces.map(fromSpace);
+async function loadConfig(): Promise<ILoadedConfig> {
+  const store = await loadStore();
+  const originalBySpace = new Map<ISpace, IIdentity>();
+  const spaces = store.identities.map(identity => {
+    const space = toSpace(identity);
+    originalBySpace.set(space, identity);
+    return space;
+  });
+  const config: IConfig = { spaces, activeSpace: store.active };
+  return { store, config, originalBySpace };
+}
+
+async function persistConfig(
+  store: IStoreV2,
+  config: IConfig,
+  originalBySpace: Map<ISpace, IIdentity>
+): Promise<void> {
+  store.identities = config.spaces.map(space => mergeIdentity(space, originalBySpace.get(space)));
   store.active = config.activeSpace;
   await saveStore(store);
 }
@@ -69,7 +86,7 @@ export async function addSpace() {
     default: true,
   });
 
-  const { store, config } = await loadConfig();
+  const { store, config, originalBySpace } = await loadConfig();
   const slugifiedSpaceName = slugify(name);
 
   if (findSpace(config, slugifiedSpaceName)) {
@@ -116,7 +133,7 @@ export async function addSpace() {
   };
 
   config.spaces.push(newSpace);
-  await persistConfig(store, config);
+  await persistConfig(store, config, originalBySpace);
 
   const switchToNewSpace = await confirm({
     message: `Do you want to switch to the newly added space "${slugifiedSpaceName}" now?`,
@@ -149,7 +166,7 @@ export async function switchSpace(
   spaceName?: string,
   options?: { dryRun?: boolean }
 ): Promise<void> {
-  const { store, config } = await loadConfig();
+  const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -237,7 +254,7 @@ export async function switchSpace(
     }
 
     config.activeSpace = space.name;
-    await persistConfig(store, config);
+    await persistConfig(store, config, originalBySpace);
 
     UIHelper.clearProgress();
     UIHelper.printSuccessBox("Space Activated", [
@@ -267,7 +284,7 @@ export async function switchSpace(
 }
 
 export async function removeSpace(spaceName?: string, options?: { dryRun?: boolean }) {
-  const { store, config } = await loadConfig();
+  const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -345,7 +362,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
 
     // Remove from config
     config.spaces = config.spaces.filter((space) => space.name !== spaceToRemove.name);
-    await persistConfig(store, config);
+    await persistConfig(store, config, originalBySpace);
 
     UIHelper.clearProgress();
     UIHelper.success(`Space '${UIHelper.highlight(spaceToRemove.name)}' has been removed successfully.`);
@@ -395,7 +412,7 @@ export async function testSpace(spaceName?: string) {
 }
 
 export async function modifySpace(spaceName?: string) {
-  const { store, config } = await loadConfig();
+  const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
     UIHelper.warning("No spaces have been added yet.");
@@ -485,7 +502,7 @@ export async function modifySpace(spaceName?: string) {
 
   // Persist before re-applying global git config so disk (config + any moved
   // key directory) stays consistent even if the git re-apply below fails.
-  await persistConfig(store, config);
+  await persistConfig(store, config, originalBySpace);
 
   if (wasActive && (email !== originalEmail || userName !== originalUserName)) {
     try {

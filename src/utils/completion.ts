@@ -94,7 +94,7 @@ _dss_completion() {
     if [[ \$cur != -* && (\$prev == "switch" || \$prev == "remove" || \$prev == "edit" || \$prev == "test" || \$prev == "inspect" || \$prev == "bind") ]]; then
         local spaces
         if [ -f ~/.dss/spaces/config.json ]; then
-            spaces=$(cat ~/.dss/spaces/config.json | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')
+            spaces=$(cat ~/.dss/spaces/config.json | grep -o '"name": *"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')
             COMPREPLY=( $(compgen -W "\$spaces" -- \$cur) )
             return 0
         fi
@@ -166,7 +166,7 @@ _dss() {
     
     # Get space names
     if [[ -f ~/.dss/spaces/config.json ]]; then
-        spaces=($(grep -o '"name":"[^"]*"' ~/.dss/spaces/config.json | cut -d'"' -f4))
+        spaces=($(grep -o '"name": *"[^"]*"' ~/.dss/spaces/config.json | cut -d'"' -f4))
     fi
     
     _arguments -C \\
@@ -226,7 +226,7 @@ function generateFishScript(): string {
 # Function to get space names
 function __dss_get_spaces
     if test -f ~/.dss/spaces/config.json
-        cat ~/.dss/spaces/config.json | grep -o '"name":"[^"]*"' | cut -d'"' -f4
+        cat ~/.dss/spaces/config.json | grep -o '"name": *"[^"]*"' | cut -d'"' -f4
     end
 end
 

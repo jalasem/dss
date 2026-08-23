@@ -86,6 +86,31 @@ export function fromSpace(space: ISpace): IIdentity {
   return identity;
 }
 
+/**
+ * Converts an ISpace (as edited via the back-compat view) back into an
+ * IIdentity, preserving metadata the ISpace view can't carry — host, key
+ * fingerprint/createdAt, and algorithm when the key path is unchanged —
+ * from the identity it was originally derived from. Pass `undefined` for a
+ * brand-new space (no prior identity to preserve anything from).
+ */
+export function mergeIdentity(space: ISpace, original: IIdentity | undefined): IIdentity {
+  const updated = fromSpace(space);
+  if (!original) return updated;
+
+  updated.host = original.host;
+
+  if (updated.key && original.key) {
+    updated.key = {
+      ...updated.key,
+      fingerprint: original.key.fingerprint,
+      createdAt: original.key.createdAt,
+      algorithm: updated.key.path === original.key.path ? original.key.algorithm : updated.key.algorithm
+    };
+  }
+
+  return updated;
+}
+
 function uniqueSlug(base: string, taken: Set<string>): string {
   if (!taken.has(base)) return base;
   let suffix = 2;
