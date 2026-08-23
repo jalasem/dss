@@ -49,7 +49,7 @@ export async function batchSwitchSpaces() {
 
       if (!continueNext) break;
     } catch (error) {
-      UIHelper.error(`Failed to switch to ${spaceName}: ${(error as Error).message}`);
+      fail(`Failed to switch to ${spaceName}: ${(error as Error).message}`);
 
       const continueOnError = await confirm({
         message: 'Continue with remaining spaces?',
@@ -339,7 +339,7 @@ export async function bulkUpdateSpaces() {
               generatedKeyInfoByName.set(space.name, keyInfo);
               updatedCount++;
             } catch (error) {
-              UIHelper.error(`Failed to regenerate SSH key for ${space.name}: ${(error as Error).message}`);
+              fail(`Failed to regenerate SSH key for ${space.name}: ${(error as Error).message}`);
             }
           }
         }

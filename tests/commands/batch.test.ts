@@ -9,6 +9,9 @@ import type { IIdentity, IKeyInfo, IStoreV2 } from '../../src/core/types';
 jest.mock('os');
 jest.mock('@inquirer/prompts');
 jest.mock('../../src/infra/keys');
+jest.mock('../../src/commands/spaces', () => ({
+  switchSpace: jest.fn()
+}));
 jest.mock('../../src/infra/store', () => {
   const actual = jest.requireActual('../../src/infra/store');
   const loadStore = jest.fn();
@@ -46,8 +49,9 @@ jest.mock('../../src/infra/store', () => {
 const mockOs = os as jest.Mocked<typeof os>;
 mockOs.homedir.mockReturnValue('/mock/home');
 
-const { bulkUpdateSpaces } = require('../../src/commands/batch');
+const { bulkUpdateSpaces, batchSwitchSpaces } = require('../../src/commands/batch');
 const { loadStore, saveStore } = require('../../src/infra/store');
+const { switchSpace } = require('../../src/commands/spaces');
 
 const mockLoadStore = loadStore as jest.MockedFunction<typeof LoadStore>;
 const mockSaveStore = saveStore as jest.MockedFunction<typeof SaveStore>;
@@ -55,6 +59,7 @@ const mockSelect = select as jest.MockedFunction<typeof select>;
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockCheckbox = checkbox as jest.MockedFunction<typeof checkbox>;
 const mockGenerateKey = generateKey as jest.MockedFunction<typeof generateKey>;
+const mockSwitchSpace = switchSpace as jest.MockedFunction<typeof switchSpace>;
 
 const mockHomeDir = '/mock/home';
 
@@ -181,7 +186,7 @@ describe('commands/batch bulkUpdateSpaces — regenerate-keys', () => {
     expect(finalStore.identities.find(i => i.name === 'keyless-space')?.key?.algorithm).toBe('ed25519');
   });
 
-  it('warns for a per-space generateKey failure, continues the loop, and does not persist a stale entry for that space', async () => {
+  it('fails (exit code 1) for a per-space generateKey failure, continues the loop, and does not persist a stale entry for that space', async () => {
     const okIdentity = identity({
       name: 'ok-space',
       key: { path: '/mock/home/.dss/spaces/ok-space/id_ed25519', algorithm: 'ed25519' }
@@ -206,9 +211,12 @@ describe('commands/batch bulkUpdateSpaces — regenerate-keys', () => {
 
     await bulkUpdateSpaces();
 
-    // The failure is reported but does not abort the loop or the command.
+    // The failure is reported (via fail(), which sets exit code 1) but does
+    // not abort the loop or the command — this aborts the batch's per-space
+    // purpose for that one space, so it's a fail() per the exit-code sweep,
+    // not a cosmetic warning.
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to regenerate SSH key for failing-space'));
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(1);
 
     // The successful space is persisted with its new key...
     const finalStore = mockSaveStore.mock.calls[mockSaveStore.mock.calls.length - 1][0] as IStoreV2;
@@ -233,5 +241,46 @@ describe('commands/batch bulkUpdateSpaces — regenerate-keys', () => {
     expect(mockSaveStore).not.toHaveBeenCalled();
     const calls = (console.log as jest.Mock).mock.calls.flat();
     expect(calls.some(call => call && call.includes && call.includes('No spaces were updated'))).toBe(true);
+  });
+});
+
+describe('commands/batch batchSwitchSpaces', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation();
+    mockOs.homedir.mockReturnValue(mockHomeDir);
+    mockConfirm.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
+  it('sets process.exitCode = 1 (via fail()) when a per-space switch fails, and continues the loop', async () => {
+    const spaceA = identity({ name: 'space-a' });
+    const spaceB = identity({ name: 'space-b' });
+    mockLoadStore.mockResolvedValue(storeOf([spaceA, spaceB]));
+    mockCheckbox.mockResolvedValue(['space-a', 'space-b']);
+    mockSwitchSpace
+      .mockRejectedValueOnce(new Error('ssh-add failed'))
+      .mockResolvedValueOnce(undefined as never);
+
+    await batchSwitchSpaces();
+
+    expect(mockSwitchSpace).toHaveBeenCalledTimes(2);
+    expect(process.exitCode).toBe(1);
+    const calls = (console.log as jest.Mock).mock.calls.flat();
+    expect(calls.some(call => call && call.includes && call.includes('Failed to switch to space-a'))).toBe(true);
+  });
+
+  it('leaves process.exitCode unset when every per-space switch succeeds', async () => {
+    const spaceA = identity({ name: 'space-a' });
+    mockLoadStore.mockResolvedValue(storeOf([spaceA]));
+    mockCheckbox.mockResolvedValue(['space-a']);
+    mockSwitchSpace.mockResolvedValue(undefined as never);
+
+    await batchSwitchSpaces();
+
+    expect(process.exitCode).toBeUndefined();
   });
 });

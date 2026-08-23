@@ -6,6 +6,8 @@ import { input, confirm, select, password } from '@inquirer/prompts';
 import { generateKey } from '../../src/infra/keys';
 import { copyToClipboard } from '../../src/infra/clipboard';
 import { testHostAccess, removeSSHKeyFromAgent, addToAgent, setHostSSHKey } from '../../src/infra/ssh';
+import { writeActiveGitconfig, ensureGlobalInclude } from '../../src/infra/git';
+import { bindRepository } from '../../src/infra/repoBinding';
 import { UIHelper } from '../../src/commands/ui';
 import type { loadStore as LoadStore, saveStore as SaveStore, fromSpace as FromSpace, IStoreV2 } from '../../src/infra/store';
 import type { ISpace, IKeyInfo } from '../../src/core/types';
@@ -17,6 +19,18 @@ jest.mock('@inquirer/prompts');
 jest.mock('../../src/infra/keys');
 jest.mock('../../src/infra/clipboard');
 jest.mock('../../src/infra/ssh');
+jest.mock('../../src/infra/repoBinding');
+jest.mock('../../src/infra/git', () => {
+  // getGitUser (used by inspectSpace) keeps its real implementation, which
+  // reads through the mocked child_process execFile — only the includeIf-
+  // first write path is replaced with controllable jest.fn()s.
+  const actual = jest.requireActual('../../src/infra/git');
+  return {
+    ...actual,
+    writeActiveGitconfig: jest.fn(),
+    ensureGlobalInclude: jest.fn()
+  };
+});
 jest.mock('../../src/infra/store', () => {
   const actual = jest.requireActual('../../src/infra/store');
   const loadStore = jest.fn();
@@ -78,6 +92,9 @@ const mockTestHostAccess = testHostAccess as jest.MockedFunction<typeof testHost
 const mockRemoveSSHKeyFromAgent = removeSSHKeyFromAgent as jest.MockedFunction<typeof removeSSHKeyFromAgent>;
 const mockAddToAgent = addToAgent as jest.MockedFunction<typeof addToAgent>;
 const mockSetHostSSHKey = setHostSSHKey as jest.MockedFunction<typeof setHostSSHKey>;
+const mockWriteActiveGitconfig = writeActiveGitconfig as jest.MockedFunction<typeof writeActiveGitconfig>;
+const mockEnsureGlobalInclude = ensureGlobalInclude as jest.MockedFunction<typeof ensureGlobalInclude>;
+const mockBindRepository = bindRepository as jest.MockedFunction<typeof bindRepository>;
 const mockLoadStore = loadStore as jest.MockedFunction<typeof LoadStore>;
 const mockSaveStore = saveStore as jest.MockedFunction<typeof SaveStore>;
 const typedFromSpace = fromSpace as typeof FromSpace;
@@ -403,18 +420,23 @@ describe('commands/spaces', () => {
       sshKeyPath: mockSshKeyPath
     };
 
-    it('should switch to a space successfully', async () => {
+    it('should switch to a space successfully (includeIf-first: writeActiveGitconfig + ensureGlobalInclude, no direct git config writes)', async () => {
       mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
       mockConfirm.mockResolvedValue(false); // Don't test GitHub access
 
       await switchSpace('test-space');
 
-      expect(mockExecFile).toHaveBeenCalledWith(
+      expect(mockWriteActiveGitconfig).toHaveBeenCalledWith(
+        expect.objectContaining({ userName: mockSpace.userName, email: mockSpace.email })
+      );
+      expect(mockEnsureGlobalInclude).toHaveBeenCalled();
+      // switch no longer calls `git config --global user.name/email` directly.
+      expect(mockExecFile).not.toHaveBeenCalledWith(
         'git',
         ['config', '--global', 'user.name', mockSpace.userName],
         expect.any(Function)
       );
-      expect(mockExecFile).toHaveBeenCalledWith(
+      expect(mockExecFile).not.toHaveBeenCalledWith(
         'git',
         ['config', '--global', 'user.email', mockSpace.email],
         expect.any(Function)
@@ -478,16 +500,10 @@ describe('commands/spaces', () => {
 
       await switchSpace('keyless-space');
 
-      expect(mockExecFile).toHaveBeenCalledWith(
-        'git',
-        ['config', '--global', 'user.name', keylessSpace.userName],
-        expect.any(Function)
+      expect(mockWriteActiveGitconfig).toHaveBeenCalledWith(
+        expect.objectContaining({ userName: keylessSpace.userName, email: keylessSpace.email })
       );
-      expect(mockExecFile).toHaveBeenCalledWith(
-        'git',
-        ['config', '--global', 'user.email', keylessSpace.email],
-        expect.any(Function)
-      );
+      expect(mockEnsureGlobalInclude).toHaveBeenCalled();
       expect(mockAddToAgent).not.toHaveBeenCalled();
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([keylessSpace], 'keyless-space'));
 
@@ -693,6 +709,34 @@ describe('commands/spaces', () => {
 
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to remove space'));
       expect(process.exitCode).toBe(1);
+    });
+
+    it('warns (and leaves the registry entries) when the removed identity has registered bindings', async () => {
+      mockLoadStore.mockResolvedValue({
+        version: 2,
+        identities: [typedFromSpace(mockSpace)],
+        bindings: [
+          { path: '/repos/one', identity: 'test-space' },
+          { path: '/repos/two', identity: 'test-space' }
+        ]
+      });
+      mockSelect.mockResolvedValue('test-space');
+      mockConfirm.mockResolvedValue(true);
+
+      await removeSpace();
+
+      // Only unbind removes a registry entry — removeSpace must leave both.
+      const finalStore = mockSaveStore.mock.calls[mockSaveStore.mock.calls.length - 1][0] as IStoreV2;
+      expect(finalStore.bindings).toEqual([
+        { path: '/repos/one', identity: 'test-space' },
+        { path: '/repos/two', identity: 'test-space' }
+      ]);
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('still bound to the removed identity "test-space"'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('/repos/one'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('/repos/two'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('dss unbind'))).toBe(true);
     });
   });
 
@@ -903,14 +947,13 @@ describe('commands/spaces', () => {
 
       await modifySpace('test-space');
 
-      expect(mockExecFile).toHaveBeenCalledWith(
+      expect(mockWriteActiveGitconfig).toHaveBeenCalledWith(
+        expect.objectContaining({ userName: 'New User Name', email: 'new-email@example.com' })
+      );
+      expect(mockEnsureGlobalInclude).toHaveBeenCalled();
+      expect(mockExecFile).not.toHaveBeenCalledWith(
         'git',
         ['config', '--global', 'user.name', 'New User Name'],
-        expect.any(Function)
-      );
-      expect(mockExecFile).toHaveBeenCalledWith(
-        'git',
-        ['config', '--global', 'user.email', 'new-email@example.com'],
         expect.any(Function)
       );
     });
@@ -923,12 +966,7 @@ describe('commands/spaces', () => {
         sshKeyPath: mockSshKeyPath
       };
       mockLoadStore.mockResolvedValue(storeOf([activeSpace], 'test-space'));
-      (mockExecFile as unknown as jest.Mock).mockImplementation(
-        (_file: string, _args: string[], callback: any) => {
-          callback(new Error('git not found'));
-          return {} as any;
-        }
-      );
+      mockEnsureGlobalInclude.mockRejectedValueOnce(new Error('git not found'));
 
       mockInput
         .mockResolvedValueOnce(activeSpace.name)
@@ -955,12 +993,7 @@ describe('commands/spaces', () => {
       mockLoadStore.mockResolvedValue(storeOf([activeSpace], 'test-space'));
       (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
       (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
-      (mockExecFile as unknown as jest.Mock).mockImplementation(
-        (_file: string, _args: string[], callback: any) => {
-          callback(new Error('git not found'));
-          return {} as any;
-        }
-      );
+      mockEnsureGlobalInclude.mockRejectedValueOnce(new Error('git not found'));
 
       mockInput
         .mockResolvedValueOnce('New Name') // rename
@@ -1093,6 +1126,87 @@ describe('commands/spaces', () => {
       expect(calls.some(call =>
         call && call.includes && call.includes('dss bind') && call.includes('old key path')
       )).toBe(true);
+    });
+
+    it('renames registered binding entries and re-invokes bindRepository per live path on rename, warning per dead path and printing a summary (skipping the legacy blanket warning)', async () => {
+      const spaceToRename = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      mockLoadStore.mockResolvedValue({
+        version: 2,
+        identities: [typedFromSpace(spaceToRename)],
+        bindings: [
+          { path: '/repos/live', identity: 'test-space' },
+          { path: '/repos/dead', identity: 'test-space' }
+        ]
+      });
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
+      mockBindRepository.mockImplementation(async (repositoryPath: string) => {
+        if (repositoryPath === '/repos/dead') {
+          throw new Error('not a git repository');
+        }
+        return {} as any;
+      });
+
+      mockInput
+        .mockResolvedValueOnce('New Name')
+        .mockResolvedValueOnce(spaceToRename.email)
+        .mockResolvedValueOnce(spaceToRename.userName);
+
+      await modifySpace('test-space');
+
+      expect(mockBindRepository).toHaveBeenCalledWith('/repos/live', expect.objectContaining({ name: 'new-name' }), {});
+      expect(mockBindRepository).toHaveBeenCalledWith('/repos/dead', expect.objectContaining({ name: 'new-name' }), {});
+
+      const finalStore = mockSaveStore.mock.calls[mockSaveStore.mock.calls.length - 1][0] as IStoreV2;
+      expect(finalStore.bindings).toEqual([
+        { path: '/repos/live', identity: 'new-name' },
+        { path: '/repos/dead', identity: 'new-name' }
+      ]);
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('Could not refresh binding for /repos/dead'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('Refreshed 1 binding(s); 1 need attention.'))).toBe(true);
+      // Registered bindings exist, so the Phase 1 blanket warning is skipped.
+      expect(calls.some(call => call && call.includes && call.includes('may still reference the old key path'))).toBe(false);
+    });
+
+    it('refreshes registered bindings on an email/userName-only change (no rename)', async () => {
+      const spaceToEdit = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      mockLoadStore.mockResolvedValue({
+        version: 2,
+        identities: [typedFromSpace(spaceToEdit)],
+        bindings: [{ path: '/repos/live', identity: 'test-space' }]
+      });
+      mockBindRepository.mockResolvedValue({} as any);
+
+      mockInput
+        .mockResolvedValueOnce(spaceToEdit.name)
+        .mockResolvedValueOnce('new-email@example.com')
+        .mockResolvedValueOnce(spaceToEdit.userName);
+
+      await modifySpace('test-space');
+
+      expect(mockBindRepository).toHaveBeenCalledWith(
+        '/repos/live',
+        expect.objectContaining({ name: 'test-space', email: 'new-email@example.com' }),
+        {}
+      );
+
+      const finalStore = mockSaveStore.mock.calls[mockSaveStore.mock.calls.length - 1][0] as IStoreV2;
+      expect(finalStore.bindings).toEqual([{ path: '/repos/live', identity: 'test-space' }]);
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('Refreshed 1 binding(s); 0 need attention.'))).toBe(true);
     });
 
     it('prompts for the host with the current value as the select default, and makes no change when re-selecting it', async () => {

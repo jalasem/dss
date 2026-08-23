@@ -94,11 +94,13 @@ export interface BatchBindingResult {
   failed: BatchBindingFailure[];
 }
 
-function shellQuote(value: string): string {
+/** POSIX shell single-quotes a value (used to embed a key path in an ssh command). */
+export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function buildSshCommand(sshKeyPath: string): string {
+/** Builds the `ssh -i <key> -o IdentitiesOnly=yes` command shared by repo bindings and the includeIf-first active identity. */
+export function buildSshCommand(sshKeyPath: string): string {
   return `ssh -i ${shellQuote(sshKeyPath)} -o IdentitiesOnly=yes`;
 }
 

@@ -6,7 +6,8 @@ import path from "path";
 import { generateKey } from "../infra/keys";
 import { copyToClipboard } from "../infra/clipboard";
 import { addToAgent, removeSSHKeyFromAgent, setHostSSHKey, testHostAccess } from "../infra/ssh";
-import { setGitUser, getGitUser } from "../infra/git";
+import { getGitUser, writeActiveGitconfig, ensureGlobalInclude } from "../infra/git";
+import { bindRepository } from "../infra/repoBinding";
 import { isPromptExitError, safePassword, promptHost } from "./prompts";
 import { ISpace, IKeyInfo } from "../core/types";
 import { keySettingsUrl } from "../core/hosts";
@@ -104,7 +105,9 @@ export async function addSpace() {
       console.log(UIHelper.dim("\nPublic SSH Key:"));
       console.log(UIHelper.highlight(publicKey));
     } catch (err) {
-      UIHelper.error(
+      // The space was still created successfully — a clipboard/read failure
+      // here is cosmetic, not terminal, so warn rather than fail().
+      UIHelper.warning(
         "Failed to read the public SSH key or copy it to the clipboard: " +
         (err as Error).message
       );
@@ -231,8 +234,11 @@ export async function switchSpace(
   try {
     UIHelper.printProgress("Switching to space");
 
-    // Set Git configuration
-    await setGitUser(space.userName, space.email);
+    // Set Git configuration (includeIf-first: write the DSS-managed
+    // active.gitconfig and make sure the user's global config includes it,
+    // rather than writing user.name/user.email directly).
+    await writeActiveGitconfig(space);
+    await ensureGlobalInclude();
     UIHelper.success(`Git user set to ${UIHelper.highlight(space.userName)} <${UIHelper.highlight(space.email)}>.`);
 
     if (hasKey) {
@@ -361,6 +367,23 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     UIHelper.clearProgress();
     UIHelper.success(`Space '${UIHelper.highlight(spaceToRemove.name)}' has been removed successfully.`);
 
+    // Registered repo-local bindings aren't removed here — only `dss unbind`
+    // clears a registry entry — so warn that they still reference this
+    // now-gone identity's private file rather than silently leaving it.
+    const orphanedBindings = store.bindings.filter(
+      (binding) => slugify(binding.identity) === slugify(spaceToRemove.name)
+    );
+    if (orphanedBindings.length > 0) {
+      UIHelper.warning(
+        `${orphanedBindings.length} repositor${orphanedBindings.length === 1 ? 'y is' : 'ies are'} ` +
+        `still bound to the removed identity "${spaceToRemove.name}":`
+      );
+      orphanedBindings.forEach((binding) => {
+        console.log(`  • ${binding.path}`);
+      });
+      UIHelper.info(`Run ${UIHelper.command('dss unbind')} in each repository to clear the binding.`);
+    }
+
     // Show remaining spaces
     if (config.spaces.length > 0) {
       console.log(UIHelper.dim("\nRemaining spaces:"));
@@ -429,9 +452,11 @@ export async function modifySpace(spaceName?: string) {
   }
 
   const wasActive = space.name === config.activeSpace;
+  const originalName = space.name;
   const originalEmail = space.email;
   const originalUserName = space.userName;
   const originalHost = space.host ?? 'github.com';
+  const originalSshKeyPath = space.sshKeyPath;
 
   const newSpaceName = await input({
     message: `New name for "${space.name}" (leave blank to skip):`,
@@ -448,6 +473,7 @@ export async function modifySpace(spaceName?: string) {
   const host = await promptHost(originalHost);
 
   let isUpdateMade = false;
+  let keyDirMoved = false;
   if (slugify(newSpaceName) !== slugify(space.name)) {
     const newSlug = slugify(newSpaceName);
     const isDuplicate = config.spaces.some(
@@ -458,7 +484,6 @@ export async function modifySpace(spaceName?: string) {
       return;
     }
 
-    let keyDirMoved = false;
     if (space.sshKeyPath) {
       const oldKeyDir = path.dirname(space.sshKeyPath);
       const newKeyDir = path.join(path.dirname(oldKeyDir), newSlug);
@@ -479,13 +504,6 @@ export async function modifySpace(spaceName?: string) {
       config.activeSpace = newSlug;
     }
     isUpdateMade = true;
-
-    if (keyDirMoved) {
-      UIHelper.warning(
-        `Repositories bound to this space via ${UIHelper.command('dss bind')} may still reference the old key path — ` +
-        `re-bind them with ${UIHelper.command(`dss bind ${newSlug}`)}.`
-      );
-    }
   }
   if (email !== originalEmail) {
     space.email = email;
@@ -500,13 +518,59 @@ export async function modifySpace(spaceName?: string) {
     isUpdateMade = true;
   }
 
-  // Persist before re-applying global git config so disk (config + any moved
-  // key directory) stays consistent even if the git re-apply below fails.
+  // Registered repo-local bindings for this identity (matched by name,
+  // slug-aware — the registry may hold a legacy raw name). A rename updates
+  // each matching entry's `identity`; a rename/email/userName/key-path
+  // change re-runs bindRepository against every live registered path so the
+  // repo's private binding file (user/email/sshCommand) stays in sync. This
+  // replaces Phase 1's blanket "may still reference the old key path"
+  // warning for identities the registry actually knows about.
+  const renamed = slugify(space.name) !== slugify(originalName);
+  const matchingBindings = store.bindings.filter(
+    (binding) => slugify(binding.identity) === slugify(originalName)
+  );
+  const bindingRefreshNeeded = renamed
+    || space.email !== originalEmail
+    || space.userName !== originalUserName
+    || space.sshKeyPath !== originalSshKeyPath;
+
+  if (matchingBindings.length > 0 && renamed) {
+    matchingBindings.forEach((binding) => {
+      binding.identity = space.name;
+    });
+  }
+
+  // Persist before re-applying global git config / refreshing bindings so
+  // disk (config + any moved key directory + renamed binding entries) stays
+  // consistent even if either of those steps below fails.
   await persistConfig(store, config, originalBySpace);
+
+  if (matchingBindings.length > 0) {
+    if (bindingRefreshNeeded) {
+      let refreshed = 0;
+      let needsAttention = 0;
+      for (const binding of matchingBindings) {
+        try {
+          await bindRepository(binding.path, space, {});
+          refreshed++;
+        } catch (error) {
+          needsAttention++;
+          UIHelper.warning(`Could not refresh binding for ${binding.path}: ${(error as Error).message}`);
+        }
+      }
+      UIHelper.info(`Refreshed ${refreshed} binding(s); ${needsAttention} need attention.`);
+    }
+  } else if (keyDirMoved) {
+    UIHelper.warning(
+      `Repositories bound to this space via ${UIHelper.command('dss bind')} may still reference the old key path — ` +
+      `re-bind them with ${UIHelper.command(`dss bind ${space.name}`)}.`
+    );
+  }
 
   if (wasActive && (email !== originalEmail || userName !== originalUserName)) {
     try {
-      await setGitUser(space.userName, space.email);
+      await writeActiveGitconfig(space);
+      await ensureGlobalInclude();
     } catch (error) {
       fail(`Failed to update global git configuration: ${(error as Error).message}`);
       return;
