@@ -110,11 +110,47 @@ describe('UIHelper', () => {
 
       for (const line of loggedLines()) {
         expect(line).not.toMatch(ANSI_RE);
-        expect(line).not.toMatch(/[✓✗!●·]/);
+        expect(line).not.toMatch(/[✓✗!●·—]/);
         expect(line).not.toMatch(BOX_CHARS);
         expect(line).not.toMatch(EMOJI_RE);
         expect(line).not.toContain('[');
       }
+    });
+
+    it('strips decorative middot/em-dash from success/error/warning/info message content', () => {
+      UIHelper.success('done · with dash — here');
+      UIHelper.error('bad · thing — happened');
+      UIHelper.warning('careful · watch — out');
+      UIHelper.info('note · aside — detail');
+
+      for (const line of loggedLines()) {
+        expect(line).not.toMatch(/[·—]/);
+      }
+      expect(loggedLines().some(l => l.includes('done - with dash - here'))).toBe(true);
+    });
+
+    it('strips decorative middot/em-dash from printInfoBox/printSuccessBox/printErrorBox content lines', () => {
+      UIHelper.printInfoBox('Heads Up', ['No key configured — activation skipped', 'see · docs']);
+      UIHelper.printSuccessBox('Done', ['step one · step two']);
+      UIHelper.printErrorBox('Failed', ['reason — detail']);
+
+      for (const line of loggedLines()) {
+        expect(line).not.toMatch(/[·—]/);
+      }
+    });
+
+    it('plainify() swaps · and — for a plain dash, and is a no-op outside PLAIN mode', () => {
+      expect(UIHelper.plainify('a · b — c')).toBe('a - b - c');
+      withRichMode(() => {
+        expect(UIHelper.plainify('a · b — c')).toBe('a · b — c');
+      });
+    });
+
+    it('bullet() returns a plain dash in PLAIN mode and · in rich mode', () => {
+      expect(UIHelper.bullet()).toBe('-');
+      withRichMode(() => {
+        expect(UIHelper.bullet()).toBe('·');
+      });
     });
 
     it('degrades error/warning to greppable ASCII tags', () => {

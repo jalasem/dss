@@ -280,7 +280,10 @@ describe('commands/doctor', () => {
 
       expect(process.exitCode).toBeUndefined();
       const calls = (console.log as jest.Mock).mock.calls.flat();
-      expect(calls.some(c => typeof c === 'string' && /\d+ issues? —/.test(c))).toBe(true);
+      // PLAIN mode (Jest's non-TTY default) degrades the em-dash to a plain
+      // ASCII dash — no decorative "—" should leak into piped/CI output.
+      expect(calls.some(c => typeof c === 'string' && /\d+ issues? -/.test(c))).toBe(true);
+      expect(calls.every(c => typeof c !== 'string' || !c.includes('—'))).toBe(true);
     });
   });
 });

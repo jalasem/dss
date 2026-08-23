@@ -225,7 +225,7 @@ export async function switchSpace(
     fail(`Identity "${selectedSpaceName}" not found.`);
     UIHelper.info("Available identities:");
     config.spaces.forEach(s => {
-      console.log(`  · ${UIHelper.highlight(s.name)} (${s.email})`);
+      console.log(`  ${UIHelper.bullet()} ${UIHelper.highlight(s.name)} (${s.email})`);
     });
     return;
   }
@@ -419,7 +419,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
         `still bound to the removed identity "${spaceToRemove.name}":`
       );
       orphanedBindings.forEach((binding) => {
-        console.log(`  · ${binding.path}`);
+        console.log(`  ${UIHelper.bullet()} ${binding.path}`);
       });
       UIHelper.info(`Run ${UIHelper.command('dss unlink')} in each repository to clear the binding.`);
     }
@@ -428,7 +428,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     if (config.spaces.length > 0) {
       console.log(UIHelper.dim("\nRemaining identities:"));
       config.spaces.forEach(space => {
-        console.log(`  · ${UIHelper.highlight(space.name)} (${space.email})`);
+        console.log(`  ${UIHelper.bullet()} ${UIHelper.highlight(space.name)} (${space.email})`);
       });
     } else {
       UIHelper.info("No identities remaining. Use " + UIHelper.command("dss new") + " to create a new one.");

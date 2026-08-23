@@ -239,9 +239,12 @@ describe('commands/dashboard', () => {
     const ansiRe = /\[[0-9;]*m/;
     for (const line of lines) {
       expect(line).not.toMatch(ansiRe);
-      expect(line).not.toMatch(/[●]/);
+      expect(line).not.toMatch(/[●·—]/);
     }
     // The active-identity marker degrades to the plain "* name" convention.
     expect(lines.some(l => l.includes('* personal'))).toBe(true);
+    // The "unbound repo" hint line (which carries both a bullet and an
+    // em-dash in rich mode) degrades to plain ASCII too.
+    expect(lines.some(l => l.includes('this repo uses the global identity'))).toBe(true);
   });
 });

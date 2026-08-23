@@ -30,24 +30,39 @@ export class UIHelper {
     return isPlainMode();
   }
 
+  /**
+   * Swaps decorative glyphs (`·`, `—`) for a plain ASCII dash when in PLAIN
+   * mode; a no-op otherwise. Applied wherever a string that might carry one
+   * of these glyphs reaches the terminal, so PLAIN output never leaks rich
+   * punctuation regardless of which renderer composed the string.
+   */
+  static plainify(text: string): string {
+    return this.isPlain() ? text.replace(/[·—]/g, '-') : text;
+  }
+
+  /** The list/separator bullet: `·` in rich mode, `-` in PLAIN. */
+  static bullet(): string {
+    return this.isPlain() ? '-' : GLYPH.bullet;
+  }
+
   private static style(colorFn: (s: string) => string, text: string): string {
-    return this.isPlain() ? text : colorFn(text);
+    return this.isPlain() ? this.plainify(text) : colorFn(text);
   }
 
   static success(message: string): void {
-    console.log(this.isPlain() ? message : chalk.green(`${GLYPH.success} ${message}`));
+    console.log(this.isPlain() ? this.plainify(message) : chalk.green(`${GLYPH.success} ${message}`));
   }
 
   static error(message: string): void {
-    console.log(this.isPlain() ? `error: ${message}` : chalk.red(`${GLYPH.error} ${message}`));
+    console.log(this.isPlain() ? `error: ${this.plainify(message)}` : chalk.red(`${GLYPH.error} ${message}`));
   }
 
   static warning(message: string): void {
-    console.log(this.isPlain() ? `warn: ${message}` : chalk.yellow(`${GLYPH.warning} ${message}`));
+    console.log(this.isPlain() ? `warn: ${this.plainify(message)}` : chalk.yellow(`${GLYPH.warning} ${message}`));
   }
 
   static info(message: string): void {
-    console.log(this.isPlain() ? message : chalk.dim(message));
+    console.log(this.isPlain() ? this.plainify(message) : chalk.dim(message));
   }
 
   static highlight(text: string): string {
@@ -244,7 +259,7 @@ export class UIHelper {
       .map(line => line.replace(/^\s*[✓✗!⚠]\s*/, '').trim())
       .filter(line => line.length > 0)
       .forEach(line => {
-        console.log(this.isPlain() ? `  - ${line}` : chalk.dim(`  ${GLYPH.bullet} ${line}`));
+        console.log(this.isPlain() ? `  - ${this.plainify(line)}` : chalk.dim(`  ${GLYPH.bullet} ${line}`));
       });
   }
 
@@ -281,7 +296,7 @@ export class UIHelper {
     };
 
     if (this.isPlain()) {
-      console.log(`${plainTagByStatus[status]}${label}: ${value}`);
+      console.log(`${plainTagByStatus[status]}${this.plainify(label)}: ${this.plainify(value)}`);
       return;
     }
 
@@ -300,29 +315,11 @@ export class UIHelper {
   static statusFragment(status: 'success' | 'error' | 'warning', text: string): string {
     if (this.isPlain()) {
       const tag = status === 'error' ? 'error: ' : status === 'warning' ? 'warn: ' : '';
-      return `${tag}${text}`;
+      return `${tag}${this.plainify(text)}`;
     }
     const glyph = status === 'success' ? GLYPH.success : status === 'error' ? GLYPH.error : GLYPH.warning;
     const colorFn = status === 'success' ? chalk.green : status === 'error' ? chalk.red : chalk.yellow;
     return colorFn(`${glyph} ${text}`);
-  }
-
-  /** Reserved for the dashboard/help surface (later Phase 3 tasks) — not
-   * used in normal command output. */
-  static printQuickHelp(): void {
-    console.log(this.isPlain() ? 'Quick commands:' : chalk.dim('Quick commands:'));
-    const lines: Array<[string, string]> = [
-      ['dss ls', 'Show all identities'],
-      ['dss new', 'Add new identity'],
-      ['dss use', 'Switch between identities'],
-      ['dss --help', 'Show detailed help'],
-    ];
-    lines.forEach(([cmd, desc]) => {
-      const bullet = this.isPlain() ? '-' : chalk.dim(GLYPH.bullet);
-      const description = this.isPlain() ? ` - ${desc}` : chalk.dim(` - ${desc}`);
-      console.log(`  ${bullet} ${this.command(cmd)}${description}`);
-    });
-    console.log('');
   }
 
   /**
