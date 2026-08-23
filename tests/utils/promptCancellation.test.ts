@@ -4,7 +4,7 @@ import { generateCompletionScript } from '../../src/utils/completion';
 import { bindSpaceToRepository } from '../../src/utils/repoBindingCommands';
 import { safeConfirm, isPromptExitError } from '../../src/utils/prompts';
 import { UIHelper } from '../../src/utils/ui';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import fs from 'fs-extra';
 
 jest.mock('@inquirer/prompts', () => ({
@@ -23,7 +23,7 @@ jest.mock('../../src/utils/repoBinding', () => ({
 }));
 
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
-const mockExec = exec as unknown as jest.MockedFunction<typeof exec>;
+const mockExecFile = execFile as unknown as jest.MockedFunction<typeof execFile>;
 const mockFs = fs as jest.Mocked<typeof fs>;
 
 // Mirrors @inquirer/core exactly: the class does NOT override `name`,
@@ -88,8 +88,8 @@ describe('prompt cancellation handling', () => {
 
   describe('dss test (testGithubAccess)', () => {
     it('does not report an SSH error when the public-key prompt is closed', async () => {
-      (mockExec as unknown as jest.Mock).mockImplementation(
-        (_command: string, callback: (error: Error | null, result: { stdout: string; stderr: string }) => void) => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: (error: Error | null, result: { stdout: string; stderr: string }) => void) => {
           callback(null, { stdout: '', stderr: '' });
         }
       );

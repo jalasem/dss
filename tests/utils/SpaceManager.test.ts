@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { execSync, execFile, exec } from 'child_process';
+import { execFile } from 'child_process';
 import { input, confirm, select } from '@inquirer/prompts';
 import { generateSSHKey } from '../../src/utils/sshKeyGen';
 import { copyToClipboard, testGithubAccess } from '../../src/utils/index';
@@ -30,9 +30,7 @@ const {
 } = require('../../src/utils/SpaceManager');
 
 const mockFs = fs as jest.Mocked<typeof fs>;
-const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
 const mockExecFile = execFile as unknown as jest.MockedFunction<typeof execFile>;
-const mockExec = exec as unknown as jest.MockedFunction<typeof exec>;
 const mockInput = input as jest.MockedFunction<typeof input>;
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockSelect = select as jest.MockedFunction<typeof select>;
@@ -54,6 +52,12 @@ describe('SpaceManager', () => {
     jest.clearAllMocks();
     jest.spyOn(console, 'log').mockImplementation();
     jest.spyOn(console, 'error').mockImplementation();
+    (mockExecFile as unknown as jest.Mock).mockImplementation(
+      (_file: string, _args: string[], callback: any) => {
+        callback(null, { stdout: '', stderr: '' });
+        return {} as any;
+      }
+    );
   });
 
   afterEach(() => {
@@ -179,9 +183,21 @@ describe('SpaceManager', () => {
 
       await switchSpace('test-space');
 
-      expect(mockExecSync).toHaveBeenCalledWith(`git config --global user.name "${mockSpace.userName}"`);
-      expect(mockExecSync).toHaveBeenCalledWith(`git config --global user.email "${mockSpace.email}"`);
-      expect(mockExecSync).toHaveBeenCalledWith(`ssh-add ${mockSpace.sshKeyPath}`);
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['config', '--global', 'user.name', mockSpace.userName],
+        expect.any(Function)
+      );
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['config', '--global', 'user.email', mockSpace.email],
+        expect.any(Function)
+      );
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        [mockSpace.sshKeyPath],
+        expect.any(Function)
+      );
       expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, {
         spaces: [mockSpace],
         activeSpace: 'test-space'
@@ -239,9 +255,21 @@ describe('SpaceManager', () => {
 
       await switchSpace('keyless-space');
 
-      expect(mockExecSync).toHaveBeenCalledWith(`git config --global user.name "${keylessSpace.userName}"`);
-      expect(mockExecSync).toHaveBeenCalledWith(`git config --global user.email "${keylessSpace.email}"`);
-      expect(mockExecSync).not.toHaveBeenCalledWith(expect.stringContaining('ssh-add'));
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['config', '--global', 'user.name', keylessSpace.userName],
+        expect.any(Function)
+      );
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['config', '--global', 'user.email', keylessSpace.email],
+        expect.any(Function)
+      );
+      expect(mockExecFile).not.toHaveBeenCalledWith(
+        'ssh-add',
+        expect.anything(),
+        expect.any(Function)
+      );
       expect(mockFs.writeJson).toHaveBeenCalledWith(mockConfigPath, {
         spaces: [keylessSpace],
         activeSpace: 'keyless-space'
@@ -312,6 +340,28 @@ describe('SpaceManager', () => {
         spaces: [legacySpace],
         activeSpace: 'Test Space'
       });
+    });
+
+    it('passes an SSH key path containing a space to ssh-add as a single execFile argument (regression)', async () => {
+      const spacedKeyPath = '/tmp/my dir/id_rsa';
+      const spacedSpace = {
+        name: 'spaced-space',
+        email: 'spaced@example.com',
+        userName: 'Spaced User',
+        sshKeyPath: spacedKeyPath
+      };
+      (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
+      mockFs.readJson.mockResolvedValue({ spaces: [spacedSpace] });
+      (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
+      mockConfirm.mockResolvedValue(false);
+
+      await switchSpace('spaced-space');
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        [spacedKeyPath],
+        expect.any(Function)
+      );
     });
   });
 
@@ -664,8 +714,16 @@ describe('SpaceManager', () => {
 
       await modifySpace('test-space');
 
-      expect(mockExecSync).toHaveBeenCalledWith('git config --global user.name "New User Name"');
-      expect(mockExecSync).toHaveBeenCalledWith('git config --global user.email "new-email@example.com"');
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['config', '--global', 'user.name', 'New User Name'],
+        expect.any(Function)
+      );
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['config', '--global', 'user.email', 'new-email@example.com'],
+        expect.any(Function)
+      );
     });
 
     it('should persist config before re-applying git, then report failure (exit 1) if the git re-apply fails, without losing the saved changes', async () => {
@@ -678,9 +736,12 @@ describe('SpaceManager', () => {
       (mockFs.ensureFile as jest.Mock).mockResolvedValue(undefined);
       mockFs.readJson.mockResolvedValue({ spaces: [activeSpace], activeSpace: 'test-space' });
       (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
-      mockExecSync.mockImplementation(() => {
-        throw new Error('git not found');
-      });
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(new Error('git not found'));
+          return {} as any;
+        }
+      );
 
       mockInput
         .mockResolvedValueOnce(activeSpace.name)
@@ -712,9 +773,12 @@ describe('SpaceManager', () => {
       (mockFs.writeJson as jest.Mock).mockResolvedValue(undefined);
       (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
       (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
-      mockExecSync.mockImplementation(() => {
-        throw new Error('git not found');
-      });
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(new Error('git not found'));
+          return {} as any;
+        }
+      );
 
       mockInput
         .mockResolvedValueOnce('New Name') // rename
@@ -814,16 +878,24 @@ describe('SpaceManager', () => {
       (mockFs.readFile as unknown as jest.Mock).mockResolvedValue('Host github.com\n  IdentityFile ' + mockSshKeyPath);
       (mockFs.stat as unknown as jest.Mock).mockResolvedValue({ mode: 0o100600 });
       (mockFs.readdir as unknown as jest.Mock).mockResolvedValue(['id_rsa', 'id_rsa.pub']);
-      mockExecSync.mockReturnValue('Test User' as unknown as Buffer);
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: 'Test User', stderr: '' });
+          return {} as any;
+        }
+      );
     });
 
     it('reports "Key loaded" when the fingerprint is present in ssh-add -l output', async () => {
-      (mockExecFile as unknown as jest.Mock).mockImplementation((_file: string, _args: string[], cb: any) =>
-        cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' })
-      );
-      (mockExec as unknown as jest.Mock).mockImplementation((_cmd: string, cb: any) =>
-        cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' })
-      );
+      (mockExecFile as unknown as jest.Mock).mockImplementation((file: string, _args: string[], cb: any) => {
+        if (file === 'ssh-keygen') {
+          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
+        } else if (file === 'ssh-add') {
+          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
+        } else {
+          cb(null, { stdout: 'Test User', stderr: '' });
+        }
+      });
 
       const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
 
@@ -835,12 +907,15 @@ describe('SpaceManager', () => {
     });
 
     it('reports "Key not loaded" when the fingerprint is absent from ssh-add -l output', async () => {
-      (mockExecFile as unknown as jest.Mock).mockImplementation((_file: string, _args: string[], cb: any) =>
-        cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' })
-      );
-      (mockExec as unknown as jest.Mock).mockImplementation((_cmd: string, cb: any) =>
-        cb(null, { stdout: '2048 SHA256:zzz999OTHER comment (RSA)\n', stderr: '' })
-      );
+      (mockExecFile as unknown as jest.Mock).mockImplementation((file: string, _args: string[], cb: any) => {
+        if (file === 'ssh-keygen') {
+          cb(null, { stdout: '2048 SHA256:abc123DEF comment (RSA)\n', stderr: '' });
+        } else if (file === 'ssh-add') {
+          cb(null, { stdout: '2048 SHA256:zzz999OTHER comment (RSA)\n', stderr: '' });
+        } else {
+          cb(null, { stdout: 'Test User', stderr: '' });
+        }
+      });
 
       const printStatusSpy = jest.spyOn(UIHelper, 'printStatus');
 

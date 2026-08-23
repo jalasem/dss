@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from 'util';
 import os from "os";
 import fs from "fs-extra";
@@ -6,7 +6,7 @@ import path from "path";
 import { UIHelper } from "./ui";
 import { safeConfirm } from "./prompts";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export async function setGitHubSSHKey(sshKeyPath: string) {
   const sshConfigPath = path.join(os.homedir(), '.ssh', 'config');
@@ -38,7 +38,7 @@ export async function setGitHubSSHKey(sshKeyPath: string) {
 
 export async function removeSSHKeyFromAgent(sshKeyPath: string): Promise<void> {
   try {
-    await execAsync(`ssh-add -d ${sshKeyPath}`);
+    await execFileAsync('ssh-add', ['-d', sshKeyPath]);
     UIHelper.success("SSH key removed from ssh-agent successfully.");
   } catch (error) {
     UIHelper.error("Error removing SSH key from ssh-agent: " + (error as Error).message);
@@ -49,10 +49,10 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
   UIHelper.printHeader("Testing SSH Access to GitHub");
 
   try {
-    await execAsync(`ssh-add ${sshKeyPath}`);
+    await execFileAsync('ssh-add', [sshKeyPath]);
 
     try {
-      await execAsync('ssh -T git@github.com');
+      await execFileAsync('ssh', ['-T', 'git@github.com']);
       UIHelper.success("🎉 Space configuration works! You've successfully authenticated with GitHub.");
     } catch (error) {
       const { stderr } = error as { stderr: string };
@@ -82,16 +82,20 @@ export async function testGithubAccess(sshKeyPath: string): Promise<void> {
 export const copyToClipboard = (publicKey: string) => {
   return new Promise((resolve, reject) => {
     // Platform-specific command to copy the SSH public key to clipboard
-    let copyCommand;
+    let command: string;
+    let args: string[];
     switch (process.platform) {
       case "darwin":
-        copyCommand = "pbcopy";
+        command = "pbcopy";
+        args = [];
         break;
       case "win32":
-        copyCommand = "clip";
+        command = "clip";
+        args = [];
         break;
       case "linux":
-        copyCommand = "xclip -selection clipboard";
+        command = "xclip";
+        args = ["-selection", "clipboard"];
         break;
       default:
         UIHelper.error(
@@ -101,12 +105,21 @@ export const copyToClipboard = (publicKey: string) => {
         return;
     }
 
-    exec(`echo "${publicKey}" | ${copyCommand}`, (error) => {
-      if (error) {
-        reject(error);
-      } else {
+    const child = spawn(command, args);
+
+    child.on("error", (error) => {
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
         resolve("Public SSH key copied to clipboard.");
+      } else {
+        reject(new Error(`${command} exited with code ${code}`));
       }
     });
+
+    child.stdin.write(publicKey);
+    child.stdin.end();
   });
 };

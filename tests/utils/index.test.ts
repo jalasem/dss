@@ -1,19 +1,36 @@
-import { exec } from 'child_process';
+import { execFile, spawn } from 'child_process';
+import { EventEmitter } from 'events';
 import fs from 'fs-extra';
-import path from 'path';
 import os from 'os';
-import { 
-  setGitHubSSHKey, 
-  removeSSHKeyFromAgent, 
-  testGithubAccess, 
-  copyToClipboard 
+import { confirm } from '@inquirer/prompts';
+import {
+  setGitHubSSHKey,
+  removeSSHKeyFromAgent,
+  testGithubAccess,
+  copyToClipboard
 } from '../../src/utils/index';
 
 jest.mock('child_process');
 jest.mock('fs-extra');
+jest.mock('@inquirer/prompts', () => ({
+  confirm: jest.fn(),
+  select: jest.fn(),
+  input: jest.fn()
+}));
 
-const mockExec = exec as jest.MockedFunction<typeof exec>;
+const mockExecFile = execFile as unknown as jest.MockedFunction<typeof execFile>;
+const mockSpawn = spawn as unknown as jest.MockedFunction<typeof spawn>;
 const mockFs = fs as jest.Mocked<typeof fs>;
+const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
+
+function createMockChildProcess() {
+  const child: any = new EventEmitter();
+  child.stdin = {
+    write: jest.fn(),
+    end: jest.fn()
+  };
+  return child;
+}
 
 describe('Utility Functions', () => {
   const mockHomeDir = '/mock/home';
@@ -23,6 +40,7 @@ describe('Utility Functions', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(os, 'homedir').mockReturnValue(mockHomeDir);
+    mockConfirm.mockResolvedValue(false as never);
   });
 
   describe('setGitHubSSHKey', () => {
@@ -73,7 +91,7 @@ Host other.com
 
     it('should handle errors gracefully', async () => {
       (mockFs.ensureFile as jest.Mock).mockRejectedValue(new Error('Permission denied'));
-      
+
       const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
       await setGitHubSSHKey(mockSshKeyPath);
@@ -81,42 +99,43 @@ Host other.com
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('Failed to update SSH config for GitHub: Permission denied')
       );
-      
+
       consoleSpy.mockRestore();
     });
   });
 
   describe('removeSSHKeyFromAgent', () => {
-    beforeEach(() => {
-      jest.clearAllMocks();
-    });
-
     it('should remove SSH key from agent successfully', async () => {
-      const mockExec = require('child_process').exec;
-      mockExec.mockImplementation((cmd: string, callback: Function) => {
-        callback(null, { stdout: '', stderr: '' });
-      });
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
 
       const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
       await removeSSHKeyFromAgent(mockSshKeyPath);
 
-      expect(mockExec).toHaveBeenCalledWith(
-        `ssh-add -d ${mockSshKeyPath}`,
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        ['-d', mockSshKeyPath],
         expect.any(Function)
       );
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('SSH key removed from ssh-agent successfully.')
       );
-      
+
       consoleSpy.mockRestore();
     });
 
     it('should handle errors when removing SSH key', async () => {
-      const mockExec = require('child_process').exec;
-      mockExec.mockImplementation((cmd: string, callback: Function) => {
-        callback(new Error('Key not found'), null);
-      });
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(new Error('Key not found'));
+          return {} as any;
+        }
+      );
 
       const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
 
@@ -125,7 +144,77 @@ Host other.com
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('Error removing SSH key from ssh-agent: Key not found')
       );
-      
+
+      consoleSpy.mockRestore();
+    });
+
+    it('passes an SSH key path containing a space to ssh-add as a single execFile argument (regression)', async () => {
+      const spacedKeyPath = '/tmp/my dir/id_rsa';
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
+
+      await removeSSHKeyFromAgent(spacedKeyPath);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        ['-d', spacedKeyPath],
+        expect.any(Function)
+      );
+    });
+  });
+
+  describe('testGithubAccess', () => {
+    it('passes an SSH key path containing a space to ssh-add as a single execFile argument (regression)', async () => {
+      const spacedKeyPath = '/tmp/my dir/id_rsa';
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      await testGithubAccess(spacedKeyPath);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        [spacedKeyPath],
+        expect.any(Function)
+      );
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh',
+        ['-T', 'git@github.com'],
+        expect.any(Function)
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('treats an "ssh -T" failure containing "successfully authenticated" as success', async () => {
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (file: string, _args: string[], callback: any) => {
+          if (file === 'ssh') {
+            const error: any = new Error('Command failed');
+            error.stderr = "Hi user! You've successfully authenticated, but GitHub does not provide shell access.";
+            callback(error);
+          } else {
+            callback(null, { stdout: '', stderr: '' });
+          }
+          return {} as any;
+        }
+      );
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      await testGithubAccess(mockSshKeyPath);
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('successfully authenticated with GitHub')
+      );
+
       consoleSpy.mockRestore();
     });
   });
@@ -141,53 +230,54 @@ Host other.com
     });
 
     it('should copy to clipboard on macOS', async () => {
-      const mockCallback = jest.fn();
-      mockExec.mockImplementation((command, callback) => {
-        expect(command).toBe(`echo "${mockPublicKey}" | pbcopy`);
-        (callback as any)(null, '', '');
-        return {} as any;
+      const child = createMockChildProcess();
+      mockSpawn.mockImplementation((command: any, args: any) => {
+        expect(command).toBe('pbcopy');
+        expect(args).toEqual([]);
+        return child;
       });
 
-      await copyToClipboard(mockPublicKey);
+      const promise = copyToClipboard(mockPublicKey);
+      child.emit('close', 0);
+      await promise;
 
-      expect(mockExec).toHaveBeenCalledWith(
-        `echo "${mockPublicKey}" | pbcopy`,
-        expect.any(Function)
-      );
+      expect(mockSpawn).toHaveBeenCalledWith('pbcopy', []);
+      expect(child.stdin.write).toHaveBeenCalledWith(mockPublicKey);
+      expect(child.stdin.end).toHaveBeenCalled();
     });
 
     it('should copy to clipboard on Windows', async () => {
       Object.defineProperty(process, 'platform', { value: 'win32' });
 
-      mockExec.mockImplementation((command, callback) => {
-        expect(command).toBe(`echo "${mockPublicKey}" | clip`);
-        (callback as any)(null, '', '');
-        return {} as any;
+      const child = createMockChildProcess();
+      mockSpawn.mockImplementation((command: any, args: any) => {
+        expect(command).toBe('clip');
+        expect(args).toEqual([]);
+        return child;
       });
 
-      await copyToClipboard(mockPublicKey);
+      const promise = copyToClipboard(mockPublicKey);
+      child.emit('close', 0);
+      await promise;
 
-      expect(mockExec).toHaveBeenCalledWith(
-        `echo "${mockPublicKey}" | clip`,
-        expect.any(Function)
-      );
+      expect(mockSpawn).toHaveBeenCalledWith('clip', []);
     });
 
     it('should copy to clipboard on Linux', async () => {
       Object.defineProperty(process, 'platform', { value: 'linux' });
 
-      mockExec.mockImplementation((command, callback) => {
-        expect(command).toBe(`echo "${mockPublicKey}" | xclip -selection clipboard`);
-        (callback as any)(null, '', '');
-        return {} as any;
+      const child = createMockChildProcess();
+      mockSpawn.mockImplementation((command: any, args: any) => {
+        expect(command).toBe('xclip');
+        expect(args).toEqual(['-selection', 'clipboard']);
+        return child;
       });
 
-      await copyToClipboard(mockPublicKey);
+      const promise = copyToClipboard(mockPublicKey);
+      child.emit('close', 0);
+      await promise;
 
-      expect(mockExec).toHaveBeenCalledWith(
-        `echo "${mockPublicKey}" | xclip -selection clipboard`,
-        expect.any(Function)
-      );
+      expect(mockSpawn).toHaveBeenCalledWith('xclip', ['-selection', 'clipboard']);
     });
 
     it('should reject on unsupported platform', async () => {
@@ -203,13 +293,24 @@ Host other.com
     });
 
     it('should handle clipboard errors', async () => {
-      const mockError = new Error('Clipboard not available');
-      mockExec.mockImplementation((command, callback) => {
-        (callback as any)(mockError, '', '');
-        return {} as any;
-      });
+      const child = createMockChildProcess();
+      mockSpawn.mockImplementation(() => child);
 
-      await expect(copyToClipboard(mockPublicKey)).rejects.toThrow(mockError);
+      const promise = copyToClipboard(mockPublicKey);
+      const mockError = new Error('Clipboard not available');
+      child.emit('error', mockError);
+
+      await expect(promise).rejects.toThrow(mockError);
+    });
+
+    it('should reject when the clipboard process exits with a non-zero code', async () => {
+      const child = createMockChildProcess();
+      mockSpawn.mockImplementation(() => child);
+
+      const promise = copyToClipboard(mockPublicKey);
+      child.emit('close', 1);
+
+      await expect(promise).rejects.toThrow('pbcopy exited with code 1');
     });
   });
 });

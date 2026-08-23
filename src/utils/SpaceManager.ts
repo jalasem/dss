@@ -1,4 +1,4 @@
-import { execSync, execFile } from "child_process";
+import { execFile } from "child_process";
 import { input, confirm, select } from "@inquirer/prompts";
 import os from "os";
 import fs from "fs-extra";
@@ -9,7 +9,6 @@ import { isPromptExitError } from "./prompts";
 import { IConfig, ISpace } from "./types";
 import { UIHelper } from "./ui";
 import { promisify } from 'util';
-const execAsync = promisify(require('child_process').exec);
 const execFileAsync = promisify(execFile);
 
 const configPath = path.join(os.homedir(), ".dss", "spaces", "config.json");
@@ -233,14 +232,13 @@ export async function switchSpace(
     UIHelper.printProgress("Switching to space");
 
     // Set Git configuration
-    execSync(`git config --global user.name "${space.userName}"`);
-    execSync(`git config --global user.email "${space.email}"`);
+    await execFileAsync('git', ['config', '--global', 'user.name', space.userName]);
+    await execFileAsync('git', ['config', '--global', 'user.email', space.email]);
     UIHelper.success(`Git user set to ${UIHelper.highlight(space.userName)} <${UIHelper.highlight(space.email)}>.`);
 
     if (hasKey) {
       // Add SSH key to the ssh-agent
-      const addKeyCommand = `ssh-add ${space.sshKeyPath}`;
-      execSync(addKeyCommand);
+      await execFileAsync('ssh-add', [space.sshKeyPath]);
       UIHelper.success(`SSH key added to ssh-agent successfully.`);
       await setGitHubSSHKey(space.sshKeyPath);
     } else {
@@ -494,8 +492,8 @@ export async function modifySpace(spaceName?: string) {
 
   if (wasActive && (email !== originalEmail || userName !== originalUserName)) {
     try {
-      execSync(`git config --global user.name "${space.userName}"`);
-      execSync(`git config --global user.email "${space.email}"`);
+      await execFileAsync('git', ['config', '--global', 'user.name', space.userName]);
+      await execFileAsync('git', ['config', '--global', 'user.email', space.email]);
     } catch (error) {
       fail(`Failed to update global git configuration: ${(error as Error).message}`);
       return;
@@ -565,7 +563,7 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
       const fingerprintMatch = fingerprintOutput.match(/SHA256:\S+/);
       const fingerprint = fingerprintMatch?.[0];
 
-      const { stdout: agentOutput } = await execAsync('ssh-add -l');
+      const { stdout: agentOutput } = await execFileAsync('ssh-add', ['-l']);
       const keyInAgent = Boolean(fingerprint) && agentOutput.includes(fingerprint as string);
       UIHelper.printStatus("SSH Agent", keyInAgent ? 'Key loaded' : 'Key not loaded', keyInAgent ? 'success' : 'warning');
     } catch {
@@ -604,9 +602,11 @@ export async function inspectSpace(spaceName?: string): Promise<void> {
   console.log(UIHelper.bold("Git Configuration:"));
   
   try {
-    const currentGitUser = execSync('git config --global user.name', { encoding: 'utf8' }).trim();
-    const currentGitEmail = execSync('git config --global user.email', { encoding: 'utf8' }).trim();
-    
+    const { stdout: gitUserOutput } = await execFileAsync('git', ['config', '--global', 'user.name']);
+    const { stdout: gitEmailOutput } = await execFileAsync('git', ['config', '--global', 'user.email']);
+    const currentGitUser = gitUserOutput.trim();
+    const currentGitEmail = gitEmailOutput.trim();
+
     const userMatches = currentGitUser === space.userName;
     const emailMatches = currentGitEmail === space.email;
     

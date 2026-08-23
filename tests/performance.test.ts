@@ -55,8 +55,10 @@ describe('Performance Tests', () => {
       mockFs.readJson.mockResolvedValue({ spaces: [mockSpace] });
       mockFs.writeJson.mockResolvedValue();
 
-      const { execSync } = require('child_process');
-      execSync.mockImplementation(() => {});
+      const { execFile } = require('child_process');
+      execFile.mockImplementation((_file: string, _args: string[], callback: any) => {
+        callback(null, { stdout: '', stderr: '' });
+      });
 
       const { confirm } = require('@inquirer/prompts');
       confirm.mockResolvedValue(false);
