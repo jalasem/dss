@@ -163,15 +163,16 @@ the product's front door.
 - [ ] Note for cross-cutting checklist items: name the call sites to sweep explicitly (Phase 1's "slug consistency"/"exit codes" items were scoped by symptom, and batchOperations/repoBindingCommands were initially missed)
 - [ ] Binding refresh completeness: `bulkUpdateSpaces` and `dss key rotate` refresh the global active identity via `reapplyActiveIdentity` but do NOT refresh repo-local `dss bind` bindings for a bound identity they mutate (only `modifySpace` does). Fold binding refresh into `reapplyActiveIdentity` (or a sibling) and call it from all three. (Parked from Phase 2 final review — recoverable via re-bind/switch.)
 - [ ] Harden `loadStore` to error on any non-numeric or unexpected `version`; add defensive infra mocks to `tests/commands/batchExportImport.test.ts` (Phase 2 final-review non-blocking residuals)
+- [ ] Harden `doctor`'s host-auth `ssh` invocation with `-o BatchMode=yes -o ConnectTimeout=<n>` so it never prompts on `/dev/tty` and fails fast in CI (Phase 3 final-review minor; borderline Phase 4)
 
 ### Phase 3 — Surface & voice (v2.0 UX)
 
-- [ ] New command surface (`dss`, `ls`, `use`, `new/edit/rm`, `link/unlink`, `doctor`, `key`, `config`, `completion`)
-- [ ] Legacy commands become aliases that print deprecation warnings (removal in v3)
-- [ ] Cut `batch`/`bulk`/`onboard`; automatic first-run flow
-- [ ] "Identities" rename across all user-facing copy and docs
-- [ ] Output layer rewrite: one accent, glyphs not emoji, calm success lines, `NO_COLOR`/pipe handling
-- [ ] Bare-`dss` dashboard and `dss doctor`
+- [x] New command surface (`dss`, `ls`, `use`, `new/edit/rm`, `link/unlink`, `doctor`, `key`, `config`, `completion`)
+- [x] Legacy commands become aliases that print deprecation warnings (removal in v3)
+- [x] Cut `batch`/`bulk`/`onboard`; automatic first-run flow
+- [x] "Identities" rename across all user-facing copy and docs
+- [x] Output layer rewrite: one accent, glyphs not emoji, calm success lines, `NO_COLOR`/pipe handling
+- [x] Bare-`dss` dashboard and `dss doctor`
 
 ### Phase 4 — Agents & automation (v2.0 reach)
 
