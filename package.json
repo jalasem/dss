@@ -38,27 +38,24 @@
   ],
   "author": "Ajala Abdulsamii <kgasta@gmail.com>",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@inquirer/prompts": "^4.3.0",
-    "@inquirer/select": "^2.2.0",
     "chalk": "^4.1.2",
     "commander": "^12.0.0",
-    "fs-extra": "^11.2.0",
-    "fuzzy-search": "^3.2.1",
-    "ssh-keygen": "^0.5.0"
+    "fs-extra": "^11.2.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
-    "@types/chalk": "^0.4.31",
     "@types/fs-extra": "^11.0.4",
-    "@types/fuzzy-search": "^2.1.5",
     "@types/inquirer": "^9.0.7",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.11.30",
     "@typescript-eslint/eslint-plugin": "^8.37.0",
     "@typescript-eslint/parser": "^8.37.0",
     "eslint": "^9.31.0",
-    "inquirer-autocomplete-prompt": "^3.0.1",
     "jest": "^30.0.4",
     "ts-jest": "^29.4.0",
     "ts-node": "^10.9.2",

@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { ISpace, IConfig, IKeyInfo, IIdentity, IStoreV2 } from '../core/types';
-import { slugify } from '../core/identity';
+import { slugify, findIdentity } from '../core/identity';
 
 export type { IKeyInfo, IIdentity, IBinding, IStoreV2 } from '../core/types';
 
@@ -84,6 +84,22 @@ export function mergeIdentity(space: ISpace, original: IIdentity | undefined): I
   }
 
   return updated;
+}
+
+/**
+ * Writes full key metadata (path, algorithm, fingerprint, createdAt) onto
+ * the named identity in the store, in place. Needed because the back-compat
+ * ISpace view (and therefore persistConfig/mergeIdentity) can't carry a
+ * newly generated key's fingerprint/createdAt — callers that just called
+ * generateKey() for an identity must set the result here directly, then
+ * call saveStore(store) to persist it. Returns false if no matching
+ * identity was found.
+ */
+export function setIdentityKey(store: IStoreV2, identityName: string, key: IKeyInfo): boolean {
+  const identity = findIdentity(store, identityName);
+  if (!identity) return false;
+  identity.key = key;
+  return true;
 }
 
 function uniqueSlug(base: string, taken: Set<string>): string {

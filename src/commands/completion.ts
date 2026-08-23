@@ -88,7 +88,7 @@ _dss_completion() {
     command="\${COMP_WORDS[1]}"
     
     # Main commands
-    opts="add list switch remove edit test inspect onboard batch export import bulk bind unbind status completion --help --version -h -v"
+    opts="add list switch remove edit test inspect onboard batch export import bulk bind unbind status key completion --help --version -h -v"
     
     # Get space names for relevant commands
     if [[ \$cur != -* && (\$prev == "switch" || \$prev == "remove" || \$prev == "edit" || \$prev == "test" || \$prev == "inspect" || \$prev == "bind") ]]; then
@@ -119,6 +119,9 @@ _dss_completion() {
             ;;
         switch|remove|bulk)
             opts="$opts --dry-run"
+            ;;
+        key)
+            opts="show copy rotate"
             ;;
         completion)
             opts="bash zsh fish"
@@ -159,6 +162,7 @@ _dss() {
         'bind:Bind a space to one or more Git repositories'
         'unbind:Remove the DSS binding from a Git repository'
         'status:Show repository-local DSS binding status'
+        'key:Manage SSH keys for an identity (show, copy, rotate)'
         'completion:Generate shell completion script'
         '--help:Show help information'
         '--version:Show version information'
@@ -205,6 +209,9 @@ _dss() {
                         '-p[Select an explicit Git repository]' \
                         '--path[Select an explicit Git repository]'
                     ;;
+                key)
+                    _values 'key actions' 'show' 'copy' 'rotate'
+                    ;;
                 completion)
                     _values 'shell' 'bash' 'zsh' 'fish'
                     ;;
@@ -249,6 +256,7 @@ complete -c dss -n '__fish_use_subcommand' -a 'bulk' -d 'Bulk update operations'
 complete -c dss -n '__fish_use_subcommand' -a 'bind' -d 'Bind a space to one or more Git repositories'
 complete -c dss -n '__fish_use_subcommand' -a 'unbind' -d 'Remove the DSS binding from a Git repository'
 complete -c dss -n '__fish_use_subcommand' -a 'status' -d 'Show repository-local DSS binding status'
+complete -c dss -n '__fish_use_subcommand' -a 'key' -d 'Manage SSH keys for an identity (show, copy, rotate)'
 complete -c dss -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion script'
 
 # Global options
@@ -266,6 +274,9 @@ complete -c dss -n '__fish_seen_subcommand_from bind' -l dry-run -d 'Preview cha
 complete -c dss -n '__fish_seen_subcommand_from unbind' -s p -l path -r -d 'Select an explicit Git repository (--path)'
 complete -c dss -n '__fish_seen_subcommand_from unbind' -l dry-run -d 'Preview changes without applying them (--dry-run)'
 complete -c dss -n '__fish_seen_subcommand_from status' -s p -l path -r -d 'Select an explicit Git repository (--path)'
+
+# Actions for key command
+complete -c dss -n '__fish_seen_subcommand_from key' -a 'show copy rotate' -d 'Key action'
 
 # Shell completions for completion command
 complete -c dss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish' -d 'Shell type'

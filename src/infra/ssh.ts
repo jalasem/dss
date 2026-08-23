@@ -44,6 +44,24 @@ export async function setGitHubSSHKey(sshKeyPath: string) {
   }
 }
 
+/**
+ * Adds a key to the ssh-agent. On macOS, prefers `--apple-use-keychain` so
+ * the passphrase persists in the login keychain across reboots, falling
+ * back to a plain `ssh-add` if the flag itself errors (e.g. an older
+ * ssh-add build that doesn't support it).
+ */
+export async function addToAgent(keyPath: string): Promise<void> {
+  if (process.platform === 'darwin') {
+    try {
+      await execFileAsync('ssh-add', ['--apple-use-keychain', keyPath]);
+      return;
+    } catch {
+      // fall through to plain ssh-add
+    }
+  }
+  await execFileAsync('ssh-add', [keyPath]);
+}
+
 export async function removeSSHKeyFromAgent(sshKeyPath: string): Promise<void> {
   try {
     await execFileAsync('ssh-add', ['-d', sshKeyPath]);

@@ -5,7 +5,8 @@ import { confirm } from '@inquirer/prompts';
 import {
   setGitHubSSHKey,
   removeSSHKeyFromAgent,
-  testGithubAccess
+  testGithubAccess,
+  addToAgent
 } from '../../src/infra/ssh';
 
 jest.mock('child_process');
@@ -93,6 +94,117 @@ Host other.com
       );
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe('addToAgent', () => {
+    const originalPlatform = process.platform;
+
+    function setPlatform(value: NodeJS.Platform): void {
+      Object.defineProperty(process, 'platform', { value, configurable: true });
+    }
+
+    afterEach(() => {
+      setPlatform(originalPlatform);
+    });
+
+    it('uses ssh-add --apple-use-keychain on darwin', async () => {
+      setPlatform('darwin');
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
+
+      await addToAgent(mockSshKeyPath);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        ['--apple-use-keychain', mockSshKeyPath],
+        expect.any(Function)
+      );
+    });
+
+    it('falls back to plain ssh-add on darwin when --apple-use-keychain errors', async () => {
+      setPlatform('darwin');
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, args: string[], callback: any) => {
+          if (args.includes('--apple-use-keychain')) {
+            callback(new Error('unknown option -- apple-use-keychain'));
+          } else {
+            callback(null, { stdout: '', stderr: '' });
+          }
+          return {} as any;
+        }
+      );
+
+      await addToAgent(mockSshKeyPath);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        ['--apple-use-keychain', mockSshKeyPath],
+        expect.any(Function)
+      );
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        [mockSshKeyPath],
+        expect.any(Function)
+      );
+    });
+
+    it('uses plain ssh-add on non-darwin platforms (no keychain flag attempted)', async () => {
+      setPlatform('linux');
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
+
+      await addToAgent(mockSshKeyPath);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        [mockSshKeyPath],
+        expect.any(Function)
+      );
+      expect(mockExecFile).not.toHaveBeenCalledWith(
+        'ssh-add',
+        expect.arrayContaining(['--apple-use-keychain']),
+        expect.any(Function)
+      );
+    });
+
+    it('propagates an error when the plain ssh-add fallback also fails on darwin', async () => {
+      setPlatform('darwin');
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(new Error('ssh-add failed'));
+          return {} as any;
+        }
+      );
+
+      await expect(addToAgent(mockSshKeyPath)).rejects.toThrow('ssh-add failed');
+    });
+
+    it('passes an SSH key path containing a space to ssh-add as a single execFile argument (regression)', async () => {
+      setPlatform('darwin');
+      const spacedKeyPath = '/tmp/my dir/id_rsa';
+      (mockExecFile as unknown as jest.Mock).mockImplementation(
+        (_file: string, _args: string[], callback: any) => {
+          callback(null, { stdout: '', stderr: '' });
+          return {} as any;
+        }
+      );
+
+      await addToAgent(spacedKeyPath);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'ssh-add',
+        ['--apple-use-keychain', spacedKeyPath],
+        expect.any(Function)
+      );
     });
   });
 

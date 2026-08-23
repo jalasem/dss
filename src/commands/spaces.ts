@@ -3,16 +3,16 @@ import { input, confirm, select } from "@inquirer/prompts";
 import os from "os";
 import fs from "fs-extra";
 import path from "path";
-import { generateSSHKey } from "../infra/keys";
+import { generateKey } from "../infra/keys";
 import { copyToClipboard } from "../infra/clipboard";
-import { removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAccess } from "../infra/ssh";
+import { addToAgent, removeSSHKeyFromAgent, setGitHubSSHKey, testGithubAccess } from "../infra/ssh";
 import { setGitUser, getGitUser } from "../infra/git";
-import { isPromptExitError } from "./prompts";
-import { ISpace } from "../core/types";
+import { isPromptExitError, safePassword } from "./prompts";
+import { ISpace, IKeyInfo } from "../core/types";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
 import { slugify, findSpace } from "../core/identity";
-import { loadConfig, persistConfig } from "../infra/store";
+import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/store";
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
@@ -51,10 +51,14 @@ export async function addSpace() {
     },
   });
 
-  const generateKey = await confirm({
+  const shouldGenerateKey = await confirm({
     message: "Generate a new SSH key for this space?",
     default: true,
   });
+
+  const passphrase = shouldGenerateKey
+    ? await safePassword({ message: "Passphrase for the key (empty for none):" })
+    : "";
 
   const { store, config, originalBySpace } = await loadConfig();
   const slugifiedSpaceName = slugify(name);
@@ -66,9 +70,17 @@ export async function addSpace() {
   }
 
   let sshKeyPath = "";
-  if (generateKey) {
+  let generatedKeyInfo: IKeyInfo | undefined;
+  if (shouldGenerateKey) {
     UIHelper.printProgress("Generating SSH key");
-    sshKeyPath = await generateSSHKey(slugifiedSpaceName, email);
+    const keyDirectory = path.join(os.homedir(), ".dss", "spaces", slugifiedSpaceName);
+    generatedKeyInfo = await generateKey({
+      directory: keyDirectory,
+      algorithm: "ed25519",
+      comment: email,
+      passphrase,
+    });
+    sshKeyPath = generatedKeyInfo.path;
     UIHelper.clearProgress();
 
     const publicKeyPath = `${sshKeyPath}.pub`;
@@ -104,6 +116,13 @@ export async function addSpace() {
 
   config.spaces.push(newSpace);
   await persistConfig(store, config, originalBySpace);
+
+  // persistConfig writes identities through the ISpace view, which can't
+  // carry a key's fingerprint/createdAt — set the full metadata directly.
+  if (generatedKeyInfo) {
+    setIdentityKey(store, slugifiedSpaceName, generatedKeyInfo);
+    await saveStore(store);
+  }
 
   const switchToNewSpace = await confirm({
     message: `Do you want to switch to the newly added space "${slugifiedSpaceName}" now?`,
@@ -212,7 +231,7 @@ export async function switchSpace(
 
     if (hasKey) {
       // Add SSH key to the ssh-agent
-      await execFileAsync('ssh-add', [space.sshKeyPath]);
+      await addToAgent(space.sshKeyPath);
       UIHelper.success(`SSH key added to ssh-agent successfully.`);
       await setGitHubSSHKey(space.sshKeyPath);
     } else {

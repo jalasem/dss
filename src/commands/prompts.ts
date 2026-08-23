@@ -1,4 +1,4 @@
-import { confirm } from '@inquirer/prompts';
+import { confirm, password } from '@inquirer/prompts';
 
 // @inquirer/prompts throws ExitPromptError when stdin closes (piped input
 // exhausted, non-interactive shell) or the user presses Ctrl+C.
@@ -19,6 +19,20 @@ export async function safeConfirm(options: {
     return await confirm(options);
   } catch (error) {
     if (isPromptExitError(error)) return false;
+    throw error;
+  }
+}
+
+// Treats a closed password prompt as "no passphrase" so it never surfaces a
+// cancellation as a command failure.
+export async function safePassword(options: {
+  message: string;
+  mask?: boolean | string;
+}): Promise<string> {
+  try {
+    return await password({ mask: true, ...options });
+  } catch (error) {
+    if (isPromptExitError(error)) return '';
     throw error;
   }
 }

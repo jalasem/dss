@@ -2,13 +2,13 @@ import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
 import { select, confirm, checkbox, input } from '@inquirer/prompts';
-import { ISpace } from '../core/types';
+import { ISpace, IKeyInfo } from '../core/types';
 import { UIHelper } from './ui';
 import { switchSpace } from './spaces';
-import { generateSSHKey } from '../infra/keys';
+import { generateKey } from '../infra/keys';
 import { fail } from './fail';
 import { slugify, findSpace } from '../core/identity';
-import { loadConfig, persistConfig } from '../infra/store';
+import { loadConfig, persistConfig, saveStore, setIdentityKey } from '../infra/store';
 
 export async function batchSwitchSpaces() {
   const { config } = await loadConfig();
@@ -216,6 +216,7 @@ export async function bulkUpdateSpaces() {
   UIHelper.info(`Selected ${selectedSpaces.length} spaces for update.`);
 
   let updatedCount = 0;
+  let regenerateKeysMetadata: Map<string, IKeyInfo> | undefined;
 
   try {
     switch (updateType) {
@@ -319,19 +320,29 @@ export async function bulkUpdateSpaces() {
 
         UIHelper.printProgress('Regenerating SSH keys');
 
+        const generatedKeyInfoByName = new Map<string, IKeyInfo>();
+
         for (const spaceName of selectedSpaces) {
           const space = config.spaces.find(s => s.name === spaceName);
           if (space) {
             try {
               UIHelper.updateProgress(`Regenerating SSH key for ${space.name}`);
-              const newKeyPath = await generateSSHKey(space.name, space.email);
-              space.sshKeyPath = newKeyPath;
+              const originalIdentity = originalBySpace.get(space);
+              const algorithm = originalIdentity?.key?.algorithm === 'rsa' ? 'rsa' : 'ed25519';
+              const directory = space.sshKeyPath
+                ? path.dirname(space.sshKeyPath)
+                : path.join(os.homedir(), '.dss', 'spaces', space.name);
+              const keyInfo = await generateKey({ directory, algorithm, comment: space.email });
+              space.sshKeyPath = keyInfo.path;
+              generatedKeyInfoByName.set(space.name, keyInfo);
               updatedCount++;
             } catch (error) {
               UIHelper.error(`Failed to regenerate SSH key for ${space.name}: ${(error as Error).message}`);
             }
           }
         }
+
+        regenerateKeysMetadata = generatedKeyInfoByName;
         break;
       }
     }
@@ -340,6 +351,17 @@ export async function bulkUpdateSpaces() {
 
     if (updatedCount > 0) {
       await persistConfig(store, config, originalBySpace);
+
+      // persistConfig writes identities through the ISpace view, which
+      // can't carry a key's fingerprint/createdAt — set full metadata for
+      // any regenerated keys directly.
+      if (regenerateKeysMetadata && regenerateKeysMetadata.size > 0) {
+        for (const [identityName, keyInfo] of regenerateKeysMetadata) {
+          setIdentityKey(store, identityName, keyInfo);
+        }
+        await saveStore(store);
+      }
+
       UIHelper.printSuccessBox('Bulk Update Complete', [
         `✓ ${updatedCount} spaces updated successfully`,
         `✓ Operation: ${updateType}`,

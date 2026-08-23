@@ -2,13 +2,13 @@ import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
 import { execFile } from 'child_process';
-import { input, confirm, select } from '@inquirer/prompts';
-import { generateSSHKey } from '../../src/infra/keys';
+import { input, confirm, select, password } from '@inquirer/prompts';
+import { generateKey } from '../../src/infra/keys';
 import { copyToClipboard } from '../../src/infra/clipboard';
-import { testGithubAccess, removeSSHKeyFromAgent } from '../../src/infra/ssh';
+import { testGithubAccess, removeSSHKeyFromAgent, addToAgent } from '../../src/infra/ssh';
 import { UIHelper } from '../../src/commands/ui';
 import type { loadStore as LoadStore, saveStore as SaveStore, fromSpace as FromSpace, IStoreV2 } from '../../src/infra/store';
-import type { ISpace } from '../../src/core/types';
+import type { ISpace, IKeyInfo } from '../../src/core/types';
 
 jest.mock('fs-extra');
 jest.mock('os');
@@ -71,10 +71,12 @@ const mockExecFile = execFile as unknown as jest.MockedFunction<typeof execFile>
 const mockInput = input as jest.MockedFunction<typeof input>;
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockSelect = select as jest.MockedFunction<typeof select>;
-const mockGenerateSSHKey = generateSSHKey as jest.MockedFunction<typeof generateSSHKey>;
+const mockPassword = password as jest.MockedFunction<typeof password>;
+const mockGenerateKey = generateKey as jest.MockedFunction<typeof generateKey>;
 const mockCopyToClipboard = copyToClipboard as jest.MockedFunction<typeof copyToClipboard>;
 const mockTestGithubAccess = testGithubAccess as jest.MockedFunction<typeof testGithubAccess>;
 const mockRemoveSSHKeyFromAgent = removeSSHKeyFromAgent as jest.MockedFunction<typeof removeSSHKeyFromAgent>;
+const mockAddToAgent = addToAgent as jest.MockedFunction<typeof addToAgent>;
 const mockLoadStore = loadStore as jest.MockedFunction<typeof LoadStore>;
 const mockSaveStore = saveStore as jest.MockedFunction<typeof SaveStore>;
 const typedFromSpace = fromSpace as typeof FromSpace;
@@ -97,6 +99,11 @@ describe('commands/spaces', () => {
     jest.clearAllMocks();
     jest.spyOn(console, 'log').mockImplementation();
     jest.spyOn(console, 'error').mockImplementation();
+    // resetMocks (jest.config.js) wipes mock implementations before every
+    // test, including this file-scope os.homedir() set at require-time —
+    // re-apply it here since some flows (e.g. addSpace's key directory
+    // construction) call os.homedir() at runtime, not just at import time.
+    mockOs.homedir.mockReturnValue(mockHomeDir);
     (mockExecFile as unknown as jest.Mock).mockImplementation(
       (_file: string, _args: string[], callback: any) => {
         callback(null, { stdout: '', stderr: '' });
@@ -110,7 +117,14 @@ describe('commands/spaces', () => {
   });
 
   describe('addSpace', () => {
-    it('should add a new space successfully', async () => {
+    const mockKeyInfo: IKeyInfo = {
+      path: mockSshKeyPath,
+      algorithm: 'ed25519',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      fingerprint: 'SHA256:abc123'
+    };
+
+    it('should add a new space successfully, persisting full key metadata (fingerprint/createdAt)', async () => {
       mockLoadStore.mockResolvedValue(storeOf([]));
       (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
 
@@ -123,17 +137,24 @@ describe('commands/spaces', () => {
         .mockResolvedValueOnce(true) // Generate SSH key
         .mockResolvedValueOnce(false); // Don't switch to new space
 
-      mockGenerateSSHKey.mockResolvedValue(mockSshKeyPath);
+      mockPassword.mockResolvedValueOnce('');
+      mockGenerateKey.mockResolvedValue(mockKeyInfo);
       mockCopyToClipboard.mockResolvedValue('copied');
 
       await addSpace();
 
-      expect(mockSaveStore).toHaveBeenCalledWith(storeOf([{
+      expect(mockSaveStore).toHaveBeenLastCalledWith({
+        version: 2,
+        identities: [{
           name: 'test-space',
           email: 'test@example.com',
           userName: 'Test User',
-          sshKeyPath: mockSshKeyPath
-        }]));
+          host: 'github.com',
+          key: mockKeyInfo
+        }],
+        active: undefined,
+        bindings: []
+      });
     });
 
     it('should handle duplicate space names', async () => {
@@ -162,13 +183,108 @@ describe('commands/spaces', () => {
         .mockResolvedValueOnce(true) // Generate SSH key
         .mockResolvedValueOnce(false); // Don't switch to new space
 
-      mockGenerateSSHKey.mockResolvedValue(mockSshKeyPath);
+      mockPassword.mockResolvedValueOnce('');
+      mockGenerateKey.mockResolvedValue(mockKeyInfo);
       mockCopyToClipboard.mockResolvedValue('copied');
 
       await addSpace();
 
-      expect(mockGenerateSSHKey).toHaveBeenCalledWith('test-space', 'test@example.com');
       expect(mockCopyToClipboard).toHaveBeenCalledWith(mockPublicKey);
+    });
+
+    it('should default the algorithm to ed25519 with no algorithm prompt, and pass directory/comment/passphrase', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+
+      mockConfirm
+        .mockResolvedValueOnce(true) // Generate SSH key
+        .mockResolvedValueOnce(false); // Don't switch to new space
+
+      mockPassword.mockResolvedValueOnce('hunter2');
+      mockGenerateKey.mockResolvedValue(mockKeyInfo);
+      mockCopyToClipboard.mockResolvedValue('copied');
+
+      await addSpace();
+
+      expect(mockGenerateKey).toHaveBeenCalledWith({
+        directory: path.join('/mock/home', '.dss', 'spaces', 'test-space'),
+        algorithm: 'ed25519',
+        comment: 'test@example.com',
+        passphrase: 'hunter2'
+      });
+      expect(mockSelect).not.toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('algorithm')
+      }));
+    });
+
+    it('should prompt for a passphrase (mask on, empty default) only after confirming key generation', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+
+      mockConfirm
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      mockPassword.mockResolvedValueOnce('');
+      mockGenerateKey.mockResolvedValue(mockKeyInfo);
+      mockCopyToClipboard.mockResolvedValue('copied');
+
+      await addSpace();
+
+      expect(mockPassword).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Passphrase for the key (empty for none):',
+        mask: true
+      }));
+    });
+
+    it('should not prompt for a passphrase when key generation is declined', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+
+      mockConfirm
+        .mockResolvedValueOnce(false) // Don't generate SSH key
+        .mockResolvedValueOnce(false); // Don't switch to new space
+
+      await addSpace();
+
+      expect(mockPassword).not.toHaveBeenCalled();
+      expect(mockGenerateKey).not.toHaveBeenCalled();
+    });
+
+    it('should treat a cancelled passphrase prompt as empty (cancellation-safe)', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+
+      mockConfirm
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      mockPassword.mockRejectedValueOnce(new ExitPromptError('User force closed the prompt with 0 null'));
+      mockGenerateKey.mockResolvedValue(mockKeyInfo);
+      mockCopyToClipboard.mockResolvedValue('copied');
+
+      await addSpace();
+
+      expect(mockGenerateKey).toHaveBeenCalledWith(expect.objectContaining({ passphrase: '' }));
     });
   });
 
@@ -222,11 +338,7 @@ describe('commands/spaces', () => {
         ['config', '--global', 'user.email', mockSpace.email],
         expect.any(Function)
       );
-      expect(mockExecFile).toHaveBeenCalledWith(
-        'ssh-add',
-        [mockSpace.sshKeyPath],
-        expect.any(Function)
-      );
+      expect(mockAddToAgent).toHaveBeenCalledWith(mockSpace.sshKeyPath);
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([mockSpace], 'test-space'));
     });
 
@@ -282,11 +394,7 @@ describe('commands/spaces', () => {
         ['config', '--global', 'user.email', keylessSpace.email],
         expect.any(Function)
       );
-      expect(mockExecFile).not.toHaveBeenCalledWith(
-        'ssh-add',
-        expect.anything(),
-        expect.any(Function)
-      );
+      expect(mockAddToAgent).not.toHaveBeenCalled();
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([keylessSpace], 'keyless-space'));
 
       const calls = (console.log as jest.Mock).mock.calls.flat();
@@ -347,7 +455,7 @@ describe('commands/spaces', () => {
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([legacySpace], 'Test Space'));
     });
 
-    it('passes an SSH key path containing a space to ssh-add as a single execFile argument (regression)', async () => {
+    it('passes an SSH key path containing a space to addToAgent unchanged (regression)', async () => {
       const spacedKeyPath = '/tmp/my dir/id_rsa';
       const spacedSpace = {
         name: 'spaced-space',
@@ -360,11 +468,7 @@ describe('commands/spaces', () => {
 
       await switchSpace('spaced-space');
 
-      expect(mockExecFile).toHaveBeenCalledWith(
-        'ssh-add',
-        [spacedKeyPath],
-        expect.any(Function)
-      );
+      expect(mockAddToAgent).toHaveBeenCalledWith(spacedKeyPath);
     });
   });
 

@@ -11,6 +11,7 @@ import {
   onboardUser,
 } from "./commands/spaces";
 import { generateCompletionScript } from "./commands/completion";
+import { keyCommand } from "./commands/keys";
 import {
   batchSwitchSpaces,
   exportSpaceConfiguration,
@@ -115,6 +116,11 @@ program
   .description('Show repository-local DSS binding status')
   .option('-p, --path <repositoryPath>', 'Select an explicit Git repository')
   .action(showRepositoryBindingStatus);
+
+program
+  .command('key <action> [identityName]')
+  .description('Manage SSH keys for an identity: show, copy, or rotate')
+  .action(keyCommand);
 
 program.parseAsync(process.argv).catch((error) => {
   if (isPromptExitError(error)) {
