@@ -18,6 +18,15 @@ import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/s
 import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
+// A userName/email reaches writeActiveGitconfig (src/infra/git.ts), which
+// hard-rejects an embedded \n/\r as a defense-in-depth last line — but the
+// prompt layer should catch it first so the failure surfaces as a normal
+// re-prompt instead of a mid-flow fail(). Kept in sync in spirit, not code,
+// with writeActiveGitconfig's own guard.
+function containsLineBreak(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
+
 export async function addSpace() {
   UIHelper.printHeader("Create New Development Space");
   UIHelper.info("Please provide the following information:");
@@ -49,6 +58,7 @@ export async function addSpace() {
     validate: (input) => {
       if (!input.trim()) return "User name is required!";
       if (input.length < 2) return "User name must be at least 2 characters long";
+      if (containsLineBreak(input)) return "User name cannot contain line breaks";
       return true;
     },
   });
@@ -465,10 +475,21 @@ export async function modifySpace(spaceName?: string) {
   const email = await input({
     message: "New email (leave blank to skip):",
     default: space.email,
+    validate: (input) => {
+      if (!input.trim()) return "Email is required!";
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(input)) return "Please enter a valid email address";
+      return true;
+    },
   });
   const userName = await input({
     message: "New user name (leave blank to skip):",
     default: space.userName,
+    validate: (input) => {
+      if (!input.trim()) return "User name is required!";
+      if (containsLineBreak(input)) return "User name cannot contain line breaks";
+      return true;
+    },
   });
   const host = await promptHost(originalHost);
 
@@ -567,7 +588,14 @@ export async function modifySpace(spaceName?: string) {
     );
   }
 
-  if (wasActive && (email !== originalEmail || userName !== originalUserName)) {
+  // Unified with bindingRefreshNeeded (rename, email, userName, or key-path
+  // change) rather than a separate email/userName-only check: active.gitconfig
+  // carries the key's sshCommand too now, so a rename-only or key-path-only
+  // edit of the ACTIVE identity must also re-apply it — otherwise it's left
+  // pointing at a key path that may no longer exist (that file is globally
+  // included and unconditional, so a stale sshCommand breaks git SSH for
+  // every remote on the machine until the next `dss switch`).
+  if (wasActive && bindingRefreshNeeded) {
     try {
       await writeActiveGitconfig(space);
       await ensureGlobalInclude();

@@ -210,6 +210,65 @@ describe('commands/spaces', () => {
       expect(mockCopyToClipboard).toHaveBeenCalledWith(mockPublicKey);
     });
 
+    it('warns (not fail()) on a public-key-read/clipboard failure — the space was still created, so process.exitCode stays unset', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      (mockFs.readFile as unknown as jest.Mock).mockRejectedValue(new Error('EACCES: permission denied'));
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+
+      mockConfirm
+        .mockResolvedValueOnce(true) // Generate SSH key
+        .mockResolvedValueOnce(false); // Don't switch to new space
+
+      mockPassword.mockResolvedValueOnce('');
+      mockGenerateKey.mockResolvedValue(mockKeyInfo);
+
+      const warningSpy = jest.spyOn(UIHelper, 'warning');
+      const errorSpy = jest.spyOn(UIHelper, 'error');
+
+      await addSpace();
+
+      expect(warningSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to read the public SSH key or copy it to the clipboard')
+      );
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('Failed to read the public SSH key or copy it to the clipboard')
+      );
+      expect(process.exitCode).toBeUndefined();
+
+      // The space itself was still persisted despite the clipboard failure.
+      expect(mockSaveStore).toHaveBeenCalledWith(expect.objectContaining({
+        identities: expect.arrayContaining([expect.objectContaining({ name: 'test-space' })])
+      }));
+
+      warningSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    it('rejects a userName containing a line break (defense-in-depth against active.gitconfig injection)', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+
+      mockInput
+        .mockResolvedValueOnce('Test Space')
+        .mockResolvedValueOnce('test@example.com')
+        .mockResolvedValueOnce('Test User');
+      mockConfirm
+        .mockResolvedValueOnce(false) // Don't generate SSH key
+        .mockResolvedValueOnce(false); // Don't switch to new space
+
+      await addSpace();
+
+      const userNameCall = mockInput.mock.calls.find((call) => (call[0] as { message: string }).message === 'User name:');
+      expect(userNameCall).toBeDefined();
+      const validate = (userNameCall![0] as { validate: (input: string) => string | boolean }).validate;
+      expect(validate('John\nDoe')).not.toBe(true);
+      expect(validate('John\rDoe')).not.toBe(true);
+      expect(validate('John Doe')).toBe(true);
+    });
+
     it('should default the algorithm to ed25519 with no algorithm prompt, and pass directory/comment/passphrase', async () => {
       mockLoadStore.mockResolvedValue(storeOf([]));
       (mockFs.readFile as unknown as jest.Mock).mockResolvedValue(mockPublicKey);
@@ -1020,6 +1079,90 @@ describe('commands/spaces', () => {
       expect(process.exitCode).toBe(1);
     });
 
+    it('re-applies active.gitconfig with the NEW key path on a rename-only edit of the active identity (no email/userName change)', async () => {
+      const activeSpace = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      mockLoadStore.mockResolvedValue(storeOf([activeSpace], 'test-space'));
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
+
+      mockInput
+        .mockResolvedValueOnce('New Name') // rename only
+        .mockResolvedValueOnce(activeSpace.email) // unchanged
+        .mockResolvedValueOnce(activeSpace.userName); // unchanged
+
+      await modifySpace('test-space');
+
+      const oldKeyDir = path.dirname(mockSshKeyPath);
+      const newKeyDir = path.join(path.dirname(oldKeyDir), 'new-name');
+      const newSshKeyPath = path.join(newKeyDir, path.basename(mockSshKeyPath));
+
+      expect(mockWriteActiveGitconfig).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'new-name', sshKeyPath: newSshKeyPath })
+      );
+      expect(mockEnsureGlobalInclude).toHaveBeenCalled();
+    });
+
+    it('re-applies active.gitconfig with the NEW key path on a key-path-only change of the active identity (rename that moves the key dir, still no email/userName change — regression guard for the stale-sshCommand bug)', async () => {
+      // Same trigger shape as the rename-only test above, but asserts the
+      // specific defect this closes: before the fix, this path (rename that
+      // moves the key directory, no email/userName change) left
+      // active.gitconfig's [core] sshCommand pointing at the OLD, now-moved
+      // key path — breaking git SSH globally until the next `dss switch`.
+      const activeSpace = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      mockLoadStore.mockResolvedValue(storeOf([activeSpace], 'test-space'));
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
+
+      mockInput
+        .mockResolvedValueOnce('Renamed Space')
+        .mockResolvedValueOnce(activeSpace.email)
+        .mockResolvedValueOnce(activeSpace.userName);
+
+      await modifySpace('test-space');
+
+      const oldKeyDir = path.dirname(mockSshKeyPath);
+      const newKeyDir = path.join(path.dirname(oldKeyDir), 'renamed-space');
+      const newSshKeyPath = path.join(newKeyDir, path.basename(mockSshKeyPath));
+
+      expect(mockFs.move).toHaveBeenCalledWith(oldKeyDir, newKeyDir);
+      const writtenSpace = mockWriteActiveGitconfig.mock.calls[mockWriteActiveGitconfig.mock.calls.length - 1][0];
+      expect(writtenSpace.sshKeyPath).toBe(newSshKeyPath);
+      expect(writtenSpace.sshKeyPath).not.toBe(mockSshKeyPath);
+    });
+
+    it('does NOT re-apply active.gitconfig for a rename of a NON-active identity', async () => {
+      const spaceToRename = {
+        name: 'test-space',
+        email: 'test@example.com',
+        userName: 'Test User',
+        sshKeyPath: mockSshKeyPath
+      };
+      // No `active` set — this space is not the active one.
+      mockLoadStore.mockResolvedValue(storeOf([spaceToRename]));
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
+
+      mockInput
+        .mockResolvedValueOnce('New Name')
+        .mockResolvedValueOnce(spaceToRename.email)
+        .mockResolvedValueOnce(spaceToRename.userName);
+
+      await modifySpace('test-space');
+
+      expect(mockWriteActiveGitconfig).not.toHaveBeenCalled();
+      expect(mockEnsureGlobalInclude).not.toHaveBeenCalled();
+    });
+
     it('should call fail() (not throw) when moving the key directory fails', async () => {
       const activeSpace = {
         name: 'test-space',
@@ -1258,6 +1401,33 @@ describe('commands/spaces', () => {
       await modifySpace('test-space');
 
       expect(mockSaveStore).toHaveBeenCalledWith(storeOf([{ ...mockSpace, host: 'git.example.com' }]));
+    });
+
+    it('rejects an email that is not a valid address, and a userName containing a line break (defense-in-depth against active.gitconfig injection)', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([mockSpace]));
+
+      mockInput
+        .mockResolvedValueOnce(mockSpace.name)
+        .mockResolvedValueOnce(mockSpace.email)
+        .mockResolvedValueOnce(mockSpace.userName);
+
+      await modifySpace('test-space');
+
+      const emailCall = mockInput.mock.calls.find((call) => (call[0] as { message: string }).message === 'New email (leave blank to skip):');
+      const userNameCall = mockInput.mock.calls.find((call) => (call[0] as { message: string }).message === 'New user name (leave blank to skip):');
+      expect(emailCall).toBeDefined();
+      expect(userNameCall).toBeDefined();
+
+      const emailValidate = (emailCall![0] as { validate: (input: string) => string | boolean }).validate;
+      const userNameValidate = (userNameCall![0] as { validate: (input: string) => string | boolean }).validate;
+
+      expect(emailValidate('not-an-email')).not.toBe(true);
+      expect(emailValidate('valid@example.com\n[core]\n\tsshCommand = evil')).not.toBe(true);
+      expect(emailValidate('valid@example.com')).toBe(true);
+
+      expect(userNameValidate('John\nDoe')).not.toBe(true);
+      expect(userNameValidate('John\rDoe')).not.toBe(true);
+      expect(userNameValidate('John Doe')).toBe(true);
     });
   });
 

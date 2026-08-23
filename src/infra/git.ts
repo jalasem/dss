@@ -35,6 +35,27 @@ function quoteGitConfigValue(value: string): string {
 }
 
 /**
+ * A raw `\n`/`\r` in a value that's about to be interpolated into a
+ * double-quoted single-line gitconfig value would either break the file's
+ * line structure (breaking every git invocation that reads it, since
+ * active.gitconfig is unconditionally included) or, worse, splice
+ * attacker-controlled config lines into a global, always-included file
+ * (e.g. an email ending in `"\n[core]\n\tsshCommand = ..."` — arbitrary
+ * command execution the next time git shells out over SSH). This is the
+ * hard gate: no path may ever reach the writer with a newline/carriage
+ * return in a value that ends up in the file, regardless of what prompt
+ * validation callers do or don't have upstream.
+ */
+function assertNoNewline(label: string, value: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(
+      `Refusing to write active.gitconfig: ${label} contains a line break, ` +
+      'which could corrupt or inject into this globally-included config file.'
+    );
+  }
+}
+
+/**
  * Atomically writes active.gitconfig for `space`: a `[user]` section
  * (name/email) plus — only when the identity has a key — a `[core]
  * sshCommand` built the same way a repo-local binding's is (via
@@ -42,6 +63,12 @@ function quoteGitConfigValue(value: string): string {
  * gets a `[user]`-only file.
  */
 export async function writeActiveGitconfig(space: ISpace): Promise<void> {
+  assertNoNewline('userName', space.userName);
+  assertNoNewline('email', space.email);
+  if (space.sshKeyPath) {
+    assertNoNewline('sshKeyPath', space.sshKeyPath);
+  }
+
   const configPath = activeGitconfigPath();
   const lines = [
     '[user]',

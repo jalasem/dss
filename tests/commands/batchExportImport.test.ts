@@ -2,6 +2,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { checkbox, confirm } from '@inquirer/prompts';
+import { UIHelper } from '../../src/commands/ui';
 import type { loadStore as LoadStore, saveStore as SaveStore, fromSpace as FromSpace } from '../../src/infra/store';
 import type { ISpace, IStoreV2 } from '../../src/core/types';
 
@@ -141,6 +142,31 @@ describe('commands/batch export/import — host carry', () => {
       await importSpaceConfiguration();
 
       expect(mockSaveStore).not.toHaveBeenCalled();
+    });
+
+    it('skips (with a warning naming the entry) an imported identity whose email/userName contains a line break, importing only the clean entries', async () => {
+      (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
+      (mockFs.readJson as unknown as jest.Mock).mockResolvedValue({
+        spaces: [
+          { name: 'Injected', email: 'evil@example.com\n[core]\n\tsshCommand = evil', userName: 'Evil' },
+          { name: 'Also Injected', email: 'a@example.com', userName: 'A\rB' },
+          { name: 'Clean', email: 'clean@example.com', userName: 'Clean User' }
+        ]
+      });
+      mockLoadStore.mockResolvedValue(storeOf([]));
+      mockConfirm.mockResolvedValue(true);
+
+      const warningSpy = jest.spyOn(UIHelper, 'warning');
+
+      await importSpaceConfiguration();
+
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space 'Injected' contains a line break"));
+      expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining("Space 'Also Injected' contains a line break"));
+      expect(mockSaveStore).toHaveBeenCalledWith(expect.objectContaining({
+        identities: [expect.objectContaining({ name: 'clean' })]
+      }));
+
+      warningSpy.mockRestore();
     });
   });
 });
