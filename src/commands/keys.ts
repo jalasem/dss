@@ -10,7 +10,7 @@ import { IIdentity, IStoreV2 } from '../core/types';
 import { keySettingsUrl } from '../core/hosts';
 import { UIHelper } from './ui';
 import { fail } from './fail';
-import { safeConfirm } from './prompts';
+import { guardedConfirm } from './prompts';
 import { reapplyActiveIdentity } from './spaces';
 
 function keySettingsLine(host: string): string {
@@ -101,7 +101,11 @@ export async function rotateKey(identityName?: string): Promise<void> {
   if (!identity) return;
 
   const hasExistingKey = Boolean(identity.key);
-  const confirmed = await safeConfirm({
+  // Required-affirm: rotating/replacing a key is a meaningful, one-way
+  // action (the old key stops working once the new one is uploaded), so
+  // non-interactive mode without -y errors (exit 2) rather than proceeding
+  // or silently declining.
+  const confirmed = await guardedConfirm({
     message: hasExistingKey
       ? `Rotate the SSH key for "${identity.name}"? The old key will stop working for ${identity.host} until the new public key is uploaded.`
       : `Generate a new SSH key for "${identity.name}"?`,

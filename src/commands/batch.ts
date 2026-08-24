@@ -1,10 +1,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { confirm, checkbox } from '@inquirer/prompts';
+import { checkbox } from '@inquirer/prompts';
 import { ISpace } from '../core/types';
 import { UIHelper } from './ui';
 import { fail } from './fail';
+import { guardedConfirm, UsageError } from './prompts';
 import { slugify, findSpace, validateIdentityName } from '../core/identity';
 import { loadConfig, persistConfig } from '../infra/store';
 
@@ -129,7 +130,10 @@ export async function importSpaceConfiguration(importPathArg?: string) {
       return;
     }
 
-    const confirmImport = await confirm({
+    // Required-affirm: writes new identities into the config, so
+    // non-interactive mode without -y errors (exit 2) rather than
+    // proceeding unattended.
+    const confirmImport = await guardedConfirm({
       message: `Import ${spacesToImport.length} new identities?`,
       default: true
     });
@@ -158,6 +162,9 @@ export async function importSpaceConfiguration(importPathArg?: string) {
     ]);
 
   } catch (error) {
+    // Let a UsageError from the guarded import confirm keep its own exit-2
+    // contract instead of being flattened into fail()'s exit 1.
+    if (error instanceof UsageError) throw error;
     fail(`Failed to import configuration: ${(error as Error).message}`);
   }
 }

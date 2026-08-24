@@ -1,22 +1,22 @@
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { select } from '@inquirer/prompts';
 import { UIHelper } from './ui';
-import { safeConfirm } from './prompts';
+import { guardedSelect, guardedConfirm } from './prompts';
 
 export async function generateCompletionScript(shell?: string): Promise<void> {
   UIHelper.printHeader('Shell Completion Setup');
-  
+
   let selectedShell = shell;
   if (!selectedShell) {
-    selectedShell = await select({
+    selectedShell = await guardedSelect({
       message: 'Select your shell:',
       choices: [
         { name: 'Bash', value: 'bash' },
         { name: 'Zsh', value: 'zsh' },
         { name: 'Fish', value: 'fish' }
-      ]
+      ],
+      flagName: 'the shell argument',
     });
   }
 
@@ -41,9 +41,12 @@ export async function generateCompletionScript(shell?: string): Promise<void> {
   // Show installation instructions
   showInstallationInstructions(selectedShell);
 
-  const saveScript = await safeConfirm({
+  // Optional/informational: the script was already printed above, so
+  // non-interactive mode without -y silently declines instead of erroring.
+  const saveScript = await guardedConfirm({
     message: 'Would you like to save this script to a file?',
-    default: true
+    default: true,
+    optional: true,
   });
 
   if (saveScript) {

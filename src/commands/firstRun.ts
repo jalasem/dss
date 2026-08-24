@@ -1,7 +1,7 @@
 import { IConfig } from '../core/types';
 import { loadConfig } from '../infra/store';
 import { UIHelper } from './ui';
-import { safeConfirm } from './prompts';
+import { guardedConfirm } from './prompts';
 // Circular import: ./spaces imports firstRunFlow from this file too (for
 // its own empty-store branches). This only resolves safely under CommonJS
 // because `addSpace` is used exclusively inside firstRunFlow's async body
@@ -35,9 +35,14 @@ export async function firstRunFlow(config?: IConfig): Promise<boolean> {
   UIHelper.printWelcome();
   console.log('');
 
-  const shouldCreate = await safeConfirm({
+  // Optional/informational: triggered automatically (not a command the
+  // caller explicitly ran), so non-interactive mode without -y silently
+  // declines instead of erroring — a script running `dss ls`/`dss use`
+  // against an empty store shouldn't be blocked here.
+  const shouldCreate = await guardedConfirm({
     message: 'No identities yet — create your first one now?',
     default: true,
+    optional: true,
   });
 
   if (shouldCreate) {

@@ -1,4 +1,3 @@
-import { input, confirm, select } from "@inquirer/prompts";
 import os from "os";
 import fs from "fs-extra";
 import path from "path";
@@ -7,7 +6,19 @@ import { copyToClipboard } from "../infra/clipboard";
 import { addToAgent, removeSSHKeyFromAgent, setHostSSHKey, testHostAccess } from "../infra/ssh";
 import { writeActiveGitconfig, ensureGlobalInclude } from "../infra/git";
 import { bindRepository } from "../infra/repoBinding";
-import { isPromptExitError, safeConfirm, safePassword, promptHost } from "./prompts";
+import {
+  isPromptExitError,
+  safeConfirm,
+  guardedInput,
+  guardedSelect,
+  guardedPassword,
+  guardedPromptHost,
+  guardedConfirm,
+  isNonInteractive,
+  assumeYes,
+  validateCustomHost,
+  UsageError,
+} from "./prompts";
 import { ISpace, IKeyInfo, IStoreV2 } from "../core/types";
 import { keySettingsUrl } from "../core/hosts";
 import { UIHelper } from "./ui";
@@ -28,6 +39,47 @@ import { firstRunFlow } from "./firstRun";
 // with writeActiveGitconfig's own guard.
 function containsLineBreak(value: string): boolean {
   return /[\r\n]/.test(value);
+}
+
+function validateEmailValue(value: string): string | true {
+  if (!value.trim()) return "Email is required!";
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(value)) return "Please enter a valid email address";
+  return true;
+}
+
+// addSpace's userName rule (non-empty, >=2 chars, no line breaks) is
+// stricter than modifySpace's (non-empty, no line breaks — no length
+// floor); kept as two functions rather than unified to preserve each
+// command's existing prompt behavior exactly.
+function validateNewUserName(value: string): string | true {
+  if (!value.trim()) return "User name is required!";
+  if (value.length < 2) return "User name must be at least 2 characters long";
+  if (containsLineBreak(value)) return "User name cannot contain line breaks";
+  return true;
+}
+
+function validateEditUserName(value: string): string | true {
+  if (!value.trim()) return "User name is required!";
+  if (containsLineBreak(value)) return "User name cannot contain line breaks";
+  return true;
+}
+
+/** Applied to a value supplied directly via flag (interactive prompts
+ * already loop on `validate` themselves via @inquirer/prompts; a flag skips
+ * that loop, so it gets exactly one validation pass here instead). Throws a
+ * UsageError (exit 2) rather than fail()ing, matching every other
+ * missing/invalid-non-interactive-input path in this module. */
+function assertValid(value: string, validate: (v: string) => string | true, label: string): void {
+  const result = validate(value);
+  if (result !== true) throw new UsageError(`Invalid value for ${label}: ${result}`);
+}
+
+const KEY_TYPES = ['ed25519', 'rsa', 'none'] as const;
+type KeyType = typeof KEY_TYPES[number];
+
+function isKeyType(value: string): value is KeyType {
+  return (KEY_TYPES as readonly string[]).includes(value);
 }
 
 /**
@@ -53,47 +105,96 @@ export async function reapplyActiveIdentity(space: ISpace, store: IStoreV2): Pro
   }
 }
 
-export async function addSpace() {
+export interface NewIdentityOptions {
+  name?: string;
+  email?: string;
+  user?: string;
+  host?: string;
+  /** 'ed25519' | 'rsa' generates a key of that type (skipping the "generate
+   * a key?" confirm); 'none' skips key generation entirely. */
+  key?: string;
+  passphrase?: string;
+}
+
+export async function addSpace(options: NewIdentityOptions = {}) {
   UIHelper.printHeader("Create New Identity");
   UIHelper.info("Please provide the following information:");
 
-  const name = await input({
-    message: "Identity name:",
-    validate: (input) => validateIdentityName(input),
-  });
+  let name: string;
+  if (options.name !== undefined) {
+    assertValid(options.name, validateIdentityName, '--name');
+    name = options.name;
+  } else {
+    name = await guardedInput({
+      message: "Identity name:",
+      validate: (value) => validateIdentityName(value),
+      flagName: '--name',
+    });
+  }
 
-  const email = (
-    await input({
-      message: "Email address:",
-      validate: (input) => {
-        if (!input.trim()) return "Email is required!";
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(input)) return "Please enter a valid email address";
-        return true;
-      },
-    })
-  )?.trim();
+  let email: string;
+  if (options.email !== undefined) {
+    assertValid(options.email, validateEmailValue, '--email');
+    email = options.email.trim();
+  } else {
+    email = (
+      await guardedInput({
+        message: "Email address:",
+        validate: validateEmailValue,
+        flagName: '--email',
+      })
+    )?.trim();
+  }
 
-  const userName = await input({
-    message: "User name:",
-    validate: (input) => {
-      if (!input.trim()) return "User name is required!";
-      if (input.length < 2) return "User name must be at least 2 characters long";
-      if (containsLineBreak(input)) return "User name cannot contain line breaks";
-      return true;
-    },
-  });
+  let userName: string;
+  if (options.user !== undefined) {
+    assertValid(options.user, validateNewUserName, '--user');
+    userName = options.user;
+  } else {
+    userName = await guardedInput({
+      message: "User name:",
+      validate: validateNewUserName,
+      flagName: '--user',
+    });
+  }
 
-  const host = await promptHost();
+  let host: string;
+  if (options.host !== undefined) {
+    assertValid(options.host, validateCustomHost, '--host');
+    host = options.host;
+  } else {
+    host = await guardedPromptHost({ flagName: '--host' });
+  }
 
-  const shouldGenerateKey = await confirm({
-    message: "Generate a new SSH key for this identity?",
-    default: true,
-  });
+  // Key generation: --key <ed25519|rsa|none> always wins (skips the confirm
+  // in BOTH modes). Without it: `-y`/non-interactive default to generating
+  // a key (matching the interactive default of that confirm), since a
+  // missing --key isn't a "required value" a script must supply — it's an
+  // ordinary confirm with a documented default.
+  let shouldGenerateKey: boolean;
+  let keyAlgorithm: 'ed25519' | 'rsa' = 'ed25519';
+  if (options.key !== undefined) {
+    if (!isKeyType(options.key)) {
+      throw new UsageError(`Invalid value for --key: "${options.key}" (expected ed25519, rsa, or none)`);
+    }
+    shouldGenerateKey = options.key !== 'none';
+    if (options.key !== 'none') keyAlgorithm = options.key;
+  } else if (isNonInteractive() || assumeYes()) {
+    shouldGenerateKey = true;
+  } else {
+    shouldGenerateKey = await safeConfirm({
+      message: "Generate a new SSH key for this identity?",
+      default: true,
+    });
+  }
 
-  const passphrase = shouldGenerateKey
-    ? await safePassword({ message: "Passphrase for the key (empty for none):" })
-    : "";
+  const passphrase = !shouldGenerateKey
+    ? ""
+    : options.passphrase ?? await guardedPassword({
+        message: "Passphrase for the key (empty for none):",
+        flagName: '--passphrase',
+        nonInteractiveDefault: '',
+      });
 
   const { store, config, originalBySpace } = await loadConfig();
   const slugifiedSpaceName = slugify(name);
@@ -111,7 +212,7 @@ export async function addSpace() {
     const keyDirectory = path.join(os.homedir(), ".dss", "spaces", slugifiedSpaceName);
     generatedKeyInfo = await generateKey({
       directory: keyDirectory,
-      algorithm: "ed25519",
+      algorithm: keyAlgorithm,
       comment: email,
       passphrase,
     });
@@ -162,9 +263,15 @@ export async function addSpace() {
     await saveStore(store);
   }
 
-  const switchToNewSpace = await confirm({
+  // Optional/informational: the identity was already created successfully
+  // above, so a script running non-interactively without -y shouldn't be
+  // forced to answer (or blocked by) this nice-to-have follow-up — it
+  // silently declines, same as `dss use <name>` would need to be run
+  // separately regardless.
+  const switchToNewSpace = await guardedConfirm({
     message: `Do you want to switch to the newly added identity "${slugifiedSpaceName}" now?`,
     default: true,
+    optional: true,
   });
 
   if (switchToNewSpace) {
@@ -205,13 +312,14 @@ export async function switchSpace(
     UIHelper.printHeader("Switch Identity");
 
     // Use enhanced selection with fuzzy search
-    selectedSpaceName = await select({
+    selectedSpaceName = await guardedSelect({
       message: "Choose an identity to switch to:",
       choices: config.spaces.map((space) => ({
         name: space.name === config.activeSpace ? UIHelper.activeSpace(space.name) : UIHelper.inactiveSpace(space.name),
         value: space.name,
         description: `${space.email} (${space.userName})`
       })),
+      flagName: 'the identityName argument',
     }).catch((error) => {
       if (isPromptExitError(error)) return undefined;
       throw error;
@@ -301,14 +409,17 @@ export async function switchSpace(
     ]);
 
     if (hasKey) {
-      // safeConfirm: this runs AFTER the switch already succeeded and
-      // persisted, so a closed prompt (Ctrl+C / non-TTY) must not surface
-      // as a command failure — a raw confirm() throwing ExitPromptError
-      // here would fall into the catch below and fail() the whole command
-      // after the real work is already done.
-      const confirmTest = await safeConfirm({
+      // Optional/informational: this runs AFTER the switch already
+      // succeeded and persisted, so neither a closed prompt (Ctrl+C /
+      // non-TTY, handled by guardedConfirm's underlying safeConfirm) nor
+      // running non-interactively without -y (guardedConfirm's `optional`
+      // exception) may surface as a command failure — a raw confirm()
+      // throwing here would fall into the catch below and fail() the whole
+      // command after the real work is already done.
+      const confirmTest = await guardedConfirm({
         message: `Test SSH access to ${host} for this identity?`,
         default: false,
+        optional: true,
       });
 
       if (confirmTest) {
@@ -340,13 +451,14 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
 
   let selectedSpaceName = spaceName;
   if (!selectedSpaceName) {
-    selectedSpaceName = await select({
+    selectedSpaceName = await guardedSelect({
       message: "Select an identity to remove:",
       choices: config.spaces.map((space) => ({
         name: space.name === config.activeSpace ? UIHelper.activeSpace(space.name) + " (active)" : space.name,
         value: space.name,
         description: `${space.email} (${space.userName})`
       })),
+      flagName: 'the identityName argument',
     });
   }
 
@@ -382,7 +494,9 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     return;
   }
 
-  const confirmRemoval = await confirm({
+  // Required-affirm: destructive, so non-interactive mode without -y errors
+  // (exit 2) rather than silently declining or silently proceeding.
+  const confirmRemoval = await guardedConfirm({
     message: `Are you absolutely sure you want to remove '${spaceToRemove.name}'?`,
     default: false,
   });
@@ -439,7 +553,14 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   }
 }
 
-export async function modifySpace(spaceName?: string) {
+export interface EditIdentityOptions {
+  name?: string;
+  email?: string;
+  user?: string;
+  host?: string;
+}
+
+export async function modifySpace(spaceName?: string, options: EditIdentityOptions = {}) {
   const { store, config, originalBySpace } = await loadConfig();
 
   if (config.spaces.length === 0) {
@@ -448,12 +569,13 @@ export async function modifySpace(spaceName?: string) {
     return;
   }
 
-  const selectedSpace = spaceName ?? await select({
+  const selectedSpace = spaceName ?? await guardedSelect({
     message: "Which identity would you like to modify?",
     choices: config.spaces.map((space) => ({
       name: space.name,
       value: space.name,
     })),
+    flagName: 'the identityName argument',
   });
 
   const space = findSpace(config, selectedSpace);
@@ -469,38 +591,70 @@ export async function modifySpace(spaceName?: string) {
   const originalHost = space.host ?? 'github.com';
   const originalSshKeyPath = space.sshKeyPath;
 
-  const newSpaceName = await input({
-    message: `New name for "${space.name}" (leave blank to skip):`,
-    default: space.name,
-    validate: (input) => {
-      // A name that's cosmetically different but slugifies the same (e.g.
-      // retyping the current name, or a legacy raw name's normalized slug)
-      // is a no-op rename — always allowed, even for a pre-existing name
-      // that predates this validator. Only a genuine new name is checked.
-      if (slugify(input) === slugify(space.name)) return true;
-      return validateIdentityName(input);
-    },
-  });
-  const email = await input({
-    message: "New email (leave blank to skip):",
-    default: space.email,
-    validate: (input) => {
-      if (!input.trim()) return "Email is required!";
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(input)) return "Please enter a valid email address";
-      return true;
-    },
-  });
-  const userName = await input({
-    message: "New user name (leave blank to skip):",
-    default: space.userName,
-    validate: (input) => {
-      if (!input.trim()) return "User name is required!";
-      if (containsLineBreak(input)) return "User name cannot contain line breaks";
-      return true;
-    },
-  });
-  const host = await promptHost(originalHost);
+  // A name that's cosmetically different but slugifies the same (e.g.
+  // retyping the current name, or a legacy raw name's normalized slug) is a
+  // no-op rename — always allowed, even for a pre-existing name that
+  // predates this validator. Only a genuine new name is checked.
+  const validateEditName = (value: string): string | true =>
+    slugify(value) === slugify(space.name) ? true : validateIdentityName(value);
+
+  // Every field below keeps its CURRENT value in non-interactive mode when
+  // no flag is given (nonInteractiveDefault) rather than erroring — an
+  // edit's fields are all individually optional (each prompt is itself
+  // "leave blank to skip"), unlike `dss new`'s required fields.
+  let newSpaceName: string;
+  if (options.name !== undefined) {
+    assertValid(options.name, validateEditName, '--name');
+    newSpaceName = options.name;
+  } else {
+    newSpaceName = await guardedInput({
+      message: `New name for "${space.name}" (leave blank to skip):`,
+      default: space.name,
+      validate: validateEditName,
+      flagName: '--name',
+      nonInteractiveDefault: space.name,
+    });
+  }
+
+  let email: string;
+  if (options.email !== undefined) {
+    assertValid(options.email, validateEmailValue, '--email');
+    email = options.email;
+  } else {
+    email = await guardedInput({
+      message: "New email (leave blank to skip):",
+      default: space.email,
+      validate: validateEmailValue,
+      flagName: '--email',
+      nonInteractiveDefault: space.email,
+    });
+  }
+
+  let userName: string;
+  if (options.user !== undefined) {
+    assertValid(options.user, validateEditUserName, '--user');
+    userName = options.user;
+  } else {
+    userName = await guardedInput({
+      message: "New user name (leave blank to skip):",
+      default: space.userName,
+      validate: validateEditUserName,
+      flagName: '--user',
+      nonInteractiveDefault: space.userName,
+    });
+  }
+
+  let host: string;
+  if (options.host !== undefined) {
+    assertValid(options.host, validateCustomHost, '--host');
+    host = options.host;
+  } else {
+    host = await guardedPromptHost({
+      currentHost: originalHost,
+      flagName: '--host',
+      nonInteractiveDefault: originalHost,
+    });
+  }
 
   let isUpdateMade = false;
   let keyDirMoved = false;

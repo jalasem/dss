@@ -267,10 +267,14 @@ describe('repository binding CLI commands', () => {
     const alpha = await createRepository(recursiveParent, 'alpha');
     const beta = await createRepository(recursiveParent, 'beta');
 
-    const output = runCliWithInput(['link', 'personal', '-r'], 'y\n', recursiveParent);
+    // The recursive-bind confirm is required-affirm (Phase 4 · Task 1) —
+    // piped stdin is non-interactive by definition and is never read for it
+    // any more, so -y replaces the old piped 'y\n' (which also means the
+    // prompt's own message text is no longer printed — -y skips the
+    // confirm() call itself, it doesn't answer it).
+    const output = runCli(['link', 'personal', '-r', '-y'], recursiveParent);
 
     expect(output.indexOf(alpha)).toBeLessThan(output.indexOf(beta));
-    expect(output).toContain('Bind 2 repositories to "personal"?');
     expect(runGit(alpha, ['config', 'dss.space'])).toBe('personal');
     expect(runGit(beta, ['config', 'dss.space'])).toBe('personal');
   });
@@ -283,12 +287,23 @@ describe('repository binding CLI commands', () => {
     await fs.ensureDir(externalDssDirectory);
     await fs.symlink(externalDssDirectory, path.join(unsafeRepository, '.git', 'dss'));
 
-    const result = runCliFailure(['link', 'personal', '-r'], recursiveParent, 'y\n');
+    const result = runCliFailure(['link', 'personal', '-r', '-y'], recursiveParent);
 
     expect(result.status).not.toBe(0);
     expect(result.output).toContain('1 succeeded, 1 failed');
     expect(result.output).toContain(unsafeRepository);
     expect(runGit(validRepository, ['config', 'dss.space'])).toBe('personal');
+  });
+
+  it('the recursive-bind confirm is required-affirm: non-interactive without -y exits 2 and binds nothing', async () => {
+    const recursiveParent = path.join(temporaryHome, 'repositories');
+    const alpha = await createRepository(recursiveParent, 'alpha');
+
+    const result = runCliFailure(['link', 'personal', '-r'], recursiveParent, '');
+
+    expect(result.status).toBe(2);
+    expect(result.output).toContain('Confirmation required: pass -y/--yes (non-interactive mode)');
+    expect(() => runGit(alpha, ['config', 'dss.space'])).toThrow();
   });
 
   it('shows binding status for a bound repository', () => {

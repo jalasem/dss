@@ -40,7 +40,7 @@ export async function safePassword(options: {
 
 const OTHER_HOST_SENTINEL = '__other__';
 
-function validateCustomHost(value: string): string | true {
+export function validateCustomHost(value: string): string | true {
   const trimmed = value.trim();
   if (!trimmed) return 'Host is required.';
   if (/\s/.test(trimmed)) return 'Host must not contain spaces.';
@@ -72,4 +72,143 @@ export async function promptHost(currentHost?: string): Promise<string> {
     message: 'Custom Git host (e.g. git.example.com):',
     validate: validateCustomHost
   });
+}
+
+// --- Non-interactive foundation ------------------------------------------
+//
+// Every prompt in src/commands/ flows through the guarded* wrappers below
+// instead of calling @inquirer/prompts (or safeConfirm/safePassword)
+// directly. In interactive mode they behave exactly like the prompt they
+// wrap; in non-interactive mode (see isNonInteractive) they NEVER touch
+// stdin — they either resolve a documented default or throw a UsageError
+// naming the flag/positional a script must pass instead.
+
+/**
+ * True when this process should never wait on stdin for a prompt answer:
+ * `DSS_NO_INPUT=1` is set, or stdin is not a TTY (piped/closed/redirected,
+ * the shape any script or CI runner uses). A live check — like ui.ts's
+ * isPlain() — not a value captured once at startup, so tests (and a
+ * long-lived process whose stdin changes) always see the current state.
+ */
+export function isNonInteractive(): boolean {
+  return process.env.DSS_NO_INPUT === '1' || !process.stdin.isTTY;
+}
+
+let assumeYesFlag = false;
+
+/** Registered from the global `-y, --yes` Commander option (index.ts). */
+export function setAssumeYes(value: boolean): void {
+  assumeYesFlag = value;
+}
+
+export function assumeYes(): boolean {
+  return assumeYesFlag;
+}
+
+/**
+ * Thrown by a guarded prompt wrapper when it can't get an answer without
+ * touching stdin and there's no usable default. Carries exitCode 2 (the
+ * CLI's "bad/missing usage" exit code) for index.ts's top-level handler to
+ * apply via `process.exitCode` — see handleTopLevelError.
+ */
+export class UsageError extends Error {
+  readonly exitCode = 2;
+  constructor(message: string) {
+    super(message);
+    this.name = 'UsageError';
+  }
+}
+
+interface GuardedValueOptions {
+  /** The flag (e.g. "--name") or positional (e.g. "the identityName
+   * argument") a script should pass instead of answering this prompt. */
+  flagName: string;
+  /** When set, non-interactive mode resolves to this value instead of
+   * throwing — for prompts that have a sensible default (e.g. `dss edit`
+   * keeping a field's current value, or an empty passphrase). Omit for
+   * prompts with no safe default (e.g. a brand-new identity's name). */
+  nonInteractiveDefault?: string;
+}
+
+type InputConfig = Parameters<typeof input>[0];
+type PasswordConfig = Parameters<typeof password>[0];
+type SelectChoice = { name?: string; value: string; description?: string; disabled?: boolean | string };
+interface SelectConfig {
+  message: string;
+  choices: readonly SelectChoice[];
+  default?: unknown;
+}
+
+/** Guarded `input`: interactive → normal prompt; non-interactive → the
+ * configured default, or a UsageError naming `flagName`. Never touches
+ * stdin in non-interactive mode. */
+export async function guardedInput(opts: InputConfig & GuardedValueOptions): Promise<string> {
+  const { flagName, nonInteractiveDefault, ...rest } = opts;
+  if (isNonInteractive()) {
+    if (nonInteractiveDefault !== undefined) return nonInteractiveDefault;
+    throw new UsageError(`Missing required value: pass ${flagName} (non-interactive mode)`);
+  }
+  return input(rest);
+}
+
+/** Guarded `select` (string-valued choices only — every select in this
+ * codebase picks a name/host/shell). Same interactive/non-interactive
+ * contract as guardedInput. */
+export async function guardedSelect(opts: SelectConfig & GuardedValueOptions): Promise<string> {
+  const { flagName, nonInteractiveDefault, ...rest } = opts;
+  if (isNonInteractive()) {
+    if (nonInteractiveDefault !== undefined) return nonInteractiveDefault;
+    throw new UsageError(`Missing required value: pass ${flagName} (non-interactive mode)`);
+  }
+  return select(rest);
+}
+
+/** Guarded `safePassword`. Same contract as guardedInput; a passphrase
+ * prompt typically passes `nonInteractiveDefault: ''` (empty passphrase is
+ * a legitimate default, matching the interactive default). */
+export async function guardedPassword(opts: PasswordConfig & GuardedValueOptions): Promise<string> {
+  const { flagName, nonInteractiveDefault, ...rest } = opts;
+  if (isNonInteractive()) {
+    if (nonInteractiveDefault !== undefined) return nonInteractiveDefault;
+    throw new UsageError(`Missing required value: pass ${flagName} (non-interactive mode)`);
+  }
+  return safePassword(rest);
+}
+
+/** Guarded `promptHost` (select + optional "Other…" free-form input,
+ * bundled behind promptHost). Same contract as guardedInput/guardedSelect. */
+export async function guardedPromptHost(
+  opts: { currentHost?: string } & GuardedValueOptions
+): Promise<string> {
+  const { flagName, nonInteractiveDefault, currentHost } = opts;
+  if (isNonInteractive()) {
+    if (nonInteractiveDefault !== undefined) return nonInteractiveDefault;
+    throw new UsageError(`Missing required value: pass ${flagName} (non-interactive mode)`);
+  }
+  return promptHost(currentHost);
+}
+
+/**
+ * Guarded `confirm`. `-y/--yes` (assumeYes()) always affirms — interactive
+ * or not, required or optional — skipping the prompt entirely. Otherwise:
+ * interactive → safeConfirm as today. Non-interactive → a REQUIRED confirm
+ * (the default: `optional` unset/false) throws a UsageError naming
+ * `flag` (default "-y/--yes"); an OPTIONAL/informational confirm
+ * (`optional: true` — a nice-to-have extra, never destructive) resolves
+ * false silently instead, so a script isn't forced to pass -y just to
+ * avoid a hang or an error on a prompt whose answer doesn't gate anything
+ * essential.
+ */
+export async function guardedConfirm(opts: {
+  message: string;
+  default?: boolean;
+  flag?: string;
+  optional?: boolean;
+}): Promise<boolean> {
+  if (assumeYes()) return true;
+  if (!isNonInteractive()) {
+    return safeConfirm({ message: opts.message, default: opts.default });
+  }
+  if (opts.optional) return false;
+  throw new UsageError(`Confirmation required: pass ${opts.flag ?? '-y/--yes'} (non-interactive mode)`);
 }

@@ -99,35 +99,40 @@ describe('legacy alias CLI commands (switch/add/remove) — warn + delegate', ()
     // addSpace's chained input()/select()/confirm() prompts can't be driven
     // reliably over a plain (non-TTY) piped stdin — @inquirer/prompts needs
     // real terminal raw-mode keypress semantics for a multi-prompt text
-    // chain (verified directly: even a bare two-`input()`-prompt
-    // @inquirer/prompts script exits non-zero with no output when fed a
-    // piped `input` buffer of "line1\nline2\n" — this is a library/
-    // environment limitation, not something under this codebase's control).
-    // The interactive flow itself is already covered at the unit level in
-    // tests/commands/spaces.test.ts (addSpace, with @inquirer/prompts
-    // mocked).
+    // chain. The interactive flow itself is already covered at the unit
+    // level in tests/commands/spaces.test.ts (addSpace, with
+    // @inquirer/prompts mocked).
     //
-    // Closing stdin immediately instead is deterministic: the very first
-    // prompt gets an immediate ExitPromptError, and addSpace's own
-    // unconditional opening output — "Create New Identity",
-    // printed by UIHelper.printHeader as literally the first statement in
-    // addSpace() — is real, content-specific proof the deprecatedAlias
-    // wrapper actually delegated into addSpace rather than merely not
-    // erroring.
+    // Piped/closed stdin is non-interactive by definition (Phase 4 · Task
+    // 1: isNonInteractive() = !stdin.isTTY) — addSpace's first guarded
+    // prompt (--name) now fails FAST with a UsageError (exit 2) naming the
+    // missing flag, never touching stdin at all, rather than the old
+    // "read from stdin, get ExitPromptError, exit 130" path. addSpace's own
+    // unconditional opening output — "Create New Identity", printed by
+    // UIHelper.printHeader as literally the first statement in addSpace() —
+    // is still real, content-specific proof the deprecatedAlias wrapper
+    // actually delegated into addSpace rather than merely not erroring.
     const result = runCli(['add'], '');
 
-    expect(result.status).toBe(130); // isPromptExitError path in index.ts
+    expect(result.status).toBe(2); // UsageError path in index.ts (Task 1)
     expect(result.stderr).toContain('"dss add" is deprecated');
     expect(result.stderr).toContain('Use "dss new"');
     expect(result.stdout).toContain('Create New Identity');
+    // UIHelper.error (fail()'s underlying printer, and the UsageError path
+    // in handleTopLevelError) writes to stdout, not stderr — matching every
+    // other fail()-based error message in this codebase.
+    expect(result.stdout).toContain('Missing required value: pass --name (non-interactive mode)');
   });
 
-  it('legacy "remove" delegates to removeSpace (persists the removal, prints its success output) and warns to point at "dss rm"', async () => {
+  it('legacy "remove" delegates to removeSpace (persists the removal, prints its success output) and warns to point at "dss rm", requiring -y non-interactively', async () => {
     await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
       spaces: [{ name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' }]
     });
 
-    const result = runCli(['remove', 'personal'], 'y\n');
+    // Piped stdin ('y\n') is non-interactive by definition and is never
+    // read for a required confirm any more — removeSpace's removal confirm
+    // now needs the global -y/--yes flag instead (Phase 4 · Task 1).
+    const result = runCli(['remove', 'personal', '-y']);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('"dss remove" is deprecated');
@@ -138,5 +143,18 @@ describe('legacy alias CLI commands (switch/add/remove) — warn + delegate', ()
     // Delegation proof #2: the real, persisted side effect.
     const config = await fs.readJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'));
     expect(config.identities).toEqual([]);
+  });
+
+  it('legacy "remove" without -y exits 2 (non-interactive) instead of hanging on the removal confirm', async () => {
+    await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
+      spaces: [{ name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' }]
+    });
+
+    const result = runCli(['remove', 'personal'], '');
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain('Confirmation required: pass -y/--yes (non-interactive mode)');
+    const config = await fs.readJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'));
+    expect(config.identities).toHaveLength(1); // untouched
   });
 });

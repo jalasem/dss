@@ -1,5 +1,4 @@
-import { select } from '@inquirer/prompts';
-import { safeConfirm } from './prompts';
+import { guardedSelect, guardedConfirm, UsageError } from './prompts';
 import path from 'path';
 import {
   bindRepositories,
@@ -31,13 +30,14 @@ async function resolveSpace(spaceName?: string): Promise<ISpace | undefined> {
   const config: IConfig = { spaces: store.identities.map(toSpace), activeSpace: store.active };
   if (config.spaces.length === 0) return undefined;
 
-  const selectedName = spaceName || await select({
+  const selectedName = spaceName || await guardedSelect({
     message: 'Choose an identity to bind:',
     choices: config.spaces.map(space => ({
       name: space.name,
       value: space.name,
       description: `${space.email} (${space.userName})`
-    }))
+    })),
+    flagName: 'the identityName argument',
   });
 
   return findSpace(config, selectedName);
@@ -112,7 +112,10 @@ export async function bindSpaceToRepository(
     repositories.forEach(repository => console.log(`  ${repository}`));
 
     if (!options.dryRun) {
-      const approved = await safeConfirm({
+      // Required-affirm (recursive-bind approval): touches every matching
+      // repository's local Git config, so non-interactive mode without -y
+      // errors (exit 2) rather than proceeding unattended.
+      const approved = await guardedConfirm({
         message: `Bind ${repositories.length} repositories to "${space.name}"?`,
         default: false
       });
@@ -133,6 +136,11 @@ export async function bindSpaceToRepository(
     if (result.failed.length > 0) process.exitCode = 1;
     UIHelper.info(`${result.successful.length} succeeded, ${result.failed.length} failed.`);
   } catch (error) {
+    // A UsageError from a guarded prompt (resolveSpace's identity picker,
+    // the recursive-bind confirm) carries its own exit-2 contract — let it
+    // propagate to index.ts's top-level handler instead of being flattened
+    // into fail()'s exit 1 here.
+    if (error instanceof UsageError) throw error;
     fail(error instanceof Error ? error.message : String(error));
   }
 }

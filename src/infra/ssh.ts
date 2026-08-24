@@ -11,7 +11,7 @@ import path from "path";
 // print in the command layer" would change that control flow, which the
 // brief says to avoid — so the UIHelper/fail imports stay here.
 import { UIHelper } from "../commands/ui";
-import { safeConfirm } from "../commands/prompts";
+import { guardedConfirm } from "../commands/prompts";
 import { fail } from "../commands/fail";
 
 const execFileAsync = promisify(execFile);
@@ -354,9 +354,13 @@ export async function testHostAccess(sshKeyPath: string, host: string): Promise<
       fail(`Error testing SSH access to ${host}: ` + result.detail);
     }
 
-    const showPublicKey = await safeConfirm({
+    // Optional/informational (key-show "copy?"-style extra): the access
+    // test itself already ran and reported above, so non-interactive mode
+    // without -y silently declines instead of erroring.
+    const showPublicKey = await guardedConfirm({
       message: "Would you like to see the public SSH key?",
       default: false,
+      optional: true,
     });
 
     if (!showPublicKey) return;

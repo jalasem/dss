@@ -19,7 +19,7 @@ import {
   showRepositoryBindingStatus,
   unbindSpaceFromRepository
 } from './commands/binding';
-import { isPromptExitError } from './commands/prompts';
+import { isPromptExitError, setAssumeYes, UsageError } from './commands/prompts';
 import { dashboard } from './commands/dashboard';
 import { doctor } from './commands/doctor';
 
@@ -28,7 +28,15 @@ program
   .description(
     UIHelper.highlight("Dev Spaces Switcher (DSS)") + ": Manage your development identities easily."
   )
-  .version(require('../package.json').version, '-v, --version', 'output the current version');
+  .version(require('../package.json').version, '-v, --version', 'output the current version')
+  // Global (inherited by every subcommand): affirms every confirm prompt —
+  // interactive or not — so scripts/CI can skip them outright, and is the
+  // one thing that lets a REQUIRED confirm (rm, key rotate, recursive
+  // link, config import) proceed without a TTY. Registered as an option
+  // hook rather than read per-command so it's live before any command's
+  // action runs, including the bare-`dss` dashboard path.
+  .option('-y, --yes', 'Assume "yes" for every confirmation prompt')
+  .on('option:yes', () => setAssumeYes(true));
 
 /**
  * Registers `oldNameAndArgs` as a legacy alias for `newName`: a hidden
@@ -68,11 +76,24 @@ program
   .option('--dry-run', 'Preview changes without applying them')
   .action(switchSpace);
 
-program.command("new").description("Add a new identity").action(addSpace);
+program
+  .command("new")
+  .description("Add a new identity")
+  .option('--name <name>', 'Identity name (skips the name prompt)')
+  .option('--email <email>', 'Email address (skips the email prompt)')
+  .option('--user <userName>', 'Git user name (skips the user-name prompt)')
+  .option('--host <host>', 'Git host (skips the host prompt)')
+  .option('--key <type>', 'SSH key to generate: ed25519, rsa, or none (skips the key-generation confirm)')
+  .option('--passphrase <passphrase>', 'Passphrase for the generated SSH key (default: empty)')
+  .action(addSpace);
 
 program
   .command("edit [identityName]")
   .description("Modify an existing identity")
+  .option('--name <name>', 'New identity name (skips the name prompt)')
+  .option('--email <email>', 'New email address (skips the email prompt)')
+  .option('--user <userName>', 'New git user name (skips the user-name prompt)')
+  .option('--host <host>', 'New git host (skips the host prompt)')
   .action(modifySpace);
 
 program
@@ -142,7 +163,14 @@ deprecatedAlias('switch [identityName]', 'use', switchSpace, (cmd) => {
   cmd.option('--dry-run', 'Preview changes without applying them');
 });
 
-deprecatedAlias('add', 'new', addSpace);
+deprecatedAlias('add', 'new', addSpace, (cmd) => {
+  cmd.option('--name <name>', 'Identity name (skips the name prompt)');
+  cmd.option('--email <email>', 'Email address (skips the email prompt)');
+  cmd.option('--user <userName>', 'Git user name (skips the user-name prompt)');
+  cmd.option('--host <host>', 'Git host (skips the host prompt)');
+  cmd.option('--key <type>', 'SSH key to generate: ed25519, rsa, or none (skips the key-generation confirm)');
+  cmd.option('--passphrase <passphrase>', 'Passphrase for the generated SSH key (default: empty)');
+});
 
 deprecatedAlias('remove [identityName]', 'rm', removeSpace, (cmd) => {
   cmd.option('--dry-run', 'Preview what would be removed without actually removing it');
@@ -178,12 +206,22 @@ deprecatedAlias('inspect [identityName]', 'doctor', doctor);
  * Shared top-level error handler for both the bare-`dss` dashboard path and
  * the normal Commander dispatch path: a cancelled prompt exits quietly
  * (130) with a friendly message instead of an unhandled-rejection stack
- * trace; anything else rethrows.
+ * trace; a UsageError from a guarded prompt wrapper (src/commands/prompts.ts
+ * — a missing required flag/positional, or a required confirm without -y in
+ * non-interactive mode) prints its message and sets exit code 2 — the single
+ * place that owns turning UsageError into a process exit code (Task 2 will
+ * extend this same exit-2 contract to Commander's own usage errors);
+ * anything else rethrows.
  */
 function handleTopLevelError(error: unknown): void {
   if (isPromptExitError(error)) {
     UIHelper.info('Prompt closed before an answer was given. No changes were made.');
     process.exit(130);
+  }
+  if (error instanceof UsageError) {
+    UIHelper.error(error.message);
+    process.exitCode = 2;
+    return;
   }
   throw error;
 }

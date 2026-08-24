@@ -93,7 +93,10 @@ describe('dss config export|import CLI', () => {
       spaces: [{ name: 'imported', email: 'i@x.com', userName: 'I' }]
     });
 
-    const result = runCli(['config', 'import', customPath], 'y\n');
+    // The "Import N new identities?" confirm is required-affirm (Phase 4 ·
+    // Task 1) — piped stdin is non-interactive by definition and is never
+    // read for it any more, so -y replaces the old piped 'y\n'.
+    const result = runCli(['config', 'import', customPath, '-y']);
 
     expect(result.status).toBe(0);
     const config = await fs.readJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'));
@@ -115,7 +118,7 @@ describe('dss config export|import CLI', () => {
       spaces: [{ name: 'legacy-imported', email: 'l@x.com', userName: 'L' }]
     });
 
-    const result = runCli(['import', customPath], 'y\n');
+    const result = runCli(['import', customPath, '-y']);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('"dss import" is deprecated');
