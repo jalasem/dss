@@ -173,7 +173,11 @@ line to add to it by hand. Re-running `install` over a DSS-installed hook rewrit
 `dss guard check` resolves the identity expected here the same way the dashboard does (bound >
 directory rule > global default) and compares it against the EFFECTIVE `git config user.email`
 in the repository; a mismatch exits `1` with a message naming the fix (`dss use`/`dss link`). If
-`dss` isn't on `PATH` when a commit happens, the hook no-ops instead of blocking every commit.
+`dss` isn't on `PATH` when a commit happens, the hook no-ops instead of blocking every commit —
+and the same fail-open guarantee holds for a REACHABLE `dss` too: a corrupt or
+newer-than-this-build config, or any other error short of a genuinely resolved identity
+disagreeing with the effective one, allows the commit (exit `0`, a one-line note on stderr)
+rather than blocking it. Only a real, fully-resolved mismatch ever exits `1`.
 
 ## Cloning with the right identity
 

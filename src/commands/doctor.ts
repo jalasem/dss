@@ -184,14 +184,34 @@ export async function doctor(identityName?: string): Promise<void> {
       hostAuth.ok ? undefined : `SSH authentication to ${identity.host} failed — check the public key is added to your ${identity.host} account`);
   }
 
+  // getGitUser() reads `git config --global --includes ...` (see its own
+  // docstring in infra/git.ts) — `--includes` is what makes it resolve
+  // through the include chain at all, but that also makes it cwd-SENSITIVE:
+  // inside a directory a repo-local binding or directory rule overrides,
+  // git's own includeIf resolution lands on THAT context's identity, not
+  // the global active one. Comparing it against `identity` (this doctor
+  // run's own target) in that situation produces a false "doesn't match" —
+  // advice ("dss use <name>") that can't fix a result the global switch
+  // never controlled here in the first place. resolveAppliesHere (bound >
+  // rule > global) tells us whether such an override is in effect; when one
+  // is, this check is skipped and the Repo binding / Rule drift sections
+  // below (which compare against the CORRECT context-specific identity)
+  // are the meaningful drift signal instead.
   section('Git identity drift');
-  try {
-    const gitUser = await getGitUser();
-    const matches = gitUser.userName === identity.userName && gitUser.email === identity.email;
-    report(run, matches ? 'success' : 'warning', 'Git identity', `${gitUser.userName} <${gitUser.email}>`,
-      matches ? undefined : `global git identity doesn't match "${identity.name}" — dss use ${identity.name}`);
-  } catch {
-    report(run, 'warning', 'Git identity', 'unable to check', 'unable to read the global git user.name/user.email');
+  const appliesHere = await resolveAppliesHere(process.cwd(), store);
+  if (appliesHere.source === 'bound' || appliesHere.source === 'rule') {
+    const overrideLabel = appliesHere.source === 'bound' ? 'a repo-local binding' : 'a directory rule';
+    const seeSection = appliesHere.source === 'bound' ? 'Repo binding' : 'Rule drift';
+    report(run, 'info', 'Git identity', `not checked — ${overrideLabel} overrides the global identity here (see ${seeSection} below)`);
+  } else {
+    try {
+      const gitUser = await getGitUser();
+      const matches = gitUser.userName === identity.userName && gitUser.email === identity.email;
+      report(run, matches ? 'success' : 'warning', 'Git identity', `${gitUser.userName} <${gitUser.email}>`,
+        matches ? undefined : `global git identity doesn't match "${identity.name}" — dss use ${identity.name}`);
+    } catch {
+      report(run, 'warning', 'Git identity', 'unable to check', 'unable to read the global git user.name/user.email');
+    }
   }
 
   if (bindingStatus) {
@@ -254,12 +274,12 @@ export async function doctor(identityName?: string): Promise<void> {
       // The "expected" identity here mirrors resolveIdentity's own
       // omitted-vs-named split: an explicitly named identity (`dss doctor
       // work`) is compared against directly — the same identity every
-      // other section above checks; an omitted name defers to
-      // resolveAppliesHere (bound > rule > global), the same "which
-      // identity applies HERE" resolution the dashboard and the guard use,
+      // other section above checks; an omitted name defers to `appliesHere`
+      // (already resolved above, bound > rule > global — the same "which
+      // identity applies HERE" resolution the dashboard and the guard use),
       // which can legitimately differ from `identity` above when a
       // directory rule applies to a DIFFERENT identity than the active one.
-      const expected = identityName ? identity : (await resolveAppliesHere(process.cwd(), store)).identity ?? undefined;
+      const expected = identityName ? identity : appliesHere.identity ?? undefined;
 
       if (!expected) {
         report(run, 'info', 'Commit history', 'no identity to compare against');

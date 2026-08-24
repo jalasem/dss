@@ -141,10 +141,14 @@ dss guard check --json
 `install data: { installed: string }` — the git-resolved hook path (`.git/hooks/pre-commit`,
 worktree-safe). `check data: { ok: boolean, expected: { identity, email, source } | null,
 effective: string | null }` — `expected`/`effective` are both `null` when no identity applies
-here at all (nothing to guard, exit `0`). Exit `1` on a mismatch (effective git identity here
-doesn't match `expected`); `--quiet` suppresses the success line only — a mismatch always
-prints. `dss guard uninstall --json` removes the hook (`data: { removed: string | null }`) —
-only if DSS installed it; a foreign pre-commit hook is refused (exit `1`) either way.
+here at all (nothing to guard, exit `0`). Exit `1` **only** on a genuine, fully-resolved
+identity mismatch (effective git identity here disagrees with `expected`); `--quiet` suppresses
+the success line only — a mismatch always prints. The guard fails OPEN (exit `0`,
+`expected`/`effective: null`, a one-line note on stderr) on anything short of that — a corrupt
+or newer-than-this-build config, a git failure, or no identity to check against — it never
+blocks a commit for a reason unrelated to identity. `dss guard uninstall --json` removes the
+hook (`data: { removed: string | null }`) — only if DSS installed it; a foreign pre-commit hook
+is refused (exit `1`) either way.
 
 ## Notes
 

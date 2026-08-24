@@ -344,6 +344,60 @@ describe('dss guard install|uninstall|check CLI', () => {
       expect(plain.status).toBe(1);
       expect(plain.stdout).toMatch(/Wrong identity/);
     });
+
+    // Mandatory plan invariant: the guard must fail OPEN on any error that
+    // isn't a genuine resolved-identity-vs-effective-email mismatch — a
+    // PRESENT `dss` whose loadStore()/resolution work throws must never
+    // block every commit for a reason unrelated to identity, exactly like
+    // the missing-dss case above already fails open.
+    it('fails OPEN (exit 0, ok:true, expected:null/effective:null) when the store is corrupt/future-version', async () => {
+      await createIdentity('work', 'work@example.com', 'Work User', true);
+      const repoDir = await initRepo('repo');
+
+      // A future config version loadStore refuses to guess about
+      // (ConfigVersionError) — the most reachable real-world trigger: the
+      // config was written by a newer DSS, then an older binary runs.
+      const configPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
+      const raw = await fs.readJson(configPath);
+      raw.version = 99;
+      await fs.writeJson(configPath, raw);
+
+      const result = runCli(['guard', 'check', '--json'], repoDir);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.data).toEqual({ ok: true, expected: null, effective: null });
+      expect(result.stderr).toMatch(/dss guard: could not determine expected identity/);
+    });
+
+    it('fails OPEN (exit 0) when reading the effective repo git identity fails outright (a real git failure, not merely "unset")', async () => {
+      await createIdentity('work', 'work@example.com', 'Work User', true);
+      const repoDir = await initRepo('repo');
+      // A corrupt repo-local git config: `git config user.email` fails with
+      // a real error (bad config line, exit 128) rather than the ordinary
+      // "unset" exit 1 that getEffectiveRepoGitUserEmail already tolerates.
+      await fs.outputFile(path.join(repoDir, '.git', 'config'), '[this is not valid gitconfig');
+
+      const result = runCli(['guard', 'check', '--json'], repoDir);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.data).toEqual({ ok: true, expected: null, effective: null });
+    });
+
+    it('still exits 1 on a genuine resolved-identity mismatch (fail-open does not weaken the real check)', async () => {
+      await createIdentity('work', 'work@example.com', 'Work User', true);
+      const repoDir = await initRepo('repo');
+      runGit(repoDir, ['config', 'user.email', 'wrong@example.com']);
+
+      const result = runCli(['guard', 'check', '--json'], repoDir);
+
+      expect(result.status).toBe(1);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(false);
+    });
   });
 
   // ---------------------------------------------------------------------
@@ -410,6 +464,35 @@ describe('dss guard install|uninstall|check CLI', () => {
       const commit = spawnSync('git', ['-C', repoDir, 'commit', '-m', 'allowed despite mismatch, dss unreachable'], {
         encoding: 'utf8',
         env: bareEnv
+      });
+
+      expect(commit.status).toBe(0);
+      expect(commitCount(repoDir)).toBe(1);
+    });
+
+    // Mandatory load-bearing proof (mirrors the missing-dss case above): a
+    // PRESENT, reachable `dss` whose `loadStore()` throws (a corrupt/
+    // future-version config) must not brick a real `git commit` through the
+    // ACTUAL installed hook either — the hook's `dss guard check --quiet`
+    // must fail open, not exit 1.
+    it('a corrupt/future-version store never bricks the commit — the hook fails open and the commit succeeds', async () => {
+      await createIdentity('work', 'work@example.com', 'Work User', true);
+      const repoDir = await initRepo('corrupt-store-repo');
+
+      const install = runCli(['guard', 'install'], repoDir);
+      expect(install.status).toBe(0);
+
+      const configPath = path.join(temporaryHome, '.dss', 'spaces', 'config.json');
+      const raw = await fs.readJson(configPath);
+      raw.version = 99;
+      await fs.writeJson(configPath, raw);
+
+      await fs.outputFile(path.join(repoDir, 'file.txt'), 'v1');
+      runGit(repoDir, ['add', 'file.txt']);
+
+      const commit = spawnSync('git', ['-C', repoDir, 'commit', '-m', 'allowed despite corrupt store'], {
+        encoding: 'utf8',
+        env: cliEnvironment()
       });
 
       expect(commit.status).toBe(0);

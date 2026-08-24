@@ -249,6 +249,59 @@ describe('commands/doctor', () => {
       expect(process.exitCode).toBeUndefined();
     });
 
+    // Finding 2: getGitUser() is cwd-sensitive (`--global --includes`
+    // resolves through whatever includeIf applies HERE), so inside a ruled
+    // directory it reports the RULE's identity, not the active one this
+    // doctor run is checking — comparing the two produced a misleading
+    // "doesn't match — dss use <name>" warning that "dss use" can't
+    // actually fix. Simulates that real cwd-sensitivity: getGitUser
+    // resolves to the RULED identity's own values while `identity` (the
+    // one doctor('work') is checking) is the ACTIVE identity.
+    it('does not show a misleading "Git identity" drift warning inside a ruled directory — relies on Rule drift instead', async () => {
+      const ruledIdentity: ISpace = { ...keyedIdentity, name: 'acme', email: 'acme@example.com', userName: 'Acme User' };
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity, ruledIdentity], 'work', [{ dir: '/code/acme', identity: 'acme' }]));
+      mockFs.realpath.mockResolvedValue('/code/acme/project' as never);
+      mockGetGitUser.mockResolvedValue({ userName: ruledIdentity.userName, email: ruledIdentity.email });
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      // No "warn:" (PLAIN-mode) tag on the Git identity line — it must not
+      // be flagged as drift.
+      expect(calls.some(c => typeof c === 'string' && /warn: Git identity/.test(c))).toBe(false);
+      expect(calls.some(c => typeof c === 'string' && c.includes('Git identity') && c.includes('not checked'))).toBe(true);
+      expect(calls.some(c => typeof c === 'string' && c.includes('Rule drift') && c.includes('matches'))).toBe(true);
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('skips the "Git identity" drift check when cwd is bound to a different identity — relies on Repo binding instead', async () => {
+      const boundIdentity: ISpace = { ...keyedIdentity, name: 'personal', email: 'personal@example.com', userName: 'Personal User' };
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity, boundIdentity], 'work'));
+      mockGetRepositoryBindingStatus.mockResolvedValue({
+        repositoryRoot: '/repo',
+        configPath: '/repo/.git/dss/config',
+        bound: true,
+        spaceName: 'personal'
+      });
+      mockGetGitUser.mockResolvedValue({ userName: boundIdentity.userName, email: boundIdentity.email });
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && /warn: Git identity/.test(c))).toBe(false);
+      expect(calls.some(c => typeof c === 'string' && c.includes('Git identity') && c.includes('not checked'))).toBe(true);
+    });
+
+    it('keeps the "Git identity" drift check meaningful when no rule/binding overrides here (source: global)', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
+      mockGetGitUser.mockResolvedValue({ userName: 'Someone Else', email: 'other@example.com' });
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && /warn: Git identity/.test(c))).toBe(true);
+    });
+
     it('shows the repo binding section when cwd is a git repo, and flags a binding to a DIFFERENT identity as a warning', async () => {
       mockLoadStore.mockResolvedValue(storeOf([keyedIdentity, { ...keyedIdentity, name: 'personal' }], 'work'));
       mockGetRepositoryBindingStatus.mockResolvedValue({

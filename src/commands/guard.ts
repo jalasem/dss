@@ -3,7 +3,7 @@ import { fail } from './fail';
 import { jsonData } from './jsonOutput';
 import { loadStore } from '../infra/store';
 import { getEffectiveRepoGitUserEmail } from '../infra/git';
-import { resolveAppliesHere } from '../infra/identityResolution';
+import { resolveAppliesHere, AppliesHereResult } from '../infra/identityResolution';
 import {
   HOOK_MARKER,
   resolveHookPath,
@@ -87,6 +87,29 @@ interface GuardCheckOptions {
 }
 
 /**
+ * The plan's hard invariant: `dss guard check` (and therefore the installed
+ * hook) must NEVER brick a commit for a reason unrelated to an actual
+ * identity mismatch. The missing-`dss` case already fails open at the hook
+ * level (`command -v dss || exit 0` in infra/guard.ts); this is the same
+ * fail-open contract for a PRESENT `dss` whose store/resolution work throws
+ * — most reachably a `ConfigVersionError` (loadStore refusing a corrupt or
+ * newer-than-this-build config), but also a `resolveAppliesHere`/git call
+ * that fails outright. Reports the same `{ok:true, expected:null,
+ * effective:null}` shape "no identity applies here" already uses (exit 0,
+ * no docsDriftPayloads key-set change) and, since this is genuinely an
+ * undetermined/anomalous state rather than routine silence, always prints a
+ * one-line note to STDERR (never STDOUT — the `--json` "exactly one object
+ * on stdout" contract only governs stdout) so a human running `git commit`
+ * sees why the guard didn't check anything, without it being mistaken for
+ * the hook's own `--quiet`-suppressed success line.
+ */
+function allowUndetermined(reason: unknown): void {
+  jsonData({ ok: true, expected: null, effective: null });
+  const message = reason instanceof Error ? reason.message : String(reason);
+  process.stderr.write(`dss guard: could not determine expected identity (${message}); allowing commit\n`);
+}
+
+/**
  * `dss guard check`: the fast check the installed hook actually runs on
  * every commit. No identity applies here at all (resolveAppliesHere finds
  * nothing to guard) → exit 0 completely silently, nothing to report.
@@ -96,19 +119,39 @@ interface GuardCheckOptions {
  * Match → exit 0 (silent under `--quiet`, one ✓ line otherwise). Mismatch
  * → exit 1 with an actionable message; always prints, `--quiet` or not.
  *
+ * Loading the store and resolving the identity are wrapped separately (see
+ * allowUndetermined above): ONLY a successfully-resolved expected identity
+ * whose email disagrees with the effective git config is ever allowed to
+ * exit 1. A corrupt/future-version store, a git failure while reading the
+ * effective email, or no resolvable identity all fail OPEN at exit 0 —
+ * "cannot determine" is never treated as "mismatch".
+ *
  * Never prompts (constraint, brief §2/§3) — a hook that could block on
  * stdin mid-`git commit` would be unusable.
  */
 export async function checkGuard(options: GuardCheckOptions = {}): Promise<void> {
-  const store = await loadStore();
-  const resolved = await resolveAppliesHere(process.cwd(), store);
+  let resolved: AppliesHereResult;
+  try {
+    const store = await loadStore();
+    resolved = await resolveAppliesHere(process.cwd(), store);
+  } catch (error) {
+    allowUndetermined(error);
+    return;
+  }
 
   if (!resolved.identity) {
     jsonData({ ok: true, expected: null, effective: null });
     return;
   }
 
-  const effectiveEmail = await getEffectiveRepoGitUserEmail(process.cwd());
+  let effectiveEmail: string | undefined;
+  try {
+    effectiveEmail = await getEffectiveRepoGitUserEmail(process.cwd());
+  } catch (error) {
+    allowUndetermined(error);
+    return;
+  }
+
   const expected = {
     identity: resolved.identity.name,
     email: resolved.identity.email,
