@@ -94,16 +94,43 @@ describe('docs drift', () => {
       }
     });
 
-    // Deliberately NOT asserted here: "no hidden alias name appears in the
-    // script" as a blanket string-search. Several alias names collide with
-    // unrelated real text a script legitimately contains — "export"/
-    // "import" are also `config`'s own advertised subcommand names, and
-    // "test" appears inside fish's own `test -f ...` builtin call in
-    // `__dss_get_spaces`. completion.test.ts's own
-    // "advertises doctor (not test/inspect)" case already covers the one
-    // alias pair (test/inspect -> doctor) that's actually at risk of
-    // resurfacing, with a regex anchored to the dss-subcommand usage
-    // specifically rather than a blanket word match.
+    // Blanket "no hidden alias name appears in the script" word-search is
+    // deliberately scoped to just these 6 (of the 10 hidden alias names) —
+    // list/switch/add/remove/bind/unbind. Verified (see the sanity check
+    // run while writing this test) that none of the 6 collides with any
+    // unrelated real text a script legitimately contains, so a plain
+    // word-boundary match is safe here. The other 4 are excluded WITH
+    // CAUSE, not by omission: "export"/"import" are also `config`'s own
+    // advertised subcommand names (a real, wanted match), and "test"/
+    // "inspect" — "test" collides with fish's own `test -f ...` builtin
+    // call inside `__dss_get_spaces`, and by construction "inspect" is
+    // never advertised text either way, so the leak that actually matters
+    // for that pair (test/inspect -> doctor) is already covered by
+    // completion.test.ts's "advertises doctor (not test/inspect)" case,
+    // anchored to the dss-subcommand usage specifically rather than a
+    // blanket word match. This covers 6 of the 10; the other 4 have
+    // narrower, targeted coverage elsewhere.
+    // Excluded WITH CAUSE (see comment above), not by omission — collision
+    // risk, not "not worth checking". Computed in beforeAll, not at
+    // describe-body-eval time, since `described` isn't populated until the
+    // outer beforeAll (above) has run.
+    let collisionFreeHiddenAliases: string[];
+    beforeAll(() => {
+      const excludedFromLeakCheck = new Set(['export', 'import', 'test', 'inspect']);
+      const hiddenNames = described.commands.filter(cmd => cmd.hidden).map(cmd => cmd.name);
+      collisionFreeHiddenAliases = hiddenNames.filter(name => !excludedFromLeakCheck.has(name));
+    });
+
+    it('covers exactly the 6 collision-free hidden aliases (list/switch/add/remove/bind/unbind)', () => {
+      expect([...collisionFreeHiddenAliases].sort()).toEqual(['add', 'bind', 'list', 'remove', 'switch', 'unbind']);
+    });
+
+    it.each(generators)('none of the 6 collision-free hidden aliases is advertised in the %s script', (_shell, generate) => {
+      const script = generate(described);
+      for (const alias of collisionFreeHiddenAliases) {
+        expect(script).not.toMatch(new RegExp(`\\b${alias}\\b`));
+      }
+    });
   });
 
   describe('walker vs README', () => {

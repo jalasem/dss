@@ -38,7 +38,8 @@ Detect the current identity (bound to this repo, or the global default):
 ```bash
 dss --json
 ```
-`data: { identity: { name, email, userName, host } | null, source: "bound" | "global" | null, health: { key, agent }, identities: number }`
+`data: { identity: { name, email, userName, host } | null, source: "bound" | "global" | null, health: { key, agent } | null, identities: number }`.
+All four keys are always present — `null` means "not applicable" (no identity resolved), not "omitted".
 
 List all identities:
 

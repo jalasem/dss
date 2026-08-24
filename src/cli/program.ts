@@ -33,10 +33,18 @@ export interface BuiltProgram {
 
 /**
  * Builds a fresh, fully-wired `dss` Command instance: name/description/
- * version, the two global options (-y/--yes, --json — registration only;
- * their behavior is wired by index.ts, which owns exitOverride/
- * configureOutput/the preAction hook and the argv pre-scan those options
- * need), the primary command surface, and the hidden deprecated aliases.
+ * version, exitOverride/configureOutput, the two global options, the
+ * primary command surface, and the hidden deprecated aliases.
+ *
+ * `-y`/`--yes`'s behavior (`setAssumeYes(true)`) is wired right here via
+ * `.on('option:yes', ...)` below — Commander's own option-event mechanism
+ * fires it in argv order, which is fine for a plain boolean flag. `--json`
+ * is the one option whose behavior is NOT wired here: its detection is an
+ * argv pre-scan in index.ts, run BEFORE Commander parses anything at all
+ * (needed because `-v`/`-h` throw mid-parse — see index.ts's comment on
+ * that pre-scan for why `option:json` firing in argv order isn't good
+ * enough there). index.ts also owns the preAction hook that reports the
+ * resolved command name once `--json` is on.
  *
  * Deliberately has NO side effects beyond constructing and returning the
  * Command tree — no argv parsing, no process.exit, nothing that reads

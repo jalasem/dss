@@ -259,7 +259,7 @@ describe('global --json (CLI, spawned process)', () => {
       expect(parsed.data.identities).toBe(1);
     });
 
-    it('bare "dss --json" with zero identities: ok:true, {identities:0, identity:null} — firstRunFlow is skipped', async () => {
+    it('bare "dss --json" with zero identities: ok:true, all 4 stable keys present (identity/source/health null) — firstRunFlow is skipped', async () => {
       await writeConfig([]);
 
       const result = runCli(['--json']);
@@ -269,7 +269,25 @@ describe('global --json (CLI, spawned process)', () => {
       expect(parsed).toEqual({
         ok: true,
         command: 'dashboard',
-        data: { identities: 0, identity: null }
+        data: { identity: null, source: null, health: null, identities: 0 }
+      });
+    });
+
+    it('bare "dss --json" with identities but none resolved here (no active, not bound): all 4 stable keys present (identity/source/health null)', async () => {
+      await writeConfig([{ name: 'x', email: 'x@y.z', userName: 'X', sshKeyPath: '' }]);
+      // temporaryHome (the default cwd) is not a git repository and the
+      // config above never sets activeSpace — nothing for the dashboard to
+      // resolve, distinct from the zero-identities branch above (this one
+      // reports identities:1, not 0).
+
+      const result = runCli(['--json']);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed).toEqual({
+        ok: true,
+        command: 'dashboard',
+        data: { identity: null, source: null, health: null, identities: 1 }
       });
     });
 

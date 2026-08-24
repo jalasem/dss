@@ -17,6 +17,15 @@ import { isJsonMode, jsonData } from './jsonOutput';
  * and the cheap `ssh-keygen -lf` + `ssh-add -l` agent check — never
  * `ssh -T`/testHostAccess. `dss doctor` is where the slow, network-backed
  * checks live.
+ *
+ * `--json` payload shape (stable-keys, Phase 4 · Task 3 principle): every
+ * branch below emits all four top-level keys — `identity`, `source`,
+ * `health`, `identities` — never a subset. `identity`/`source`/`health`
+ * are `null` when there's no resolved identity to report on (empty store,
+ * or a non-empty store with nothing active/bound here); `health` is
+ * `{ key, agent }` only in the one branch where an identity was actually
+ * resolved. Callers can always destructure all four keys without first
+ * checking which branch produced the payload.
  */
 export async function dashboard(): Promise<void> {
   const store = await loadStore();
@@ -24,9 +33,14 @@ export async function dashboard(): Promise<void> {
   if (store.identities.length === 0) {
     // firstRunFlow's interactive "create your first one now?" offer has no
     // machine-readable shape — skip it entirely in JSON mode and just
-    // report the empty state (per the brief: `{identities:0, identity:null}`).
+    // report the empty state. Stable-keys principle (Phase 4 · Task 3):
+    // every dashboard JSON payload emits all four top-level keys
+    // (identity, source, health, identities) regardless of branch, so a
+    // caller can destructure without checking which branch it landed in —
+    // `null` marks "not applicable in this branch" uniformly, rather than
+    // omitting the key.
     if (isJsonMode()) {
-      jsonData({ identities: 0, identity: null });
+      jsonData({ identity: null, source: null, health: null, identities: 0 });
       return;
     }
     await firstRunFlow({ spaces: [], activeSpace: store.active });
@@ -59,7 +73,10 @@ export async function dashboard(): Promise<void> {
     UIHelper.info(
       `${count} identit${count === 1 ? 'y' : 'ies'} available — use ${UIHelper.command('dss use')} to activate one.`
     );
-    jsonData({ identity: null, source: null, identities: count });
+    // Same stable-keys shape as the empty-store branch above — `health:
+    // null` here too, since there's no resolved identity to report health
+    // for.
+    jsonData({ identity: null, source: null, health: null, identities: count });
     return;
   }
 
