@@ -13,7 +13,17 @@ const USAGE_ERROR_CODES = new Set([
   'commander.missingArgument',
   'commander.invalidArgument',
   'commander.missingMandatoryOptionValue',
-  'commander.excessArguments'
+  'commander.excessArguments',
+  // A flag given with no value (e.g. `dss new --name`) — same malformed-
+  // invocation shape as the six above, just missing from the brief's
+  // original list (P4-T2 review, Important #1).
+  'commander.optionMissingArgument',
+  // Not reachable today (no command uses Commander's own `.conflicts()` —
+  // the one mutually-exclusive-option case, `link --path`/`--recursive`,
+  // is enforced by hand via fail(), exit 1). Mapped preemptively so a
+  // future `.conflicts()` usage doesn't silently regress to Commander's
+  // default exit 1 (P4-T2 review, Minor).
+  'commander.conflictingOption'
 ]);
 
 // `--help` and `--version` are success paths, not errors, even though

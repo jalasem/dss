@@ -157,6 +157,19 @@ describe('exit-code contract (CLI, spawned process)', () => {
       expect(result.status).toBe(2);
       expect(result.stdout).toContain('Missing required value: pass the identityName argument (non-interactive mode)');
     });
+
+    // P4-T2 review, Important #1: --name given with no value is a Commander
+    // 'commander.optionMissingArgument' error (distinct from --name being
+    // omitted entirely, which is our own UsageError, tested above) — it was
+    // missing from the exitOverride mapping table and fell through to
+    // Commander's default exit 1, contradicting README.MD's own "missing
+    // required argument -> exit 2".
+    it('"dss new --name" with no value (Commander optionMissingArgument)', async () => {
+      await writeConfig([]);
+      const result = runCli(['new', '--name']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('argument missing');
+    });
   });
 
   describe('deprecated alias spot-check', () => {

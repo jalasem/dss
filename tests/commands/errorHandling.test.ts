@@ -78,7 +78,12 @@ describe('mapCommanderExitCode', () => {
     'commander.missingArgument',
     'commander.invalidArgument',
     'commander.missingMandatoryOptionValue',
-    'commander.excessArguments'
+    'commander.excessArguments',
+    // P4-T2 review, Important #1 + Minor: both were missing from the
+    // brief's original 6-code list — the controller ruled both are
+    // usage-class, not a deliberate exclusion.
+    'commander.optionMissingArgument',
+    'commander.conflictingOption'
   ])('maps %s to exit 2 (usage)', (code) => {
     expect(mapCommanderExitCode(new CommanderError(1, code, 'message'))).toBe(EXIT_CODES.USAGE);
   });
