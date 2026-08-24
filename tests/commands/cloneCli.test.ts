@@ -201,6 +201,32 @@ describe('dss clone CLI (local bare-repo fixture, no network)', () => {
     expect(await fs.pathExists(dest)).toBe(false);
   });
 
+  // Security (argument injection / argv flag smuggling): a url that LOOKS
+  // like a git flag must be rejected as "unrecognized" (exit 2) before ever
+  // reaching execFile('git', ['clone', ...]) — otherwise git itself could
+  // parse it as a flag such as `--upload-pack=<cmd>` (remote-code-execution
+  // class). `--` here makes Commander accept the leading-dash token as the
+  // `<url>` positional instead of trying to match it against dss clone's
+  // own options, so this actually exercises parseGitUrl's rejection (a
+  // plain `dss clone --upload-pack=... ` without `--` never even reaches
+  // that code — Commander itself already rejects it one layer earlier as
+  // an unknown option, which is a fine extra layer but doesn't prove THIS
+  // fix).
+  it('a url that looks like a git flag is rejected as unrecognized (exit 2) and never spawns git', async () => {
+    await createIdentity('work', 'work@example.com', 'Work User');
+    const dest = path.join(temporaryHome, 'clone-dest');
+    const markerFile = path.join(temporaryHome, 'pwned');
+
+    const result = runCli(['clone', '--', `--upload-pack=touch ${markerFile}`, dest, '--identity', 'work', '--json']);
+
+    expect(result.status).toBe(2);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.message).toContain('Unrecognized Git URL');
+    expect(await fs.pathExists(dest)).toBe(false);
+    expect(await fs.pathExists(markerFile)).toBe(false);
+  });
+
   it('fails (exit 1) when --identity names an identity that does not exist', async () => {
     await createIdentity('work', 'work@example.com', 'Work User');
     const dest = path.join(temporaryHome, 'clone-dest');

@@ -10,7 +10,7 @@ function fakeChild(stderrPipeSpy: jest.Mock = jest.fn()): { stderr: { pipe: jest
 }
 
 describe('infra/gitClone — runGitClone', () => {
-  it('calls execFile with ["clone", url, dest] and no env override for a plain clone', async () => {
+  it('calls execFile with ["clone", "--", url, dest] and no env override for a plain clone', async () => {
     mockExecFile.mockImplementation((_file, _args, _opts, callback) => {
       callback(null, '', '');
       return fakeChild();
@@ -20,12 +20,32 @@ describe('infra/gitClone — runGitClone', () => {
 
     expect(mockExecFile).toHaveBeenCalledWith(
       'git',
-      ['clone', 'https://github.com/acme/api.git', '/tmp/dest'],
+      ['clone', '--', 'https://github.com/acme/api.git', '/tmp/dest'],
       expect.objectContaining({ maxBuffer: expect.any(Number) }),
       expect.any(Function)
     );
     const passedOptions = mockExecFile.mock.calls[0][2];
     expect(passedOptions.env).toBeUndefined();
+  });
+
+  // Security (argument injection / argv flag smuggling): the `--`
+  // end-of-options separator must sit BEFORE `url` so git can never parse a
+  // malicious-looking url/dest as a flag (e.g. `--upload-pack=<cmd>`),
+  // defense-in-depth alongside parseGitUrl's own `-`-prefix rejection.
+  it('always inserts "--" immediately before the url, even for an ssh clone with env set', async () => {
+    mockExecFile.mockImplementation((_file, _args, _opts, callback) => {
+      callback(null, '', '');
+      return fakeChild();
+    });
+
+    await runGitClone('git@github.com:acme/api.git', '/tmp/dest', {
+      env: { ...process.env, GIT_SSH_COMMAND: "ssh -i '/mock/key' -o IdentitiesOnly=yes" },
+      interactive: false
+    });
+
+    const passedArgs = mockExecFile.mock.calls[0][1];
+    expect(passedArgs).toEqual(['clone', '--', 'git@github.com:acme/api.git', '/tmp/dest']);
+    expect(passedArgs.indexOf('--')).toBe(passedArgs.indexOf('git@github.com:acme/api.git') - 1);
   });
 
   it('passes GIT_SSH_COMMAND via env for a keyed ssh clone', async () => {

@@ -53,6 +53,15 @@ export function parseGitUrl(rawUrl: string): ParsedGitUrl | undefined {
   const url = rawUrl.trim();
   if (!url || /\s/.test(url)) return undefined;
 
+  // Defense in depth against argument injection (argv flag smuggling): a
+  // string starting with `-` would otherwise be handed straight to
+  // `execFile('git', ['clone', url, dest], ...)` and parsed by git as a
+  // FLAG rather than a positional URL (e.g. `--upload-pack=<cmd>` is a
+  // remote-code-execution vector). Rejecting it here — before it ever
+  // reaches any git subprocess, present or future — is the primary defense;
+  // infra/gitClone.ts's `--` end-of-options separator is the second layer.
+  if (url.startsWith('-')) return undefined;
+
   const schemeMatch = URL_SCHEME.exec(url);
   if (schemeMatch) {
     const scheme = schemeMatch[1].toLowerCase();

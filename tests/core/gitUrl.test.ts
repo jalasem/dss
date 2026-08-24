@@ -154,4 +154,28 @@ describe('core/gitUrl — parseGitUrl (pure)', () => {
       expect(parseGitUrl('https://github.com')).toBeUndefined();
     });
   });
+
+  // Security (argument injection / argv flag smuggling): a url starting
+  // with `-` must never parse successfully — it would otherwise reach
+  // execFile('git', ['clone', '--', url, dest], ...) and, without this
+  // rejection, could be crafted to look like a git flag (e.g.
+  // `--upload-pack=<cmd>`, a remote-code-execution vector). This is the
+  // PRIMARY defense; infra/gitClone.ts's `--` end-of-options separator is
+  // the second, defense-in-depth layer.
+  describe('argument-injection guard: a leading "-" is always unparseable', () => {
+    it('rejects a bare leading-dash token', () => {
+      expect(parseGitUrl('-anything')).toBeUndefined();
+    });
+
+    it('rejects a git-flag-shaped string outright', () => {
+      expect(parseGitUrl('--upload-pack=touch /tmp/pwned')).toBeUndefined();
+      expect(parseGitUrl('--upload-pack=/tmp/x')).toBeUndefined();
+      expect(parseGitUrl('-oProxyCommand=touch /tmp/pwned')).toBeUndefined();
+    });
+
+    it('rejects even when the rest of the string looks like a valid form', () => {
+      expect(parseGitUrl('-ssh://git@github.com/acme/api.git')).toBeUndefined();
+      expect(parseGitUrl('-/tmp/fixtures/source.git')).toBeUndefined();
+    });
+  });
 });
