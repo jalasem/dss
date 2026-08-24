@@ -14,7 +14,7 @@ import { fail } from './fail';
 import { EXIT_CODES } from '../core/exitCodes';
 import { findSpace } from '../core/identity';
 import { loadStore, saveStore, toSpace, recordBinding, removeBinding } from '../infra/store';
-import { jsonData } from './jsonOutput';
+import { jsonData, isJsonMode } from './jsonOutput';
 
 export interface BindCommandOptions {
   path?: string;
@@ -160,8 +160,12 @@ export async function unbindSpaceFromRepository(
     // unbindRepository's own returned status reflects the POST-removal
     // state (already unbound) once it's actually run — check the PRE-op
     // state ourselves so the JSON payload can report which path (if any)
-    // actually had a binding removed.
-    const wasBound = (await getRepositoryBindingStatus(targetPath)).bound;
+    // actually had a binding removed. Gated on isJsonMode() (review
+    // finding #4): this extra git subprocess call is only useful for the
+    // JSON payload below, so the non-JSON path stays byte-for-byte
+    // unchanged (no extra `git rev-parse`/`git config` calls it didn't
+    // already make before this task).
+    const wasBound = isJsonMode() ? (await getRepositoryBindingStatus(targetPath)).bound : false;
     const status = await unbindRepository(targetPath, {
       dryRun: options.dryRun
     });
@@ -175,7 +179,7 @@ export async function unbindSpaceFromRepository(
       await updateBindingRegistry(store => removeBinding(store, status.repositoryRoot));
     }
     printStatus(status);
-    jsonData({ unbound: wasBound ? status.repositoryRoot : null });
+    if (isJsonMode()) jsonData({ unbound: wasBound ? status.repositoryRoot : null });
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }

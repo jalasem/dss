@@ -3,7 +3,7 @@ import { handleTopLevelError, mapCommanderExitCode } from '../../src/commands/er
 import { UsageError } from '../../src/commands/prompts';
 import { UIHelper } from '../../src/commands/ui';
 import { EXIT_CODES } from '../../src/core/exitCodes';
-import { setJsonMode, _resetJsonStateForTests } from '../../src/commands/jsonOutput';
+import { setJsonMode, captureCommanderOutput, _resetJsonStateForTests } from '../../src/commands/jsonOutput';
 
 // Phase 4 · Task 2 — unit-level coverage for the exit-code contract's 130
 // (cancelled) row, which can't be forced at the CLI level: spawnSync's
@@ -132,8 +132,13 @@ describe('handleTopLevelError (JSON mode)', () => {
     expect(process.exitCode).toBe(EXIT_CODES.USAGE);
   });
 
-  it('a --help/--version CommanderError (exit 0) does NOT get an error object — ok:true, no data', () => {
+  // Review finding #2 — a --help CommanderError (exit 0) does NOT get an
+  // error object, and Commander's own captured writeOut text (via
+  // program.configureOutput() in index.ts, simulated here directly via
+  // captureCommanderOutput) surfaces as `data.help`.
+  it('a --help CommanderError (exit 0) surfaces the captured Commander output as data.help — ok:true, no error', () => {
     setJsonMode('dss');
+    captureCommanderOutput('Usage: dss [options] [command]\n\nCommands:\n  ls ...\n');
     const error = new CommanderError(0, 'commander.helpDisplayed', '(display help)');
 
     handleTopLevelError(error);
@@ -142,13 +147,37 @@ describe('handleTopLevelError (JSON mode)', () => {
     expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
       ok: true,
       command: 'dss',
-      data: {},
+      data: { help: 'Usage: dss [options] [command]\n\nCommands:\n  ls ...\n' },
     });
     expect(process.exitCode).toBe(EXIT_CODES.OK);
   });
 
-  it('not in JSON mode: no stdout write at all (existing UIHelper.error/info behavior unchanged)', () => {
+  it('a --version CommanderError (exit 0) surfaces the captured Commander output as data.version (trimmed) — ok:true, no error', () => {
+    setJsonMode('dss');
+    captureCommanderOutput('1.2.3\n');
+    const error = new CommanderError(0, 'commander.version', '1.2.3');
+
+    handleTopLevelError(error);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: true,
+      command: 'dss',
+      data: { version: '1.2.3' },
+    });
+    expect(process.exitCode).toBe(EXIT_CODES.OK);
+  });
+
+  it('not in JSON mode: flushJson() never writes (UIHelper.error is still called exactly as the non-JSON describe block above already proves)', () => {
+    // UIHelper.error() itself still calls the real console.log -> a real
+    // process.stdout.write (proven directly below) — mocked out here so
+    // this test isolates flushJson()'s OWN write (which must be zero,
+    // since isJsonMode() is false) from that unrelated decorative output.
+    const errorSpy = jest.spyOn(UIHelper, 'error').mockImplementation(() => {});
+
     handleTopLevelError(new UsageError('missing --name'));
+
+    expect(errorSpy).toHaveBeenCalledWith('missing --name');
     expect(writeSpy).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@ import { CommanderError } from 'commander';
 import { UIHelper } from './ui';
 import { isPromptExitError, UsageError } from './prompts';
 import { EXIT_CODES } from '../core/exitCodes';
-import { isJsonMode, jsonFail, flushJson } from './jsonOutput';
+import { isJsonMode, jsonData, jsonFail, flushJson, takeCommanderOutput } from './jsonOutput';
 
 // Commander's own usage-class errors (bad/missing invocation input) belong
 // in the same exit-2 bucket as our own UsageError — everything else about
@@ -62,12 +62,25 @@ export function mapCommanderExitCode(error: CommanderError): number {
  *
  * In JSON mode (--json), each of the three handled cases ALSO records the
  * failure via jsonFail (skipped for a CommanderError success code — --help/
- * --version — which isn't a failure) and flushes the single JSON object to
- * stdout before returning/exiting — flushJson() is idempotent, so index.ts's
- * own end-of-chain flush (or a second call here) is always safe.
+ * --version, which instead surface Commander's captured output as
+ * `data.help`/`data.version` — see takeCommanderOutput) and flushes the
+ * single JSON object to stdout before returning/exiting — flushJson() is
+ * idempotent, so index.ts's own end-of-chain flush (or a second call here)
+ * is always safe.
+ *
+ * IMPORTANT ordering: `process.exitCode` (or, for the cancelled path, the
+ * code about to be passed to `process.exit()`) is assigned BEFORE
+ * flushJson() runs in every branch below — flushJson() derives the JSON
+ * object's `ok` field from `process.exitCode` at the moment it's called
+ * (see jsonOutput.ts), so flushing before the exit code is set would
+ * report `ok:true` even for a failure.
  */
 export function handleTopLevelError(error: unknown): void {
   if (isPromptExitError(error)) {
+    // Set even though process.exit(EXIT_CODES.CANCELLED) below passes its
+    // own code explicitly — flushJson() (called first) has no other way to
+    // see the intended exit code.
+    process.exitCode = EXIT_CODES.CANCELLED;
     if (isJsonMode()) {
       jsonFail('cancelled');
     } else {
@@ -82,22 +95,35 @@ export function handleTopLevelError(error: unknown): void {
     return;
   }
   if (error instanceof UsageError) {
+    process.exitCode = EXIT_CODES.USAGE;
     if (isJsonMode()) {
       jsonFail(error.message);
     } else {
       UIHelper.error(error.message);
     }
     flushJson();
-    process.exitCode = EXIT_CODES.USAGE;
     return;
   }
   if (error instanceof CommanderError) {
     const exitCode = mapCommanderExitCode(error);
-    if (isJsonMode() && exitCode !== EXIT_CODES.OK) {
-      jsonFail(error.message);
+    process.exitCode = exitCode;
+    if (isJsonMode()) {
+      if (exitCode === EXIT_CODES.OK) {
+        // --help/--version (review finding #2): Commander's own text was
+        // captured instead of printed (program.configureOutput() in
+        // index.ts, only active in JSON mode) — surface it as `data.help`/
+        // `data.version` instead of silently emitting an empty `data: {}}`.
+        const output = takeCommanderOutput();
+        if (error.code === 'commander.version') {
+          jsonData({ version: output.trim() });
+        } else {
+          jsonData({ help: output });
+        }
+      } else {
+        jsonFail(error.message);
+      }
     }
     flushJson();
-    process.exitCode = exitCode;
     return;
   }
   throw error;

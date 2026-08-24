@@ -23,7 +23,22 @@ import { setAssumeYes } from './commands/prompts';
 import { handleTopLevelError } from './commands/errorHandling';
 import { dashboard } from './commands/dashboard';
 import { doctor } from './commands/doctor';
-import { setJsonMode, isJsonMode, flushJson } from './commands/jsonOutput';
+import { setJsonMode, isJsonMode, flushJson, captureCommanderOutput } from './commands/jsonOutput';
+
+// --json detection (review finding #2): pre-scan argv for `--json` BEFORE
+// Commander does ANY parsing, rather than relying on Commander's own
+// `option:json` event firing in argv order. Necessary because `-v`/
+// `--version` (and `-h`/`--help`) THROW as soon as Commander encounters
+// them mid-scan (exitOverride below makes that throw a CommanderError
+// instead of calling process.exit directly) — parsing never reaches a
+// LATER `--json` in the same argv (e.g. `dss -v --json`), so the
+// event-based `option:json` handler would never fire in time. Scanning
+// here first means JSON mode is already on by the time Commander touches
+// ANY option, regardless of argv order.
+const rawArgs = process.argv.slice(2);
+if (rawArgs.includes('--json')) {
+  setJsonMode('dss');
+}
 
 program
   .name("dss")
@@ -42,13 +57,12 @@ program
   // Global machine-readable output (Phase 4 · Task 3): emits exactly ONE
   // JSON object to stdout and nothing else — see src/commands/jsonOutput.ts
   // for the full contract. Implies non-interactive mode (isNonInteractive()
-  // in src/commands/prompts.ts checks isJsonMode() too). `'dss'` here is
-  // only a placeholder command name for errors thrown before any command
-  // resolves (e.g. an unknown command) — the preAction hook below overwrites
-  // it with the actually-resolved primary command name once Commander
-  // matches one.
-  .option('--json', 'Emit machine-readable JSON output (implies non-interactive mode)')
-  .on('option:json', () => setJsonMode('dss'));
+  // in src/commands/prompts.ts checks isJsonMode() too). Actual detection is
+  // the argv pre-scan above (order-independent); this `.option(...)` call
+  // only registers the flag with Commander so it doesn't throw an unknown-
+  // option error — it carries no `.on('option:json', ...)` handler of its
+  // own, since the pre-scan already covers every case that would fire.
+  .option('--json', 'Emit machine-readable JSON output (implies non-interactive mode)');
 
 // Makes Commander THROW a CommanderError instead of calling process.exit
 // itself for every one of its own errors (unknown command/option, missing
@@ -59,6 +73,25 @@ program
 // Commander copies the exit-override callback onto a subcommand only at
 // the moment that subcommand is created.
 program.exitOverride();
+
+// Routes Commander's own successful --help/--version text (writeOut) through
+// the JSON-mode guard: captured into the data payload (see
+// errorHandling.ts's CommanderError handling) instead of printed, in JSON
+// mode; printed exactly as before otherwise. Commander's own USAGE-error
+// text (unknown command/option, ...) goes through writeErr, untouched here
+// — that stays on stderr exactly as before, per the brief. Placed before any
+// `program.command(...)` call for the same reason as exitOverride() above:
+// Commander copies the output configuration onto a subcommand only at the
+// moment that subcommand is created.
+program.configureOutput({
+  writeOut: (str) => {
+    if (isJsonMode()) {
+      captureCommanderOutput(str);
+    } else {
+      process.stdout.write(str);
+    }
+  }
+});
 
 // Maps each deprecated-alias Command object to the primary command name it
 // stands in for (e.g. the "list" alias command -> "ls"), so the --json
@@ -268,7 +301,7 @@ deprecatedAlias('inspect [identityName]', 'doctor', doctor);
 // context dashboard instead of Commander's own dispatch — `dss --help`/
 // `dss <command> --help` are untouched, since those still have an arg
 // Commander needs to parse (a real command, or one of its own flags).
-const rawArgs = process.argv.slice(2);
+// Reuses `rawArgs` from the --json pre-scan at the top of this file.
 const GLOBAL_ONLY_FLAGS = new Set(['-y', '--yes', '--json']);
 const isBareDashboardInvocation = rawArgs.every(arg => GLOBAL_ONLY_FLAGS.has(arg));
 

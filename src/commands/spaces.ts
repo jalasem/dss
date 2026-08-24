@@ -23,7 +23,7 @@ import { ISpace, IKeyInfo, IStoreV2 } from "../core/types";
 import { keySettingsUrl } from "../core/hosts";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
-import { jsonData } from "./jsonOutput";
+import { jsonData, jsonSetData, isJsonMode } from "./jsonOutput";
 import { slugify, findSpace, validateIdentityName } from "../core/identity";
 import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/store";
 // Circular import: ./firstRun imports addSpace back from this file. Safe
@@ -278,16 +278,18 @@ export async function addSpace(options: NewIdentityOptions = {}) {
   if (switchToNewSpace) {
     UIHelper.info("Switching to new identity...");
     // switchSpace is `use`'s own handler and sets its own jsonData
-    // (switched/previous) when reused here — reassert `new`'s payload
-    // below so its own `switched` key stays the boolean this command's
-    // contract promises, not `use`'s space-name string.
+    // (switched/previous) when reused here — jsonSetData below REPLACES
+    // whatever it merged in, so `new`'s payload is exactly {created, key,
+    // switched} regardless (review finding #3), with `switched` staying
+    // the boolean this command's contract promises, not `use`'s
+    // space-name string.
     await switchSpace(slugifiedSpaceName);
   } else {
     UIHelper.success(`Identity "${UIHelper.highlight(slugifiedSpaceName)}" added successfully!`);
     UIHelper.info("Use " + UIHelper.command(`dss use ${slugifiedSpaceName}`) + " to activate it.");
   }
 
-  jsonData({
+  jsonSetData({
     created: { name: slugifiedSpaceName, email, userName, host },
     key: generatedKeyInfo
       ? { algorithm: generatedKeyInfo.algorithm, fingerprint: generatedKeyInfo.fingerprint ?? null }
@@ -457,8 +459,16 @@ export async function switchSpace(
       }
     }
 
-    UIHelper.print(""); // Add spacing
-    await listSpaces();
+    // The trailing "here's the full list" recap is a decorative convenience
+    // for an interactive terminal — an agent reading `--json` output never
+    // sees it, and listSpaces() has its own jsonData() merge (identities/
+    // active) that would otherwise pollute `use`'s payload with foreign
+    // keys (review finding #3). Skip the call entirely in JSON mode so
+    // `use`'s data object is exactly {switched, previous}.
+    if (!isJsonMode()) {
+      UIHelper.print(""); // Add spacing
+      await listSpaces();
+    }
   } catch (error) {
     UIHelper.clearProgress();
     fail(`Failed to switch to identity "${selectedSpaceName}": ${(error as Error).message}`);

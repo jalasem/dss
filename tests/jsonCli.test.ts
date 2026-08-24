@@ -114,7 +114,10 @@ describe('global --json (CLI, spawned process)', () => {
       );
     });
 
-    it('"dss use <name> --json": ok:true, command "use", data.switched/previous', async () => {
+    // Review finding #3: `use`'s payload must be EXACTLY {switched,
+    // previous} — no foreign keys leaked in from the trailing decorative
+    // listSpaces() recap (skipped entirely in JSON mode).
+    it('"dss use <name> --json": ok:true, command "use", data is EXACTLY {switched, previous}', async () => {
       await writeConfig([{ name: 'x', email: 'x@y.z', userName: 'X', sshKeyPath: '' }]);
 
       const result = runCli(['use', 'x', '--json']);
@@ -124,15 +127,21 @@ describe('global --json (CLI, spawned process)', () => {
       expect(parsed).toEqual({
         ok: true,
         command: 'use',
-        data: expect.objectContaining({ switched: 'x', previous: null })
+        data: { switched: 'x', previous: null }
       });
+      expect(Object.keys(parsed.data).sort()).toEqual(['previous', 'switched']);
     });
 
-    it('"dss new --json" with every required flag (--key none): ok:true, command "new", data.created', async () => {
+    // Review finding #3: `new`'s payload must be EXACTLY {created, key,
+    // switched} even though it internally calls switchSpace() when the
+    // "switch now?" confirm resolves true (default in -y/non-interactive
+    // mode) — jsonSetData() (replace, not merge) at the end of addSpace()
+    // guarantees this regardless of what that inner call merged in.
+    it('"dss new --json" with every required flag (--key none, -y so it also switches): ok:true, command "new", data is EXACTLY {created, key, switched}', async () => {
       await writeConfig([]);
 
       const result = runCli([
-        'new', '--json',
+        'new', '--json', '-y',
         '--name', 'wk', '--email', 'wk@x.com', '--user', 'WK', '--host', 'github.com', '--key', 'none'
       ]);
 
@@ -140,8 +149,12 @@ describe('global --json (CLI, spawned process)', () => {
       const parsed = parseSoleJsonObject(result.stdout);
       expect(parsed.ok).toBe(true);
       expect(parsed.command).toBe('new');
-      expect(parsed.data.created).toEqual({ name: 'wk', email: 'wk@x.com', userName: 'WK', host: 'github.com' });
-      expect(parsed.data.key).toBeNull();
+      expect(parsed.data).toEqual({
+        created: { name: 'wk', email: 'wk@x.com', userName: 'WK', host: 'github.com' },
+        key: null,
+        switched: true
+      });
+      expect(Object.keys(parsed.data).sort()).toEqual(['created', 'key', 'switched']);
     });
 
     it('"dss rm <name> -y --json": ok:true, command "rm", data.removed', async () => {
@@ -155,25 +168,27 @@ describe('global --json (CLI, spawned process)', () => {
     });
 
     // Keyless identity: doctor's key/ssh-config/host-auth checks all skip
-    // (no network call), keeping this deterministic and fast. Doctor's own
-    // exit-1 "hard failure" (a keyless identity is a hard failure) is a
-    // reported HEALTH PROBLEM, not a command execution failure — the
-    // checklist itself is still `ok:true` data; only process.exitCode
-    // reflects the finding. See task-3-report.md for this design note.
-    it('"dss doctor <name> --json" (keyless, network-free): ok:true, command "doctor", data.checks + summary; exit 1 (hard failure)', async () => {
+    // (no network call), keeping this deterministic and fast. Review
+    // finding #1 (controller ruling): `ok` mirrors process.exitCode at
+    // flush time, full stop — doctor's own exit-1 "hard failure" (a
+    // keyless identity) is therefore ok:false, with a generic fallback
+    // error message (doctor never calls fail()/jsonFail() for this path)
+    // and NO `data` key (the checks/summary the non-JSON path prints are
+    // not present on the JSON error object).
+    it('"dss doctor <name> --json" (keyless, network-free, hard failure): ok:false, exit 1, generic error message, no data', async () => {
       await writeConfig([{ name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' }]);
 
       const result = runCli(['doctor', 'personal', '--json']);
 
       expect(result.status).toBe(1);
       const parsed = parseSoleJsonObject(result.stdout);
-      expect(parsed.ok).toBe(true);
-      expect(parsed.command).toBe('doctor');
-      expect(parsed.data.identity).toBe('personal');
-      expect(Array.isArray(parsed.data.checks)).toBe(true);
-      expect(parsed.data.checks.length).toBeGreaterThan(0);
-      expect(parsed.data.summary.error).toBeGreaterThanOrEqual(1);
+      expect(parsed).toEqual({
+        ok: false,
+        command: 'doctor',
+        error: { message: 'command failed' }
+      });
     });
+
 
     it('"dss status --json" inside a bound-nothing git repo: ok:true, command "status", RepositoryBindingStatus fields', async () => {
       const repository = path.join(temporaryHome, 'repository');
@@ -314,6 +329,128 @@ describe('global --json (CLI, spawned process)', () => {
       const parsed = parseSoleJsonObject(result.stdout);
       expect(parsed.ok).toBe(false);
       expect(parsed.command).toBe('dss');
+    });
+
+    // Review finding #1: `link --recursive`'s partial-failure summary sets
+    // process.exitCode = 1 directly (never calls fail()/jsonFail()) — `ok`
+    // must still mirror that non-zero exit code. One repo's `.git`
+    // directory is made read-only so binding it fails while a sibling repo
+    // succeeds, reproducing the exact "N succeeded, M failed" partial case.
+    // Skipped when running as root: chmod-based write denial has no effect
+    // for root, so the induced failure (and thus the whole point of this
+    // test — a genuine partial failure) wouldn't reproduce.
+    const itUnlessRoot = (process.getuid?.() ?? 1) === 0 ? it.skip : it;
+    itUnlessRoot('"dss link --recursive --json" with a partial failure (one repo binds, one fails): ok:false, exit 1, generic error message', async () => {
+      const parentDirectory = path.join(temporaryHome, 'parent');
+      const repositoryA = path.join(parentDirectory, 'repoA');
+      const repositoryB = path.join(parentDirectory, 'repoB');
+      await fs.ensureDir(repositoryA);
+      await fs.ensureDir(repositoryB);
+      runGit(repositoryA, ['init']);
+      runGit(repositoryB, ['init']);
+      // repoB's .git directory becomes unwritable — binding it fails with
+      // EACCES while repoA (untouched) succeeds normally.
+      await fs.chmod(path.join(repositoryB, '.git'), 0o555);
+
+      const keyPath = path.join(temporaryHome, 'fake-key');
+      await fs.outputFile(keyPath, 'not a real key, only its path is checked');
+      await writeConfig([{ name: 'work', email: 'work@x.com', userName: 'Work', sshKeyPath: keyPath }]);
+
+      try {
+        const result = runCli(['link', 'work', '-y', '--recursive', parentDirectory, '--json']);
+
+        expect(result.status).toBe(1);
+        const parsed = parseSoleJsonObject(result.stdout);
+        expect(parsed).toEqual({
+          ok: false,
+          command: 'link',
+          error: { message: 'command failed' }
+        });
+      } finally {
+        // Restore permissions so the temp-directory cleanup in afterEach
+        // can actually remove repoB's .git directory.
+        await fs.chmod(path.join(repositoryB, '.git'), 0o755);
+      }
+    });
+  });
+
+  // Review finding #2: --help/--version + --json must emit ONLY the JSON
+  // object — no leaked help/version text before it — REGARDLESS of argv
+  // order (Commander's -v/-h handlers throw/exit as soon as they're
+  // encountered mid-parse, so `--json` appearing AFTER `-v`/`-h` in argv is
+  // the specific case that used to break: the option:json event never got
+  // a chance to fire before -v's handler ran).
+  describe('--help / --version + --json (order-independent)', () => {
+    it('"dss --help --json": ok:true, command "dss", data.help is Commander\'s full help text, nothing else on stdout', () => {
+      const result = runCli(['--help', '--json']);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.command).toBe('dss');
+      expect(typeof parsed.data.help).toBe('string');
+      expect(parsed.data.help).toContain('Usage: dss');
+      expect(parsed.data.help).toContain('Commands:');
+      expect(Object.keys(parsed.data)).toEqual(['help']);
+    });
+
+    it('"dss --json --help" (--json BEFORE --help): identical single-object output', () => {
+      const result = runCli(['--json', '--help']);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.command).toBe('dss');
+      expect(parsed.data.help).toContain('Usage: dss');
+    });
+
+    it('"dss -v --json" (-v BEFORE --json — the exact reported regression): ok:true, data.version, exit 0', () => {
+      const result = runCli(['-v', '--json']);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed).toEqual({
+        ok: true,
+        command: 'dss',
+        data: { version: expect.any(String) }
+      });
+      expect(parsed.data.version.length).toBeGreaterThan(0);
+    });
+
+    it('"dss --json -v" (--json BEFORE -v): identical single-object output', () => {
+      const result = runCli(['--json', '-v']);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.command).toBe('dss');
+      expect(typeof parsed.data.version).toBe('string');
+    });
+
+    it('"dss --version --json" (long flag form, both orders) also works', () => {
+      const first = runCli(['--version', '--json']);
+      const second = runCli(['--json', '--version']);
+
+      for (const result of [first, second]) {
+        expect(result.status).toBe(0);
+        const parsed = parseSoleJsonObject(result.stdout);
+        expect(parsed.ok).toBe(true);
+        expect(typeof parsed.data.version).toBe('string');
+      }
+    });
+
+    it('without --json, --help/-v still print their normal text (unchanged non-JSON behavior)', () => {
+      const help = runCli(['--help']);
+      const version = runCli(['-v']);
+
+      expect(help.status).toBe(0);
+      expect(help.stdout).toContain('Usage: dss');
+      // Not JSON — a plain-text help dump doesn't parse as one object.
+      expect(() => JSON.parse(help.stdout.trim())).toThrow();
+
+      expect(version.status).toBe(0);
+      expect(version.stdout.trim().length).toBeGreaterThan(0);
+      expect(() => JSON.parse(version.stdout.trim())).toThrow();
     });
   });
 
