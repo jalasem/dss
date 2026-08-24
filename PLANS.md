@@ -176,10 +176,10 @@ the product's front door.
 
 ### Phase 4 — Agents & automation (v2.0 reach)
 
-- [ ] Global `--json`, `--yes`, `DSS_NO_INPUT`/non-TTY behavior
-- [ ] Documented + tested exit codes (0/1/2/130)
-- [ ] AGENTS.md recipes shipped in package and README
-- [ ] Completions generated from the program definition; docs-drift test in CI
+- [x] Global `--json`, `--yes`, `DSS_NO_INPUT`/non-TTY behavior
+- [x] Documented + tested exit codes (0/1/2/130)
+- [x] AGENTS.md recipes shipped in package and README
+- [x] Completions generated from the program definition; docs-drift test in CI
 
 ### Phase 5 — Delight (v2.1)
 
