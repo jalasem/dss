@@ -4,6 +4,7 @@ import { UsageError } from '../../src/commands/prompts';
 import { UIHelper } from '../../src/commands/ui';
 import { EXIT_CODES } from '../../src/core/exitCodes';
 import { setJsonMode, captureCommanderOutput, _resetJsonStateForTests } from '../../src/commands/jsonOutput';
+import { ConfigVersionError } from '../../src/infra/store';
 
 // Phase 4 · Task 2 — unit-level coverage for the exit-code contract's 130
 // (cancelled) row, which can't be forced at the CLI level: spawnSync's
@@ -65,10 +66,29 @@ describe('handleTopLevelError', () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it('anything else rethrows unchanged', () => {
+  // Task 5 fix round: an unhandled error used to reach this fallthrough
+  // WITHOUT ever setting process.exitCode, which — combined with
+  // flushJson() deriving `ok` from process.exitCode at flush time — made
+  // --json mode report {ok:true} on a hard failure (see the JSON-mode
+  // describe block below). Non-JSON mode still rethrows for a genuinely-
+  // unexpected bug's stack trace, but the exit code is now set FIRST.
+  it('anything else still rethrows, but now sets process.exitCode to 1 BEFORE rethrowing', () => {
     const boom = new Error('boom');
     expect(() => handleTopLevelError(boom)).toThrow(boom);
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(EXIT_CODES.FAILURE);
+  });
+
+  // A ConfigVersionError (loadStore refusing an unrecognized/future config
+  // version) is a distinct, EXPECTED failure — it gets the same clean
+  // UIHelper.error()+exit-1 treatment as a UsageError, not a raw stack
+  // trace, even though it isn't a UsageError itself.
+  it('a ConfigVersionError prints its own message via UIHelper.error and sets process.exitCode to 1 without throwing', () => {
+    const error = new ConfigVersionError('Unsupported config version 3 in /x/config.json — this build of DSS only understands up to version 2.');
+
+    expect(() => handleTopLevelError(error)).not.toThrow();
+
+    expect(errorSpy).toHaveBeenCalledWith(error.message);
+    expect(process.exitCode).toBe(EXIT_CODES.FAILURE);
   });
 });
 
@@ -186,6 +206,40 @@ describe('handleTopLevelError (JSON mode)', () => {
       error: { message: 'missing or unknown subcommand' },
     });
     expect(process.exitCode).toBe(EXIT_CODES.USAGE);
+  });
+
+  // Task 5 fix round regression coverage: this is the exact case the review
+  // flagged — an unknown error (e.g. a ConfigVersionError propagating out of
+  // loadStore) used to flush {ok:true, data:{}} while the process went on to
+  // exit 1, because process.exitCode was never set before flushJson() ran.
+  it('1: a ConfigVersionError flushes {ok:false, error:{message}} and does NOT rethrow in JSON mode', () => {
+    setJsonMode('ls');
+    const error = new ConfigVersionError('Unsupported config version 3 in /x/config.json — this build of DSS only understands up to version 2.');
+
+    expect(() => handleTopLevelError(error)).not.toThrow();
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: false,
+      command: 'ls',
+      error: { message: error.message },
+    });
+    expect(process.exitCode).toBe(EXIT_CODES.FAILURE);
+  });
+
+  it('1: any other unknown error also flushes {ok:false, error:{message}} and does NOT rethrow in JSON mode (the JSON object is the output)', () => {
+    setJsonMode('ls');
+    const boom = new Error('boom: something unexpected broke');
+
+    expect(() => handleTopLevelError(boom)).not.toThrow();
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: false,
+      command: 'ls',
+      error: { message: 'boom: something unexpected broke' },
+    });
+    expect(process.exitCode).toBe(EXIT_CODES.FAILURE);
   });
 
   it('not in JSON mode: flushJson() never writes (UIHelper.error is still called exactly as the non-JSON describe block above already proves)', () => {

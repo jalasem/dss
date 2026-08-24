@@ -25,6 +25,21 @@ function emptyStore(): IStoreV2 {
   return { version: 2, identities: [], bindings: [], rules: [] };
 }
 
+/**
+ * Thrown by loadStore when a config file's `version` field is a shape this
+ * build refuses to guess about (numeric but newer than understood, or not a
+ * number at all) — a distinct class (rather than a plain Error) so the
+ * top-level error handler (src/commands/errorHandling.ts) can recognize it
+ * as an expected, cleanly-reportable failure (its own message, exit 1) in
+ * both --json and human output, instead of an unhandled-error stack trace.
+ */
+export class ConfigVersionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConfigVersionError';
+  }
+}
+
 function inferAlgorithm(sshKeyPath: string): IKeyInfo['algorithm'] {
   switch (path.basename(sshKeyPath)) {
     case 'id_ed25519':
@@ -192,7 +207,7 @@ export async function loadStore(): Promise<IStoreV2> {
     // falling through to migrateV1 here would treat its shape as v1 and
     // reduce it to an empty store, destroying data — hard-error instead.
     if (typeof version === 'number' && version > 2) {
-      throw new Error(
+      throw new ConfigVersionError(
         `Unsupported config version ${version} in ${CONFIG_PATH} — this build of DSS only understands up to version 2. ` +
         'Upgrade DSS before using this config file.'
       );
@@ -204,7 +219,7 @@ export async function loadStore(): Promise<IStoreV2> {
     // instead of guessing. (An ABSENT version still falls through below,
     // same as version === 1.)
     if (version !== undefined && typeof version !== 'number') {
-      throw new Error(
+      throw new ConfigVersionError(
         `Unrecognized config version ${JSON.stringify(version)} in ${CONFIG_PATH} — expected a numeric version. ` +
         'This build of DSS only understands versions 1 and 2.'
       );

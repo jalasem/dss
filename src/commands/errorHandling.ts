@@ -3,6 +3,7 @@ import { UIHelper } from './ui';
 import { isPromptExitError, UsageError } from './prompts';
 import { EXIT_CODES } from '../core/exitCodes';
 import { isJsonMode, jsonData, jsonFail, flushJson, takeCommanderOutput } from './jsonOutput';
+import { ConfigVersionError } from '../infra/store';
 
 // Commander's own usage-class errors (bad/missing invocation input) belong
 // in the same exit-2 bucket as our own UsageError — everything else about
@@ -68,16 +69,19 @@ export function mapCommanderExitCode(error: CommanderError): number {
  * a required confirm without -y in non-interactive mode) prints its message
  * and sets exit code 2; a CommanderError (Commander's own usage errors,
  * help, and version — see mapCommanderExitCode above) has already printed
- * its own message, so it's just mapped to the right exit code; anything
- * else rethrows.
+ * its own message, so it's just mapped to the right exit code; a
+ * ConfigVersionError (loadStore refusing an unrecognized/future config
+ * version — src/infra/store.ts) reports its own message and exits 1; any
+ * other unknown error also exits 1, then in JSON mode returns quietly (the
+ * flushed JSON object IS the output) or in non-JSON mode rethrows so a
+ * genuinely-unexpected bug's stack trace stays visible.
  *
- * In JSON mode (--json), each of the three handled cases ALSO records the
- * failure via jsonFail (skipped for a CommanderError success code — --help/
- * --version, which instead surface Commander's captured output as
- * `data.help`/`data.version` — see takeCommanderOutput) and flushes the
- * single JSON object to stdout before returning/exiting — flushJson() is
- * idempotent, so index.ts's own end-of-chain flush (or a second call here)
- * is always safe.
+ * In JSON mode (--json), every handled case ALSO records the failure via
+ * jsonFail (skipped for a CommanderError success code — --help/--version,
+ * which instead surface Commander's captured output as `data.help`/
+ * `data.version` — see takeCommanderOutput) and flushes the single JSON
+ * object to stdout before returning/exiting — flushJson() is idempotent, so
+ * index.ts's own end-of-chain flush (or a second call here) is always safe.
  *
  * IMPORTANT ordering: `process.exitCode` (or, for the cancelled path, the
  * code about to be passed to `process.exit()`) is assigned BEFORE
@@ -85,6 +89,17 @@ export function mapCommanderExitCode(error: CommanderError): number {
  * object's `ok` field from `process.exitCode` at the moment it's called
  * (see jsonOutput.ts), so flushing before the exit code is set would
  * report `ok:true` even for a failure.
+ *
+ * TASK 5 FIX ROUND: the final fallthrough used to `throw error` without
+ * EVER setting process.exitCode. flushJson() is called by index.ts's
+ * runAndFlush in a `finally` AFTER that rethrow propagates back out — with
+ * `ok` derived from `process.exitCode ?? 0`, a still-unset exit code at
+ * flush time reported `{ok:true, data:{}}` on stdout even though the
+ * process went on to exit 1 (Node's own unhandled-rejection default). A
+ * script parsing --json output saw success on a hard failure — a genuine
+ * violation of the "ok mirrors the exit code" contract. Every branch below,
+ * including the final fallthrough, now sets process.exitCode BEFORE
+ * returning/rethrowing.
  */
 export function handleTopLevelError(error: unknown): void {
   if (isPromptExitError(error)) {
@@ -144,5 +159,29 @@ export function handleTopLevelError(error: unknown): void {
     flushJson();
     return;
   }
+  if (error instanceof ConfigVersionError) {
+    process.exitCode = EXIT_CODES.FAILURE;
+    if (isJsonMode()) {
+      jsonFail(error.message);
+    } else {
+      UIHelper.error(error.message);
+    }
+    flushJson();
+    return;
+  }
+  // Any other unknown error (an infra failure not modeled by one of the
+  // cases above) still owes the exit-code/--json contract: set exit 1
+  // before doing anything else, so flushJson()'s `ok` (derived from
+  // process.exitCode) comes out correctly regardless of what happens next.
+  process.exitCode = EXIT_CODES.FAILURE;
+  if (isJsonMode()) {
+    jsonFail(error instanceof Error ? error.message : String(error));
+    flushJson();
+    return;
+  }
+  // Non-JSON mode: rethrow so a genuinely-unexpected bug's stack trace
+  // stays visible for debugging — process.exitCode is already set above, so
+  // index.ts's runAndFlush `finally { flushJson() }` (a no-op outside JSON
+  // mode) and Node's own unhandled-rejection exit both agree with it.
   throw error;
 }

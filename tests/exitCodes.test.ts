@@ -127,6 +127,96 @@ describe('exit-code contract (CLI, spawned process)', () => {
       const result = runCli(['doctor', 'personal']);
       expect(result.status).toBe(1);
     });
+
+    // Task 5 fix round: a ConfigVersionError (loadStore refusing a
+    // numeric-but-too-new or non-numeric config version) propagates out of
+    // the command promise unhandled by any of the CLI's other error
+    // branches — this exercises the top-level handler's ConfigVersionError
+    // case end-to-end (non-JSON): exit 1, with a readable message naming the
+    // version problem instead of a bare stack trace.
+    it('"dss ls" against a version:3 config — exit 1 with a readable message, no bare stack noise', async () => {
+      await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
+        version: 3,
+        identities: [{ name: 'future', email: 'f@x.com', userName: 'F', host: 'github.com' }],
+        bindings: [],
+        rules: []
+      });
+      const result = runCli(['ls']);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('version 3');
+      expect(result.stdout).not.toContain('at Object');
+      expect(result.stderr).not.toContain('at Object');
+    });
+
+    it('"dss ls" against a version:"2" (string) config — exit 1 with a readable message, no bare stack noise', async () => {
+      await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
+        version: '2',
+        identities: [],
+        bindings: [],
+        rules: []
+      });
+      const result = runCli(['ls']);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('version');
+      expect(result.stdout).not.toContain('at Object');
+      expect(result.stderr).not.toContain('at Object');
+    });
+  });
+
+  // Task 5 fix round: the review's Important finding — an unhandled error
+  // (a ConfigVersionError from loadStore, or any other error that isn't a
+  // UsageError/CommanderError/prompt-cancellation) used to reach the top
+  // level with process.exitCode still unset. flushJson() derives `ok` from
+  // process.exitCode AT FLUSH TIME, so --json mode reported
+  // `{ok:true, data:{}}` on stdout while the process still exited 1 — a
+  // script parsing --json output saw success on a hard failure. This block
+  // proves the fix end-to-end: exit 1 AND a single well-formed
+  // `{ok:false, error:{message}}` object, for both version-guard shapes.
+  describe('ConfigVersionError — --json contract (Task 5 fix round)', () => {
+    function parseSoleJsonObject(stdout: string): { ok: boolean; command: string; error?: { message: string }; data?: unknown } {
+      const trimmed = stdout.trim();
+      const parsed = JSON.parse(trimmed);
+      expect(trimmed).toBe(JSON.stringify(parsed));
+      return parsed;
+    }
+
+    it('"dss ls --json" against a version:3 config: exit 1, {ok:false, error:{message}} naming the version problem', async () => {
+      await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
+        version: 3,
+        identities: [{ name: 'future', email: 'f@x.com', userName: 'F', host: 'github.com' }],
+        bindings: [],
+        rules: []
+      });
+
+      const result = runCli(['ls', '--json']);
+
+      expect(result.status).toBe(1);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.command).toBe('ls');
+      expect(typeof parsed.error?.message).toBe('string');
+      expect(parsed.error?.message.length).toBeGreaterThan(0);
+      expect(parsed.error?.message).toContain('version 3');
+    });
+
+    it('"dss ls --json" against a version:"2" (string) config: exit 1, {ok:false, error:{message}} naming the version problem', async () => {
+      await fs.outputJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'), {
+        version: '2',
+        identities: [],
+        bindings: [],
+        rules: []
+      });
+
+      const result = runCli(['ls', '--json']);
+
+      expect(result.status).toBe(1);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.command).toBe('ls');
+      expect(typeof parsed.error?.message).toBe('string');
+      expect(parsed.error?.message.length).toBeGreaterThan(0);
+      expect(parsed.error?.message).toContain('version');
+    });
   });
 
   describe('2 — usage error', () => {
