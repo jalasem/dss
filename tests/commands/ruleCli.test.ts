@@ -62,12 +62,13 @@ describe('dss rule add|ls|rm CLI', () => {
     name: string,
     email: string,
     userName: string,
-    switchToIt: boolean
+    switchToIt: boolean,
+    keyType: 'none' | 'ed25519' = 'none'
   ): Promise<void> {
     const args = [
       'new', '--json',
       '--name', name, '--email', email, '--user', userName,
-      '--host', 'github.com', '--key', 'none'
+      '--host', 'github.com', '--key', keyType
     ];
     // -y makes the trailing "switch to it?" confirm always affirm; without
     // it, that confirm is optional and silently declines in JSON mode
@@ -116,6 +117,24 @@ describe('dss rule add|ls|rm CLI', () => {
       expect(await fs.pathExists(path.join(temporaryHome, '.dss', 'identities', 'work.gitconfig'))).toBe(true);
       const rulesFile = await fs.readFile(path.join(temporaryHome, '.dss', 'rules.gitconfig'), 'utf8');
       expect(rulesFile).toContain(`[includeIf "gitdir:${canonicalDir}/"]`);
+    });
+
+    it('a directory containing a space is added, quoted correctly, and actually resolved by real git (Minor fix round)', async () => {
+      const ruleDir = path.join(temporaryHome, 'code', 'my client');
+      await fs.ensureDir(ruleDir);
+      const repoDir = path.join(ruleDir, 'project');
+      await fs.ensureDir(repoDir);
+      runGit(repoDir, ['init']);
+
+      const result = runCli(['rule', 'add', ruleDir, 'work', '--json']);
+
+      expect(result.status).toBe(0);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.data.added.dir).toBe(await fs.realpath(ruleDir));
+
+      // Load-bearing: real git, not DSS, resolving a space-containing
+      // includeIf gitdir pattern correctly.
+      expect(runGit(repoDir, ['config', '--get', 'user.email'])).toBe('work@example.com');
     });
 
     it('expands ~ in the directory argument', async () => {
@@ -357,6 +376,72 @@ describe('dss rule add|ls|rm CLI', () => {
       expect(rmResult.status).toBe(0);
 
       expect(runGit(ruledRepo, ['config', '--get', 'user.email'])).toBe('work@example.com');
+    });
+
+    // Review fix round (Important #1): getGitUser now passes `--includes`
+    // to `git config --global`, so `dss doctor`'s "Rule drift" check must
+    // actually resolve a real match/mismatch verdict here — before the
+    // fix, this same setup reported "unable to check" instead (the
+    // include chain was never expanded).
+    it('"dss doctor" run from inside a ruled directory reports Rule drift: matches (not "unable to check")', async () => {
+      await createIdentity('personal', 'personal@example.com', 'Personal User', false);
+      const ruledParent = path.join(temporaryHome, 'code', 'acme');
+      const ruledRepo = path.join(ruledParent, 'project');
+      await fs.ensureDir(ruledRepo);
+      runGit(ruledRepo, ['init']);
+
+      const addResult = runCli(['rule', 'add', ruledParent, 'personal']);
+      expect(addResult.status).toBe(0);
+
+      const result = runCli(['doctor', 'personal'], ruledRepo);
+
+      expect(result.stdout).toContain('Directory rule');
+      expect(result.stdout).toContain(`${ruledParent} -> personal`);
+      expect(result.stdout).not.toContain('unable to check');
+      expect(result.stdout).toContain('Rule drift: matches');
+      // PLAIN mode renders a success status with no tag — a warning would
+      // read "warn: Rule drift: ...".
+      const driftLine = result.stdout.split('\n').find(line => line.includes('Rule drift: matches'));
+      expect(driftLine).not.toMatch(/^warn:/);
+    });
+
+    it('"dss doctor" reports a real Rule drift MISMATCH when the ruled identity\'s gitconfig has drifted from the store', async () => {
+      await createIdentity('personal', 'personal@example.com', 'Personal User', false);
+
+      const ruledParent = path.join(temporaryHome, 'code', 'acme');
+      const ruledRepo = path.join(ruledParent, 'project');
+      await fs.ensureDir(ruledRepo);
+      runGit(ruledRepo, ['init']);
+
+      const addResult = runCli(['rule', 'add', ruledParent, 'personal']);
+      expect(addResult.status).toBe(0);
+
+      // getGitUser() is deliberately --global-scoped (it must NOT pick up
+      // a repo-LOCAL binding override — that's "Repo binding"'s own
+      // concern, reported separately), so the realistic way to produce a
+      // genuine Rule-drift mismatch is what the check actually guards
+      // against: the ruled identity's OWN gitconfig file (~/.dss/identities/
+      // personal.gitconfig) having drifted from the store's current values
+      // — e.g. a hand-edit, or (pre-Task-5) a missed refresh. Simulate that
+      // directly, mirroring how the file could genuinely diverge without
+      // going through `dss rule add`/`dss edit`.
+      const identityGitconfigPath = path.join(temporaryHome, '.dss', 'identities', 'personal.gitconfig');
+      await fs.outputFile(
+        identityGitconfigPath,
+        '[user]\n\tname = "Stale Name"\n\temail = "stale@example.com"\n'
+      );
+
+      const result = runCli(['doctor', 'personal'], ruledRepo);
+
+      expect(result.stdout).toContain('Directory rule');
+      expect(result.stdout).toContain(`${ruledParent} -> personal`);
+      expect(result.stdout).not.toContain('unable to check');
+      // git resolves the STALE file's values (real include-chain
+      // resolution), which no longer match the store's "Personal User
+      // <personal@example.com>" — a genuine mismatch.
+      expect(result.stdout).toContain('Stale Name <stale@example.com>');
+      const driftLine = result.stdout.split('\n').find(line => line.includes('Rule drift') && line.includes('Stale Name'));
+      expect(driftLine).toMatch(/^warn:/);
     });
   });
 });

@@ -265,3 +265,115 @@ describe('"dss doctor" on a KEYED identity — must not hang on stdin (no intera
     expect(result.stdout).toContain('Doctor: work');
   });
 });
+
+// -----------------------------------------------------------------------
+// Review fix round (Important #1): getGitUser now passes `--includes` to
+// `git config --global`, so the "Git identity drift" check must actually
+// RESOLVE the effective identity through active.gitconfig's include chain
+// in a real, unmocked, includeIf-first-configured sandbox — not report
+// "unable to check", which is what it did before the fix (verified: this
+// same setup, run against the pre-fix getGitUser, printed "unable to
+// check" instead of a match/mismatch verdict).
+// -----------------------------------------------------------------------
+
+describe('"dss doctor" Git identity drift — resolves through the include chain (review fix: getGitUser --includes)', () => {
+  const temporaryDirectories: string[] = [];
+  let temporaryHome: string;
+
+  async function createTemporaryDirectory(): Promise<string> {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dss-doctor-drift-'));
+    temporaryDirectories.push(directory);
+    return fs.realpath(directory);
+  }
+
+  function cliEnvironment(): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      HOME: temporaryHome,
+      GIT_CONFIG_GLOBAL: path.join(temporaryHome, 'empty-global.gitconfig'),
+      GIT_CONFIG_NOSYSTEM: '1',
+      XDG_CONFIG_HOME: path.join(temporaryHome, '.config')
+    };
+  }
+
+  function runCli(args: string[]): { stdout: string; stderr: string; status: number | null } {
+    const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+      cwd: temporaryHome,
+      encoding: 'utf8',
+      env: cliEnvironment(),
+      input: '',
+      timeout: 10000
+    });
+    return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+  }
+
+  beforeAll(() => {
+    if (process.env.DSS_SKIP_TEST_BUILD === '1') return;
+    execFileSync('npm', ['run', 'build'], {
+      cwd: path.join(__dirname, '../..'),
+      stdio: 'inherit'
+    });
+  });
+
+  beforeEach(async () => {
+    temporaryHome = await createTemporaryDirectory();
+    await fs.outputFile(path.join(temporaryHome, 'empty-global.gitconfig'), '');
+    await fs.ensureDir(path.join(temporaryHome, '.config'));
+  });
+
+  afterEach(async () => {
+    await Promise.all(temporaryDirectories.splice(0).map(directory => fs.remove(directory)));
+  });
+
+  it('reports a MATCH (not "unable to check") once an identity is switched to via the includeIf-first active.gitconfig', () => {
+    const created = runCli([
+      'new', '--json', '-y',
+      '--name', 'work', '--email', 'work@example.com', '--user', 'Work User',
+      '--host', 'github.com', '--key', 'none'
+    ]);
+    expect(created.status).toBe(0);
+
+    const result = runCli(['doctor', 'work']);
+
+    // Exit 1 here comes from the unrelated "no SSH key configured" hard
+    // failure (this identity was created with --key none) — not from the
+    // drift check, which is exactly what this test is isolating.
+    expect(result.stdout).toContain('Git identity drift');
+    expect(result.stdout).not.toContain('unable to check');
+    expect(result.stdout).toContain('Work User <work@example.com>');
+    // PLAIN mode (non-TTY, this spawned process's default) renders a
+    // SUCCESS status with no tag at all (UIHelper.printStatus's
+    // plainTagByStatus.success === '') — a warning/error line always gets
+    // an explicit "warn: "/"error: " prefix. A match is therefore the bare
+    // "Git identity: ..." line, with neither prefix.
+    const driftLine = result.stdout.split('\n').find(line => line.includes('Git identity: Work User'));
+    expect(driftLine).toBeDefined();
+    expect(driftLine).not.toMatch(/^(warn|error):/);
+  });
+
+  it('reports a real MISMATCH (not "unable to check") when checking a non-active identity', () => {
+    const createActive = runCli([
+      'new', '--json', '-y',
+      '--name', 'work', '--email', 'work@example.com', '--user', 'Work User',
+      '--host', 'github.com', '--key', 'none'
+    ]);
+    expect(createActive.status).toBe(0);
+    // Created WITHOUT -y: stays inactive (global default remains "work").
+    const createOther = runCli([
+      'new', '--json',
+      '--name', 'other', '--email', 'other@example.com', '--user', 'Other User',
+      '--host', 'github.com', '--key', 'none'
+    ]);
+    expect(createOther.status).toBe(0);
+
+    const result = runCli(['doctor', 'other']);
+
+    expect(result.stdout).toContain('Git identity drift');
+    expect(result.stdout).not.toContain('unable to check');
+    // The effective (global) identity is still "work" — a genuine mismatch
+    // against the "other" identity being checked, reported as a warning.
+    expect(result.stdout).toContain('Work User <work@example.com>');
+    const driftLine = result.stdout.split('\n').find(line => line.includes('Git identity: Work User'));
+    expect(driftLine).toMatch(/^warn:/);
+  });
+});

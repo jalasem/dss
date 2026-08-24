@@ -9,10 +9,25 @@ import { slugify } from '../core/identity';
 
 const execFileAsync = promisify(execFile);
 
-/** Reads the global Git user.name and user.email. */
+/**
+ * Reads the EFFECTIVE global Git user.name and user.email — i.e. what git
+ * itself would actually use, not just what's literally written in
+ * ~/.gitconfig. `--includes` is required here: git's documented default is
+ * to SKIP `include.path`/`includeIf` expansion whenever a scope flag
+ * (`--global`/`--local`/`--system`) restricts the read, so a bare `git
+ * config --global user.name` returns unset (exit 1) in this codebase's
+ * own includeIf-first setup — DSS never writes user.name/user.email
+ * directly into ~/.gitconfig, only into active.gitconfig (and, once ruled,
+ * a per-identity gitconfig), both reached via `include.path`. Without
+ * `--includes`, every caller of getGitUser (doctor's "Git identity drift"
+ * and "Rule drift" checks) would report "unable to check" in every normal
+ * DSS-managed environment — verified live: identical invocation without
+ * `--includes` exits 1/empty, with `--includes` resolves through the
+ * include chain to the actual value git would use.
+ */
 export async function getGitUser(): Promise<{ userName: string; email: string }> {
-  const { stdout: userNameOutput } = await execFileAsync('git', ['config', '--global', 'user.name']);
-  const { stdout: emailOutput } = await execFileAsync('git', ['config', '--global', 'user.email']);
+  const { stdout: userNameOutput } = await execFileAsync('git', ['config', '--global', '--includes', 'user.name']);
+  const { stdout: emailOutput } = await execFileAsync('git', ['config', '--global', '--includes', 'user.email']);
   return { userName: userNameOutput.trim(), email: emailOutput.trim() };
 }
 

