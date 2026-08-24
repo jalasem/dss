@@ -19,7 +19,8 @@ import {
   showRepositoryBindingStatus,
   unbindSpaceFromRepository
 } from './commands/binding';
-import { isPromptExitError, setAssumeYes, UsageError } from './commands/prompts';
+import { setAssumeYes } from './commands/prompts';
+import { handleTopLevelError } from './commands/errorHandling';
 import { dashboard } from './commands/dashboard';
 import { doctor } from './commands/doctor';
 
@@ -37,6 +38,16 @@ program
   // action runs, including the bare-`dss` dashboard path.
   .option('-y, --yes', 'Assume "yes" for every confirmation prompt')
   .on('option:yes', () => setAssumeYes(true));
+
+// Makes Commander THROW a CommanderError instead of calling process.exit
+// itself for every one of its own errors (unknown command/option, missing
+// argument, --help, --version, ...) — required so those errors flow
+// through the same top-level catch chain as UsageError/ExitPromptError
+// below (handleTopLevelError maps the thrown CommanderError to this CLI's
+// exit-code contract). Must run before any `program.command(...)` call:
+// Commander copies the exit-override callback onto a subcommand only at
+// the moment that subcommand is created.
+program.exitOverride();
 
 /**
  * Registers `oldNameAndArgs` as a legacy alias for `newName`: a hidden
@@ -202,29 +213,12 @@ deprecatedAlias('inspect [identityName]', 'doctor', doctor);
 // `onboard`'s tutorial is replaced by the automatic first-run flow that
 // `dss ls` / `dss use` trigger when no identities exist yet.
 
-/**
- * Shared top-level error handler for both the bare-`dss` dashboard path and
- * the normal Commander dispatch path: a cancelled prompt exits quietly
- * (130) with a friendly message instead of an unhandled-rejection stack
- * trace; a UsageError from a guarded prompt wrapper (src/commands/prompts.ts
- * — a missing required flag/positional, or a required confirm without -y in
- * non-interactive mode) prints its message and sets exit code 2 — the single
- * place that owns turning UsageError into a process exit code (Task 2 will
- * extend this same exit-2 contract to Commander's own usage errors);
- * anything else rethrows.
- */
-function handleTopLevelError(error: unknown): void {
-  if (isPromptExitError(error)) {
-    UIHelper.info('Prompt closed before an answer was given. No changes were made.');
-    process.exit(130);
-  }
-  if (error instanceof UsageError) {
-    UIHelper.error(error.message);
-    process.exitCode = 2;
-    return;
-  }
-  throw error;
-}
+// handleTopLevelError (the shared top-level error handler for both the
+// bare-`dss` dashboard path and the normal Commander dispatch path below)
+// lives in src/commands/errorHandling.ts, alongside the CommanderError exit
+// code mapping it applies — see that module for the full contract; kept out
+// of this file so it can be unit-tested without importing this file's own
+// top-level parse/dispatch side effect.
 
 // Bare `dss` (no args at all) runs the context dashboard instead of
 // Commander's own dispatch — `dss --help`/`dss <command> --help` are

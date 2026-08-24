@@ -11,6 +11,7 @@ import {
 import { IConfig, ISpace } from '../core/types';
 import { UIHelper } from './ui';
 import { fail } from './fail';
+import { EXIT_CODES } from '../core/exitCodes';
 import { findSpace } from '../core/identity';
 import { loadStore, saveStore, toSpace, recordBinding, removeBinding } from '../infra/store';
 
@@ -133,7 +134,7 @@ export async function bindSpaceToRepository(
     }
     result.successful.forEach(printStatus);
     result.failed.forEach(item => UIHelper.error(`${item.repositoryPath}: ${item.message}`));
-    if (result.failed.length > 0) process.exitCode = 1;
+    if (result.failed.length > 0) process.exitCode = EXIT_CODES.FAILURE;
     UIHelper.info(`${result.successful.length} succeeded, ${result.failed.length} failed.`);
   } catch (error) {
     // A UsageError from a guarded prompt (resolveSpace's identity picker,

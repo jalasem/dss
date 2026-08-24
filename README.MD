@@ -137,6 +137,27 @@ Each binding is a private config file under `.git/`, referenced from the reposit
 
 DSS output is calm and scriptable: one accent color, a small glyph set (`●` `✓` `✗` `!`) instead of emoji, and no box-drawing. It respects `NO_COLOR` and automatically degrades to plain ASCII whenever stdout isn't a TTY, so piped or CI output stays greppable. A machine-readable `--json` mode is planned but not available yet.
 
+## Exit codes
+
+DSS follows a deterministic four-code contract, so scripts and coding agents can branch on `$?` instead of scraping output:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`   | Success. |
+| `1`   | Operational failure — the command ran, but couldn't complete (e.g. an identity, key, or binding that isn't in the state you asked for). |
+| `2`   | Usage error — the invocation itself was malformed or incomplete (unknown command/option, a missing required argument, or a required prompt with no way to answer it non-interactively). |
+| `130` | Cancelled — a prompt was closed (Ctrl+C, or stdin closed) before it was answered. |
+
+Examples:
+
+```bash
+dss use nope            # exit 1 — "nope" isn't an existing identity (operational, not a usage mistake)
+DSS_NO_INPUT=1 dss use  # exit 2 — missing the required identityName argument, and no TTY to prompt for it
+dss new                 # Ctrl+C at the first prompt → exit 130
+```
+
+Deprecated aliases (`dss list`, `dss switch`, `dss add`, ...) follow the exact same contract as the command they delegate to.
+
 ## Development
 
 ### Contributing

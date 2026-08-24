@@ -7,6 +7,7 @@ import { checkKeyLoadedInAgent, checkSshConfigHost, checkHostAccess } from '../i
 import { getGitUser } from '../infra/git';
 import { UIHelper } from './ui';
 import { fail } from './fail';
+import { EXIT_CODES } from '../core/exitCodes';
 
 type CheckStatus = 'success' | 'error' | 'warning' | 'info';
 
@@ -194,6 +195,6 @@ export async function doctor(identityName?: string): Promise<void> {
   }
 
   if (run.sawHardFailure) {
-    process.exitCode = 1;
+    process.exitCode = EXIT_CODES.FAILURE;
   }
 }

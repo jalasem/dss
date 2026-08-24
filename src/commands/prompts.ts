@@ -1,5 +1,6 @@
 import { confirm, password, select, input, checkbox } from '@inquirer/prompts';
 import { KNOWN_HOSTS } from '../core/hosts';
+import { EXIT_CODES } from '../core/exitCodes';
 
 // @inquirer/prompts throws ExitPromptError when stdin closes (piped input
 // exhausted, non-interactive shell) or the user presses Ctrl+C.
@@ -112,7 +113,7 @@ export function assumeYes(): boolean {
  * apply via `process.exitCode` — see handleTopLevelError.
  */
 export class UsageError extends Error {
-  readonly exitCode = 2;
+  readonly exitCode = EXIT_CODES.USAGE;
   constructor(message: string) {
     super(message);
     this.name = 'UsageError';
