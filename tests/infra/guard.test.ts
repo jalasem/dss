@@ -65,12 +65,46 @@ describe('infra/guard', () => {
   });
 
   describe('isDssHook', () => {
-    it('is true for content carrying the marker', () => {
-      expect(isDssHook(`#!/bin/sh\n${HOOK_MARKER}\necho hi\n`)).toBe(true);
+    it('is true for the exact HOOK_SCRIPT content DSS itself writes', () => {
+      expect(isDssHook(HOOK_SCRIPT)).toBe(true);
     });
 
-    it('is false for a foreign hook without the marker', () => {
+    it('is true even with extra content appended after the marker line (only the first two lines are checked)', () => {
+      expect(isDssHook(`${HOOK_SCRIPT}\n# a hand-added extra line\necho extra\n`)).toBe(true);
+    });
+
+    it('is false for a foreign hook without the marker at all', () => {
       expect(isDssHook('#!/bin/sh\necho "some other tool\'s hook"\n')).toBe(false);
+    });
+
+    // Regression case for a live-reproduced bug: the previous implementation
+    // was a bare `content.includes(HOOK_MARKER)` substring search, which
+    // misidentified ANY hook that merely mentions the marker text anywhere
+    // (e.g. inside an echo string or an unrelated comment) as DSS-owned —
+    // `dss guard install` then silently OVERWROTE such a foreign hook
+    // (exit 0, file clobbered), and `dss guard uninstall` would have
+    // deleted it, both violating the brief's hard rule against ever
+    // touching a hook DSS didn't write. Detection must be anchored to the
+    // exact marker LINE, in the exact position (line 2, after the exact
+    // shebang) DSS's own writeHook always produces — not "the text appears
+    // somewhere in the file".
+    it('is false when the marker text merely appears embedded in an unrelated line (the live-reproduced bug)', () => {
+      const foreignHookMentioningMarkerText = [
+        '#!/bin/sh',
+        `echo "note: unrelated to ${HOOK_MARKER} - do not confuse the two"`,
+        'some-other-tools-pre-commit-check --strict'
+      ].join('\n');
+
+      expect(isDssHook(foreignHookMentioningMarkerText)).toBe(false);
+    });
+
+    it('is false when only the shebang matches but the marker line is altered/missing', () => {
+      expect(isDssHook('#!/bin/sh\n# dss-guard v1 (hand-edited, not the real marker line)\necho hi\n')).toBe(false);
+    });
+
+    it('is false when the marker line is exactly right but the shebang differs', () => {
+      const withDifferentShebang = HOOK_SCRIPT.replace('#!/bin/sh', '#!/usr/bin/env bash');
+      expect(isDssHook(withDifferentShebang)).toBe(false);
     });
   });
 

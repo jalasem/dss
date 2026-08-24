@@ -6,10 +6,21 @@ import { gitEnvironment } from './repoBinding';
 
 const execFileAsync = promisify(execFile);
 
-/** The comment line every DSS-installed pre-commit hook carries — the sole
- * signal used to tell a DSS-written hook apart from a foreign one someone
- * else installed. Never overwrite/remove a hook that lacks it. */
+/** Short form of the marker, for error/status MESSAGES only (e.g.
+ * "missing ..."). NOT used for detection — see MARKER_LINE/isDssHook below,
+ * a bare substring match on this would misidentify a foreign hook that
+ * merely mentions this text (e.g. inside an unrelated echo/comment) as
+ * DSS-owned. */
 export const HOOK_MARKER = '# dss-guard v1';
+
+const SHEBANG_LINE = '#!/bin/sh';
+
+/** The exact marker comment LINE every DSS-installed pre-commit hook
+ * carries as its second line. Detection (isDssHook) requires this exact
+ * line — not merely text appearing somewhere in the file — so a foreign
+ * hook can never be misidentified as DSS-owned just by mentioning the
+ * marker text in passing. */
+const MARKER_LINE = `${HOOK_MARKER} — installed by \`dss guard install\`; remove with \`dss guard uninstall\``;
 
 /**
  * The exact pre-commit hook script `dss guard install` writes (brief §3):
@@ -17,8 +28,8 @@ export const HOOK_MARKER = '# dss-guard v1';
  * without `dss` on PATH never bricks `git commit` — the hook silently
  * no-ops (exit 0) instead of failing every commit with "command not found".
  */
-export const HOOK_SCRIPT = `#!/bin/sh
-${HOOK_MARKER} — installed by \`dss guard install\`; remove with \`dss guard uninstall\`
+export const HOOK_SCRIPT = `${SHEBANG_LINE}
+${MARKER_LINE}
 command -v dss >/dev/null 2>&1 || exit 0
 dss guard check --quiet || exit 1
 `;
@@ -50,10 +61,23 @@ export async function readExistingHook(hookPath: string): Promise<string | undef
   }
 }
 
-/** Whether `content` carries the DSS marker comment — the only thing that
- * distinguishes a hook DSS wrote from one it must never touch. */
+/**
+ * Whether `content` is a hook DSS wrote — the only thing that
+ * distinguishes a hook DSS wrote from one it must never touch (overwrite
+ * on install, delete on uninstall). Anchored to the exact FIRST TWO lines
+ * (shebang, then the marker comment) matching, byte-for-byte (after outer
+ * whitespace trim), what `writeHook` always writes — deliberately NOT a
+ * substring search anywhere in the file, which would misidentify a
+ * foreign hook as DSS-owned merely for mentioning the marker text in an
+ * unrelated echo/comment (a real, live-reproduced bug: such a hook was
+ * silently overwritten by `install` and would have been deleted by
+ * `uninstall`). Content after line 2 is intentionally not checked, so a
+ * hand-edited-but-still-DSS-installed hook (extra lines appended below the
+ * marker) is still recognized as DSS's own.
+ */
 export function isDssHook(content: string): boolean {
-  return content.includes(HOOK_MARKER);
+  const lines = content.split('\n');
+  return lines[0]?.trim() === SHEBANG_LINE && lines[1]?.trim() === MARKER_LINE;
 }
 
 /** Atomically writes the guard hook to `hookPath` and marks it executable

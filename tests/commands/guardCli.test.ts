@@ -198,6 +198,32 @@ describe('dss guard install|uninstall|check CLI', () => {
       const content = await fs.readFile(hookPath, 'utf8');
       expect(content).toContain('not dss'); // untouched
     });
+
+    // Regression (Important finding, reviewer-reproduced live): a foreign
+    // hook that merely MENTIONS the marker text — e.g. inside an echo
+    // string, not as DSS's own marker line in the right position — must
+    // still be refused, not silently overwritten.
+    it('refuses (exit 1) to overwrite a foreign hook that merely mentions the marker text embedded in an unrelated line', async () => {
+      const repoDir = await initRepo('repo-foreign-embedded-marker');
+      const hookPath = path.join(repoDir, '.git', 'hooks', 'pre-commit');
+      const foreignContent = [
+        '#!/bin/sh',
+        'echo "note: unrelated to # dss-guard v1 - do not confuse the two"',
+        'some-other-tools-pre-commit-check --strict'
+      ].join('\n') + '\n';
+      await fs.ensureDir(path.dirname(hookPath));
+      await fs.writeFile(hookPath, foreignContent, { mode: 0o755 });
+
+      const result = runCli(['guard', 'install', '--json'], repoDir);
+
+      expect(result.status).toBe(1);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.error.message).toContain('not written by DSS');
+      expect(parsed.error.message).toContain('dss guard check --quiet || exit 1');
+
+      const contentAfter = await fs.readFile(hookPath, 'utf8');
+      expect(contentAfter).toBe(foreignContent); // byte-identical — untouched
+    });
   });
 
   describe('dss guard uninstall', () => {
@@ -238,6 +264,30 @@ describe('dss guard install|uninstall|check CLI', () => {
       expect(parsed.error.message).toContain('not written by DSS');
       const content = await fs.readFile(hookPath, 'utf8');
       expect(content).toContain('not dss'); // untouched
+    });
+
+    // Same regression as install's own case above — uninstall must not
+    // delete a foreign hook just because it happens to mention the marker
+    // text somewhere in its content.
+    it('refuses (exit 1) to remove a foreign hook that merely mentions the marker text embedded in an unrelated line', async () => {
+      const repoDir = await initRepo('repo-foreign-embedded-marker');
+      const hookPath = path.join(repoDir, '.git', 'hooks', 'pre-commit');
+      const foreignContent = [
+        '#!/bin/sh',
+        'echo "note: unrelated to # dss-guard v1 - do not confuse the two"',
+        'some-other-tools-pre-commit-check --strict'
+      ].join('\n') + '\n';
+      await fs.ensureDir(path.dirname(hookPath));
+      await fs.writeFile(hookPath, foreignContent, { mode: 0o755 });
+
+      const result = runCli(['guard', 'uninstall', '--json'], repoDir);
+
+      expect(result.status).toBe(1);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.error.message).toContain('not written by DSS');
+
+      const contentAfter = await fs.readFile(hookPath, 'utf8');
+      expect(contentAfter).toBe(foreignContent); // byte-identical — untouched
     });
   });
 
