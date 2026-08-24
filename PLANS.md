@@ -160,10 +160,10 @@ the product's front door.
 - [x] ssh-config handling rewritten as parse-don't-splice with backup, per-host blocks
 - [x] `dss key show|copy|rotate`
 - [x] Rename integrity for bindings: renaming an identity updates (or prompts re-bind of) repo-local bindings whose `core.sshCommand` references the moved key path (Phase 1 ships a warning only)
-- [ ] Note for cross-cutting checklist items: name the call sites to sweep explicitly (Phase 1's "slug consistency"/"exit codes" items were scoped by symptom, and batchOperations/repoBindingCommands were initially missed)
-- [ ] Binding refresh completeness: `bulkUpdateSpaces` and `dss key rotate` refresh the global active identity via `reapplyActiveIdentity` but do NOT refresh repo-local `dss bind` bindings for a bound identity they mutate (only `modifySpace` does). Fold binding refresh into `reapplyActiveIdentity` (or a sibling) and call it from all three. (Parked from Phase 2 final review — recoverable via re-bind/switch.)
-- [ ] Harden `loadStore` to error on any non-numeric or unexpected `version`; add defensive infra mocks to `tests/commands/batchExportImport.test.ts` (Phase 2 final-review non-blocking residuals)
-- [ ] Harden `doctor`'s host-auth `ssh` invocation with `-o BatchMode=yes -o ConnectTimeout=<n>` so it never prompts on `/dev/tty` and fails fast in CI (Phase 3 final-review minor; borderline Phase 4)
+- [x] Note for cross-cutting checklist items: name the call sites to sweep explicitly (Phase 1's "slug consistency"/"exit codes" items were scoped by symptom, and batchOperations/repoBindingCommands were initially missed)
+- [x] Binding refresh completeness: `bulkUpdateSpaces` and `dss key rotate` refresh the global active identity via `reapplyActiveIdentity` but do NOT refresh repo-local `dss bind` bindings for a bound identity they mutate (only `modifySpace` does). Fold binding refresh into `reapplyActiveIdentity` (or a sibling) and call it from all three. (Parked from Phase 2 final review — recoverable via re-bind/switch.)
+- [x] Harden `loadStore` to error on any non-numeric or unexpected `version`; add defensive infra mocks to `tests/commands/batchExportImport.test.ts` (Phase 2 final-review non-blocking residuals)
+- [x] Harden `doctor`'s host-auth `ssh` invocation with `-o BatchMode=yes -o ConnectTimeout=<n>` so it never prompts on `/dev/tty` and fails fast in CI (Phase 3 final-review minor; borderline Phase 4)
 
 ### Phase 3 — Surface & voice (v2.0 UX)
 
@@ -183,7 +183,7 @@ the product's front door.
 
 ### Phase 5 — Delight (v2.1)
 
-- [ ] Rules engine (`dss rule`) compiled to `includeIf gitdir:`
-- [ ] `dss clone` (rule/host-aware identity selection + auto-bind)
-- [ ] Wrong-identity guard in `doctor` + opt-in pre-commit hook
-- [ ] `dss prompt` segment with starship/oh-my-zsh recipes
+- [x] Rules engine (`dss rule`) compiled to `includeIf gitdir:`
+- [x] `dss clone` (rule/host-aware identity selection + auto-bind)
+- [x] Wrong-identity guard in `doctor` + opt-in pre-commit hook
+- [x] `dss prompt` segment with starship/oh-my-zsh recipes
