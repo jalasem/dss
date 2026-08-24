@@ -216,6 +216,29 @@ describe('docs drift: recipe payload shapes (CLI, spawned process)', () => {
     expectDataKeys(parsed.data, ['removed', 'rules']);
   });
 
+  // A LOCAL bare repo as the clone source (file-system path — parseGitUrl's
+  // local-path form, host undefined) — see src/core/gitUrl.ts and the
+  // AGENTS.md clone recipe's note that a local-path clone skips host
+  // matching. Never touches the network, matching this whole file's
+  // no-network policy.
+  it('"dss clone <local bare repo> --json": data keys match AGENTS.md\'s `{ cloned, url, identity, reason, bound }`', async () => {
+    await writeConfig([{ name: 'x', email: 'x@y.z', userName: 'X', sshKeyPath: '' }]);
+    const bareRepo = path.join(temporaryHome, 'fixtures', 'source.git');
+    await fs.ensureDir(path.dirname(bareRepo));
+    execFileSync('git', ['init', '--bare', bareRepo], {
+      env: cliEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const dest = path.join(temporaryHome, 'clone-dest');
+
+    const result = runCli(['clone', bareRepo, dest, '--identity', 'x', '--json']);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['cloned', 'url', 'identity', 'reason', 'bound']);
+  });
+
   it('"dss config import --json -y": data keys match AGENTS.md\'s `{ imported, skipped }`', async () => {
     await writeConfig([{ name: 'x', email: 'x@y.z', userName: 'X', sshKeyPath: '' }]);
     const exportPath = path.join(temporaryHome, 'export.json');

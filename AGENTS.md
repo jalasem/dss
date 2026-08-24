@@ -115,9 +115,23 @@ dss rule rm ~/code/acme --json
 ```
 `ls data: { rules: [{ dir, identity }] }` · `rm data: { removed: string, rules: number }`
 
+Clone a repository with the right identity from the first clone (picked by `-i/--identity` >
+directory rule matching the destination > exactly-one host match > an error naming
+`-i/--identity` if none of those resolve it non-interactively — never guessed):
+
+```bash
+dss clone git@github.com:acme/api.git --json
+```
+`data: { cloned: string, url: string, identity: string, reason: "flag" | "rule" | "host" | "selected", bound: boolean }`.
+`reason` is which selection step won. A keyed identity on an ssh URL (scp-like or `ssh://`)
+clones with that identity's key (`GIT_SSH_COMMAND`); https/`git://`/local-path URLs never need
+one. A local filesystem path is a valid URL too (`host` comes back unset, skipping the
+host-match step) — useful for cloning a fixture or another local repository. `bound` is `false`
+(not a failure — exit `0`) when the clone itself succeeded but the post-clone bind couldn't be
+completed.
+
 ## Notes
 
 - `dss <command> --help` documents every flag for that command; in `--json` mode,
   `--help`/`--version` also emit JSON (`data.help` / `data.version`) instead of plain text.
-- Repo cloning and prompt templates are not part of this CLI (planned separately, not yet
-  available).
+- Prompt templates are not part of this CLI (planned separately, not yet available).

@@ -46,8 +46,11 @@ async function resolveSpace(spaceName?: string): Promise<ISpace | undefined> {
 }
 
 /** Best-effort: updates the binding registry after a successful bind/unbind
- * without failing the overall operation if the registry write fails. */
-async function updateBindingRegistry(
+ * without failing the overall operation if the registry write fails.
+ * Exported so `dss clone` (src/commands/clone.ts) can record its own
+ * post-clone bind through the exact same path `dss link` uses, instead of
+ * duplicating this try/catch-and-warn shape. */
+export async function updateBindingRegistry(
   update: (store: Awaited<ReturnType<typeof loadStore>>) => void
 ): Promise<void> {
   try {

@@ -21,6 +21,7 @@ import {
 import { setAssumeYes } from '../commands/prompts';
 import { doctor } from '../commands/doctor';
 import { addRule, listRules, rmRule } from '../commands/rule';
+import { cloneRepository } from '../commands/clone';
 import { isJsonMode, captureCommanderOutput } from '../commands/jsonOutput';
 
 export interface BuiltProgram {
@@ -230,6 +231,12 @@ export function buildProgram(): BuiltProgram {
     .command("completion [shell]")
     .description("Generate shell completion script (bash, zsh, fish)")
     .action((shell?: string) => generateCompletionScript(shell, program));
+
+  program
+    .command('clone <url> [directory]')
+    .description('Clone a repository with the right identity (rule/host-aware selection), binding it automatically')
+    .option('-i, --identity <name>', 'Use this identity instead of auto-selecting one')
+    .action(cloneRepository);
 
   program
     .command('doctor [identityName]')

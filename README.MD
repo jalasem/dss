@@ -80,6 +80,7 @@ Identities are stored under `~/.dss/spaces/config.json` (schema `version: 2`, ve
 | `dss rm [identityName]` | Remove an identity; `--dry-run` previews it. Cannot remove the active identity. Key files are **not** deleted from disk |
 | `dss link [identityName]` | Bind an identity to the current repository (or `-p <path>` / `-r [parent]` for recursive binding); `--dry-run` previews |
 | `dss unlink` | Remove the repo-local binding (`-p <path>` for an explicit repo) |
+| `dss clone <url> [directory]` | Clone a repository with the right identity (rule/host-aware selection), binding it automatically; `-i/--identity <name>` overrides selection |
 | `dss rule add\|ls\|rm <directory> [identityName]` | Add/list/remove a directory rule: an identity that applies automatically under a directory tree, compiled to a native git `includeIf` |
 | `dss key show\|copy\|rotate [identityName]` | Print, clipboard-copy, or regenerate an identity's SSH key |
 | `dss config export\|import [path]` | Back up or restore identity configuration (SSH keys are never included) |
@@ -149,6 +150,29 @@ Each rule compiles to a native git `includeIf "gitdir:<directory>/"` section in 
 **Precedence** (most to least specific): a repo-local **binding** (`dss link`) wins over a matching **directory rule**, which wins over the **global** active identity (`dss use`) — matching the order git itself resolves conditional includes and repo-local config.
 
 Directories must exist to add a rule (`~` is expanded, symlinks resolved); the identity doesn't need a key. Removing every rule leaves an empty (harmless) `rules.gitconfig` — its `include.path` entry stays in place. `dss doctor` flags rule drift (the effective git identity in the current directory not matching a configured rule) the same way it flags a stale binding or global switch.
+
+## Cloning with the right identity
+
+`dss clone` gets you the right identity from the FIRST clone — no `git clone` followed by a separate `dss link` step:
+
+```bash
+dss clone git@github.com:acme/api.git            # picks an identity, clones, binds
+dss clone git@github.com:acme/api.git ~/code/api  # explicit destination
+dss clone https://github.com/acme/api.git -i work # override selection with -i/--identity
+```
+
+It understands scp-like ssh (`git@host:org/repo.git`), `ssh://host[:port]/...`, `https://`/`http://`, `git://`, and a local filesystem path (for cloning a fixture, a bundle, or another local repository). The destination defaults to `./<repoName>` (the URL's basename, minus `.git`) under the current directory, and must not already exist.
+
+**Identity selection** (first hit wins — DSS never guesses on ambiguity):
+
+1. `-i/--identity <name>` — explicit override.
+2. A **directory rule** matching where the clone will live (see [Directory rules](#directory-rules) above) — cloning into a ruled directory tree just works, same as an existing repository there would.
+3. A **host match**: if exactly one identity's host matches the URL's host, it's picked automatically; several prompt interactively (or exit `2` non-interactively); a local-path URL has no host, so this step is always skipped.
+4. Otherwise, an interactive pick among every identity; non-interactively, exit `2` naming `-i/--identity`.
+
+A keyed identity cloning over ssh (scp-like or `ssh://`) runs with `GIT_SSH_COMMAND` set to that identity's key, same as a repo-local binding's `core.sshCommand`; a keyless identity on an ssh URL warns and falls back to your ambient SSH setup. https/`git://`/local clones never need a key. Git's own clone progress streams to your terminal as it happens; on failure, `dss clone` exits `1` with git's own error.
+
+Once the clone succeeds, `dss clone` binds it to the chosen identity the same way `dss link` would (same underlying call, same binding registry) — a bind failure after a successful clone is a warning, not a failure: the clone stands, and `--json`'s `bound` comes back `false`.
 
 ## Output
 
@@ -223,6 +247,7 @@ src/
 ├── commands/              # Thin, prompt-owning command handlers
 │   ├── spaces.ts          # addSpace, listSpaces, switchSpace, removeSpace, modifySpace
 │   ├── binding.ts         # dss link/unlink/status
+│   ├── clone.ts            # dss clone (rule/host-aware identity selection + auto-bind)
 │   ├── batch.ts           # dss config export/import
 │   ├── keys.ts             # dss key show/copy/rotate
 │   ├── dashboard.ts       # Bare-`dss` context dashboard
@@ -236,6 +261,7 @@ src/
 │   ├── types.ts            # ISpace/IIdentity/IStoreV2 and friends
 │   ├── identity.ts         # slugify, name validation, identity lookup
 │   ├── rules.ts             # matchRule (pure, longest-prefix directory match)
+│   ├── gitUrl.ts             # parseGitUrl (scp-like/ssh/https/git/local-path forms)
 │   └── hosts.ts             # Known Git hosts + key-settings links
 └── infra/                  # Filesystem, Git, and SSH side effects
     ├── store.ts             # Config store (~/.dss/spaces/config.json, v1→v2 migration)
@@ -244,7 +270,8 @@ src/
     ├── ssh.ts               # ssh-config (parse-don't-splice) and host access checks
     ├── keys.ts              # SSH key generation (system ssh-keygen binary)
     ├── clipboard.ts          # Platform-specific clipboard operations
-    └── repoBinding.ts        # Repository-local Git conditional-include binding
+    ├── repoBinding.ts        # Repository-local Git conditional-include binding
+    └── gitClone.ts           # git clone via execFile (keyed GIT_SSH_COMMAND, stderr relay/capture)
 tests/
 ├── commands/               # Command-layer test suites
 ├── core/                   # Core-layer test suites
