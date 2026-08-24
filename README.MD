@@ -87,6 +87,7 @@ Identities are stored under `~/.dss/spaces/config.json` (schema `version: 2`, ve
 | `dss config export\|import [path]` | Back up or restore identity configuration (SSH keys are never included) |
 | `dss doctor [identityName]` | Full health check: key files/permissions, ssh-agent, ssh-config, host auth, Git identity drift, repo binding, commit-history drift |
 | `dss status` | Show the current repository's DSS binding |
+| `dss prompt` | Fast shell-prompt identity segment for scripts/starship/oh-my-zsh (see [Shell prompt integration](#shell-prompt-integration)); `--source` adds a source hint |
 | `dss completion [shell]` | Generate a bash/zsh/fish completion script |
 
 Run `dss <command> --help` for the exact options each command accepts.
@@ -197,6 +198,67 @@ A keyed identity cloning over ssh (scp-like or `ssh://`) runs with `GIT_SSH_COMM
 
 Once the clone succeeds, `dss clone` binds it to the chosen identity the same way `dss link` would (same underlying call, same binding registry) — a bind failure after a successful clone is a warning, not a failure: the clone stands, and `--json`'s `bound` comes back `false`.
 
+## Shell prompt integration
+
+`dss prompt` emits a single-line identity segment for the CURRENT directory and exits — the one command tuned for "runs on every shell prompt render." It resolves the identity the exact same way the dashboard does (bound > directory rule > global default), and it's deliberately **not cached**: Node's own process-startup cost dominates the latency, not the (already cheap) resolution work, so a cache file would add complexity without making it faster. It also **never errors** — see [Exit codes](#exit-codes) — and never prompts, so it's safe to wire into `PROMPT`/`PS1`/`command_timeout`-bounded contexts unconditionally.
+
+```bash
+dss prompt              # "● work" (colored) in a terminal; bare "work" once piped or NO_COLOR is set
+dss prompt --source     # "● work" plus a dim " (repo)" / " (rule)" / " (global)" hint — off by default
+dss prompt --json       # { identity: string | null, source: "bound" | "rule" | "global" | null }
+```
+
+Output is empty (nothing at all, exit `0`) whenever no identity applies here — a prompt segment should vanish, never print "none" or an error.
+
+### starship
+
+Add a `[custom.dss]` block to `~/.config/starship.toml`:
+
+```toml
+[custom.dss]
+command = "dss prompt"
+when = "true"
+format = "[$output]($style) "
+style = "cyan"
+# Node's fixed process-startup cost (not dss's own resolution, which is
+# just a store read plus at most one `git rev-parse`) can exceed
+# starship's default 500ms command_timeout on a slow machine or a cold
+# filesystem cache — bump it if the segment intermittently disappears:
+command_timeout = 1000
+```
+
+Prefer the segment to show up only inside Git repositories? Use a git-aware `when` instead of `"true"`:
+
+```toml
+when = "test -d .git || git rev-parse --git-dir > /dev/null 2>&1"
+```
+
+### oh-my-zsh / plain zsh
+
+```zsh
+dss_prompt_segment() {
+  local segment
+  segment="$(dss prompt)"
+  [[ -n "$segment" ]] && print -n "%F{cyan}${segment}%f "
+}
+setopt PROMPT_SUBST
+PROMPT='$(dss_prompt_segment)'"$PROMPT"
+```
+
+### bash
+
+```bash
+dss_prompt_segment() {
+  local segment
+  segment="$(dss prompt)"
+  [[ -n "$segment" ]] && printf '\[\e[36m\]%s\[\e[0m\] ' "$segment"
+}
+PROMPT_COMMAND='__dss_ps1_segment="$(dss_prompt_segment)"'
+PS1='${__dss_ps1_segment}'"$PS1"
+```
+
+Pass `--source` in any of the recipes above (`dss prompt --source`) to include the "(repo)"/"(rule)"/"(global)" hint.
+
 ## Output
 
 DSS output is calm and scriptable: one accent color, a small glyph set (`●` `✓` `✗` `!`) instead of emoji, and no box-drawing. It respects `NO_COLOR` and automatically degrades to plain ASCII whenever stdout isn't a TTY, so piped or CI output stays greppable. Pass the global `--json` flag for machine-readable output instead: exactly one JSON object on stdout, `{ ok, command, data?, error? }` — `error` is present when `ok` is `false`; `data` is present whenever the command produced one, including alongside `error` on a failure that still has diagnostics worth keeping (e.g. `doctor`'s checks) — see [AGENTS.md](./AGENTS.md) for the full contract and recipes.
@@ -221,6 +283,8 @@ dss new                 # Ctrl+C at the first prompt → exit 130
 ```
 
 Deprecated aliases (`dss list`, `dss switch`, `dss add`, ...) follow the exact same contract as the command they delegate to.
+
+`dss prompt` is a deliberate, documented **exception** to this contract (see [Shell prompt integration](#shell-prompt-integration)): as the one command meant to run on every shell prompt render, it always exits `0` — even when it can't resolve anything (a corrupt store, a git failure, ...). A prompt segment that could return `1` on a transient error would wreck the user's shell rather than just leaving the segment blank, so it degrades to empty output instead of following the `1`/`2` rows above.
 
 ## For coding agents
 
@@ -279,6 +343,7 @@ src/
 │   ├── guard.ts             # dss guard install/uninstall/check (pre-commit wrong-identity guard)
 │   ├── firstRun.ts        # Automatic first-run flow (replaces old `onboard`)
 │   ├── completion.ts      # Shell completion script generation
+│   ├── prompt.ts           # dss prompt (fast, never-error shell-prompt identity segment)
 │   ├── prompts.ts         # Shared/cancellation-safe prompt helpers
 │   └── ui.ts               # Calm output layer (colors, glyphs, tables, NO_COLOR)
 ├── core/                   # Dependency-free domain types and lookups

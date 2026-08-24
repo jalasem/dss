@@ -23,6 +23,7 @@ import { doctor } from '../commands/doctor';
 import { addRule, listRules, rmRule } from '../commands/rule';
 import { installGuard, uninstallGuard, checkGuard } from '../commands/guard';
 import { cloneRepository } from '../commands/clone';
+import { promptSegment } from '../commands/prompt';
 import { isJsonMode, captureCommanderOutput } from '../commands/jsonOutput';
 
 export interface BuiltProgram {
@@ -269,6 +270,12 @@ export function buildProgram(): BuiltProgram {
     .description('Show repository-local DSS binding status')
     .option('-p, --path <repositoryPath>', 'Select an explicit Git repository')
     .action(showRepositoryBindingStatus);
+
+  program
+    .command('prompt')
+    .description('Fast shell-prompt identity segment for the current directory (never errors, never prompts)')
+    .option('--source', 'Append a dim source hint to the rich segment: (repo)/(rule)/(global)')
+    .action(promptSegment);
 
   // --- Legacy aliases (deprecated, removed in v3) -------------------------
   // Hidden from `--help`; still fully functional. Each prints a deprecation

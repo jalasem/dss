@@ -151,3 +151,8 @@ only if DSS installed it; a foreign pre-commit hook is refused (exit `1`) either
 - `dss <command> --help` documents every flag for that command; in `--json` mode,
   `--help`/`--version` also emit JSON (`data.help` / `data.version`) instead of plain text.
 - Prompt templates are not part of this CLI (planned separately, not yet available).
+- `dss prompt` (a shell-PS1 identity segment for humans, see README's "Shell prompt
+  integration" — not something an agent needs to drive) is the one deliberate exception to
+  this document's exit-code contract above: it always exits `0`, even on failure, emitting
+  `data: { identity: string | null, source: "bound" | "rule" | "global" | null }` rather than
+  an `error` object.

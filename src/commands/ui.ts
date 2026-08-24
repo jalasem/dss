@@ -113,6 +113,24 @@ export class UIHelper {
     return isActive ? this.activeSpace(name) : this.inactiveSpace(name);
   }
 
+  /**
+   * The `dss prompt` segment line: `● name` (rich, accent cyan) or bare
+   * `name` (PLAIN — no glyph, no color, and deliberately NOT the `* name`
+   * fallback `activeSpace` uses elsewhere: a shell-prompt segment must
+   * degrade to the plainest possible token, not a decorative substitute).
+   * `sourceLabel` (already resolved to "repo"/"rule"/"global" by the
+   * caller) is appended as a dim ` (label)` suffix in rich mode, or a bare
+   * ` (label)` suffix in PLAIN mode — only when passed at all, since the
+   * `--source` hint is opt-in.
+   */
+  static promptSegment(name: string, sourceLabel?: string): string {
+    const suffix = sourceLabel ? ` (${sourceLabel})` : '';
+    if (this.isPlain()) {
+      return `${name}${suffix}`;
+    }
+    return chalk.cyan(`${GLYPH.active} ${name}`) + (suffix ? chalk.dim(suffix) : '');
+  }
+
   static command(cmd: string): string {
     return this.style(chalk.cyan, `\`${cmd}\``);
   }

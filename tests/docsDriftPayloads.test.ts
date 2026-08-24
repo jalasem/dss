@@ -300,4 +300,35 @@ describe('docs drift: recipe payload shapes (CLI, spawned process)', () => {
     expect(parsed.ok).toBe(true);
     expectDataKeys(parsed.data, ['imported', 'skipped']);
   });
+
+  // `dss prompt` (Phase 5 · Task 4): AGENTS.md's Notes section documents its
+  // payload shape as `{ identity: string | null, source: "bound" | "rule" |
+  // "global" | null }` rather than a full "## Recipes" entry (it's a
+  // human-shell command, not something an agent drives) — still covered
+  // here so the documented key set can't silently drift from what the
+  // spawned CLI actually emits, matching every other command in this file.
+  it('"dss prompt --json": data keys match AGENTS.md\'s `{ identity, source }` when an identity resolves', async () => {
+    const create = runCli(['new', '--json', '--name', 'work', '--email', 'work@x.com', '--user', 'Work', '--host', 'github.com', '--key', 'none', '-y']);
+    expect(create.status).toBe(0);
+
+    const result = runCli(['prompt', '--json']);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['identity', 'source']);
+    expect(parsed.data).toEqual({ identity: 'work', source: 'global' });
+  });
+
+  it('"dss prompt --json": data keys match AGENTS.md\'s `{ identity, source }` when nothing applies (both null)', async () => {
+    await writeConfig([]);
+
+    const result = runCli(['prompt', '--json']);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['identity', 'source']);
+    expect(parsed.data).toEqual({ identity: null, source: null });
+  });
 });
