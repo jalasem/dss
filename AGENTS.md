@@ -88,7 +88,7 @@ Rotate an identity's SSH key:
 ```bash
 dss key rotate work --json -y
 ```
-`data: { rotated: string, key: { algorithm, fingerprint } }`
+`data: { rotated: string, key: { algorithm, fingerprint }, bindingsRefreshed: number }`
 
 Export / import configuration (SSH keys are never included):
 

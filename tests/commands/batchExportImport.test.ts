@@ -9,6 +9,14 @@ import type { ISpace, IStoreV2 } from '../../src/core/types';
 jest.mock('fs-extra');
 jest.mock('os');
 jest.mock('@inquirer/prompts');
+// Defensive-only (Phase-2 final review flag): export/import don't currently
+// call switchSpace/git at all, so this file was "safe by accident" rather
+// than by isolation. Mock the infra modules a git-touching path would go
+// through so a future test added to this file that DOES exercise one can't
+// mutate the real environment (~/.gitconfig, ssh-agent, ...) — mirrors the
+// isolation every other command test file (e.g. spaces.test.ts) already has.
+jest.mock('../../src/infra/git');
+jest.mock('../../src/infra/ssh');
 jest.mock('../../src/infra/store', () => {
   const actual = jest.requireActual('../../src/infra/store');
   const loadStore = jest.fn();

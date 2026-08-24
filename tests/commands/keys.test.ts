@@ -18,6 +18,9 @@ jest.mock('@inquirer/prompts', () => ({
 jest.mock('../../src/infra/keys');
 jest.mock('../../src/infra/ssh');
 jest.mock('../../src/infra/clipboard');
+jest.mock('../../src/infra/git', () => ({
+  writeIdentityGitconfig: jest.fn()
+}));
 jest.mock('../../src/infra/store', () => {
   const actual = jest.requireActual('../../src/infra/store');
   return {
@@ -32,11 +35,13 @@ jest.mock('../../src/infra/store', () => {
 // --global --add include.path ...` against the machine's actual ~/.gitconfig
 // the moment a rotateKey test's identity is active. Stub the whole module.
 jest.mock('../../src/commands/spaces', () => ({
-  reapplyActiveIdentity: jest.fn()
+  reapplyActiveIdentity: jest.fn(),
+  refreshRegisteredBindings: jest.fn()
 }));
 
 const { loadStore, saveStore } = require('../../src/infra/store');
-const { reapplyActiveIdentity } = require('../../src/commands/spaces');
+const { reapplyActiveIdentity, refreshRegisteredBindings } = require('../../src/commands/spaces');
+const { writeIdentityGitconfig } = require('../../src/infra/git');
 const { showKey, copyKey, rotateKey, keyCommand } = require('../../src/commands/keys');
 
 const mockLoadStore = loadStore as jest.MockedFunction<() => Promise<IStoreV2>>;
@@ -47,9 +52,18 @@ const mockCopyToClipboard = copyToClipboard as jest.MockedFunction<typeof copyTo
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockFs = fs as jest.Mocked<typeof fs>;
 const mockReapplyActiveIdentity = reapplyActiveIdentity as jest.MockedFunction<(space: unknown, store: IStoreV2) => Promise<void>>;
+const mockRefreshRegisteredBindings = refreshRegisteredBindings as jest.MockedFunction<
+  (matchingBindings: unknown[], space: unknown) => Promise<{ refreshed: number; needsAttention: number }>
+>;
+const mockWriteIdentityGitconfig = writeIdentityGitconfig as jest.MockedFunction<(identity: unknown) => Promise<void>>;
 
-function storeWith(identities: IIdentity[], active?: string): IStoreV2 {
-  return { version: 2, identities, active, bindings: [], rules: [] };
+function storeWith(
+  identities: IIdentity[],
+  active?: string,
+  bindings: IStoreV2['bindings'] = [],
+  rules: IStoreV2['rules'] = []
+): IStoreV2 {
+  return { version: 2, identities, active, bindings, rules };
 }
 
 describe('commands/keys', () => {
@@ -78,6 +92,8 @@ describe('commands/keys', () => {
     jest.spyOn(console, 'log').mockImplementation();
     (mockFs.readFile as unknown as jest.Mock).mockResolvedValue('ssh-ed25519 AAAA... test@example.com');
     mockCopyToClipboard.mockResolvedValue('copied');
+    mockRefreshRegisteredBindings.mockResolvedValue({ refreshed: 0, needsAttention: 0 });
+    mockWriteIdentityGitconfig.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -356,6 +372,122 @@ describe('commands/keys', () => {
           expect.objectContaining({ name: 'legacy-space', sshKeyPath: rotatedKeyInfo.path }),
           expect.anything()
         );
+      });
+    });
+
+    // Task 5 item 1: rotate must refresh repo-local `dss link` bindings for
+    // the rotated identity (via the same shared helper modifySpace's own
+    // binding-refresh loop was extracted into) and, when the identity has
+    // directory rules, regenerate its ~/.dss/identities/<slug>.gitconfig —
+    // otherwise both keep pointing at the OLD key's sshCommand.
+    describe('binding refresh + ruled-identity gitconfig (Task 5 item 1)', () => {
+      it('re-runs refreshRegisteredBindings for each registered binding of the rotated identity, with the identity\'s NEW key path, and reports the refreshed count in the JSON payload', async () => {
+        const bindings = [
+          { path: '/repo/one', identity: 'test-space' },
+          { path: '/repo/two', identity: 'test-space' }
+        ];
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space', bindings));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+        mockRefreshRegisteredBindings.mockResolvedValue({ refreshed: 2, needsAttention: 0 });
+
+        await rotateKey();
+
+        expect(mockRefreshRegisteredBindings).toHaveBeenCalledWith(
+          bindings,
+          expect.objectContaining({ name: 'test-space', sshKeyPath: newKeyInfo.path })
+        );
+        expect(process.exitCode).toBeUndefined();
+      });
+
+      it('does not call refreshRegisteredBindings when the identity has no registered bindings', async () => {
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space', []));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+
+        await rotateKey();
+
+        expect(mockRefreshRegisteredBindings).not.toHaveBeenCalled();
+      });
+
+      it('only refreshes bindings belonging to the rotated identity, ignoring bindings for other identities', async () => {
+        const otherIdentity: IIdentity = { ...keyedIdentity, name: 'other-space' };
+        const bindings = [
+          { path: '/repo/mine', identity: 'test-space' },
+          { path: '/repo/other', identity: 'other-space' }
+        ];
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity, otherIdentity], 'test-space', bindings));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+        mockRefreshRegisteredBindings.mockResolvedValue({ refreshed: 1, needsAttention: 0 });
+
+        await rotateKey('test-space');
+
+        expect(mockRefreshRegisteredBindings).toHaveBeenCalledWith(
+          [{ path: '/repo/mine', identity: 'test-space' }],
+          expect.anything()
+        );
+      });
+
+      it('regenerates the ruled identity\'s gitconfig when the identity has directory rules', async () => {
+        const rules = [{ dir: '/code/acme', identity: 'test-space' }];
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space', [], rules));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+
+        await rotateKey();
+
+        expect(mockWriteIdentityGitconfig).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'test-space', key: newKeyInfo })
+        );
+      });
+
+      it('does not regenerate any identity gitconfig when the identity has no directory rules', async () => {
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space', [], []));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+
+        await rotateKey();
+
+        expect(mockWriteIdentityGitconfig).not.toHaveBeenCalled();
+      });
+
+      it('warns but still succeeds when refreshing the ruled-identity gitconfig fails', async () => {
+        const rules = [{ dir: '/code/acme', identity: 'test-space' }];
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space', [], rules));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+        mockWriteIdentityGitconfig.mockRejectedValueOnce(new Error('disk full'));
+        const warningSpy = jest.spyOn(UIHelper, 'warning');
+
+        await rotateKey();
+
+        expect(warningSpy).toHaveBeenCalledWith(expect.stringContaining('refreshing the rule gitconfig'));
+        expect(mockSaveStore).toHaveBeenCalled();
+        expect(process.exitCode).toBeUndefined();
+
+        warningSpy.mockRestore();
+      });
+
+      it('warns per dead-path binding but keeps the registry entry and still succeeds (needsAttention path surfaces via refreshRegisteredBindings)', async () => {
+        const bindings = [{ path: '/repo/gone', identity: 'test-space' }];
+        mockLoadStore.mockResolvedValue(storeWith([keyedIdentity], 'test-space', bindings));
+        mockConfirm.mockResolvedValue(true);
+        mockGenerateKey.mockResolvedValue(newKeyInfo);
+        mockAddToAgent.mockResolvedValue(undefined);
+        mockRefreshRegisteredBindings.mockResolvedValue({ refreshed: 0, needsAttention: 1 });
+
+        await rotateKey();
+
+        expect(mockRefreshRegisteredBindings).toHaveBeenCalledWith(bindings, expect.anything());
+        expect(process.exitCode).toBeUndefined();
+        expect(mockSaveStore).toHaveBeenCalled();
       });
     });
   });

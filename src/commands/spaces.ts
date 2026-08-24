@@ -19,7 +19,7 @@ import {
   validateCustomHost,
   UsageError,
 } from "./prompts";
-import { ISpace, IKeyInfo, IStoreV2 } from "../core/types";
+import { ISpace, IKeyInfo, IStoreV2, IBinding } from "../core/types";
 import { keySettingsUrl } from "../core/hosts";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
@@ -105,6 +105,38 @@ export async function reapplyActiveIdentity(space: ISpace, store: IStoreV2): Pro
   if (space.sshKeyPath) {
     await setHostSSHKey(space.sshKeyPath, space.host ?? 'github.com');
   }
+}
+
+/**
+ * Re-runs bindRepository for each of `matchingBindings` (registered `dss
+ * link` entries for one identity), refreshing that repo's private binding
+ * config (user/email/core.sshCommand) to match `space`'s CURRENT values.
+ * Shared by modifySpace (rename/email/userName/key-path edits) and `dss key
+ * rotate` (key-path changes) — the exact registry-driven refresh loop, so
+ * both stay in sync rather than slowly drifting apart. A repo that no
+ * longer exists (or otherwise fails to bind) is warned by name; its
+ * registry entry is left in place rather than removed, since the failure
+ * may be transient. Prints a one-line "Refreshed N binding(s); M need
+ * attention." summary and returns the counts for callers (e.g. `dss key
+ * rotate`'s JSON payload) that need them.
+ */
+export async function refreshRegisteredBindings(
+  matchingBindings: IBinding[],
+  space: ISpace
+): Promise<{ refreshed: number; needsAttention: number }> {
+  let refreshed = 0;
+  let needsAttention = 0;
+  for (const binding of matchingBindings) {
+    try {
+      await bindRepository(binding.path, space, {});
+      refreshed++;
+    } catch (error) {
+      needsAttention++;
+      UIHelper.warning(`Could not refresh binding for ${binding.path}: ${(error as Error).message}`);
+    }
+  }
+  UIHelper.info(`Refreshed ${refreshed} binding(s); ${needsAttention} need attention.`);
+  return { refreshed, needsAttention };
 }
 
 export interface NewIdentityOptions {
@@ -810,18 +842,7 @@ export async function modifySpace(spaceName?: string, options: EditIdentityOptio
 
   if (matchingBindings.length > 0) {
     if (bindingRefreshNeeded) {
-      let refreshed = 0;
-      let needsAttention = 0;
-      for (const binding of matchingBindings) {
-        try {
-          await bindRepository(binding.path, space, {});
-          refreshed++;
-        } catch (error) {
-          needsAttention++;
-          UIHelper.warning(`Could not refresh binding for ${binding.path}: ${(error as Error).message}`);
-        }
-      }
-      UIHelper.info(`Refreshed ${refreshed} binding(s); ${needsAttention} need attention.`);
+      await refreshRegisteredBindings(matchingBindings, space);
     }
   } else if (keyDirMoved) {
     UIHelper.warning(

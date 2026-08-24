@@ -197,6 +197,18 @@ export async function loadStore(): Promise<IStoreV2> {
         'Upgrade DSS before using this config file.'
       );
     }
+
+    // A present-but-non-numeric version (a string, an object, ...) is a
+    // corrupt or unrecognized shape, not a legacy v1 file — migrateV1 would
+    // silently treat it as v1 and destroy whatever data it holds. Refuse
+    // instead of guessing. (An ABSENT version still falls through below,
+    // same as version === 1.)
+    if (version !== undefined && typeof version !== 'number') {
+      throw new Error(
+        `Unrecognized config version ${JSON.stringify(version)} in ${CONFIG_PATH} — expected a numeric version. ` +
+        'This build of DSS only understands versions 1 and 2.'
+      );
+    }
   }
 
   // Everything else (absent version, version === 1, or any other shape

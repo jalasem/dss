@@ -156,7 +156,7 @@ describe('docs drift: recipe payload shapes (CLI, spawned process)', () => {
     expectDataKeys(parsed.data, ['identity', 'checks', 'summary']);
   });
 
-  it('"dss key rotate <name> --json -y": data keys match AGENTS.md\'s `{ rotated, key }`', async () => {
+  it('"dss key rotate <name> --json -y": data keys match AGENTS.md\'s `{ rotated, key, bindingsRefreshed }`', async () => {
     await writeConfig([{ name: 'x', email: 'x@y.z', userName: 'X', sshKeyPath: '' }]);
 
     const result = runCli(['key', 'rotate', 'x', '-y', '--json']);
@@ -164,7 +164,8 @@ describe('docs drift: recipe payload shapes (CLI, spawned process)', () => {
     expect(result.status).toBe(0);
     const parsed = parseSoleJsonObject(result.stdout);
     expect(parsed.ok).toBe(true);
-    expectDataKeys(parsed.data, ['rotated', 'key']);
+    expectDataKeys(parsed.data, ['rotated', 'key', 'bindingsRefreshed']);
+    expect(parsed.data.bindingsRefreshed).toBe(0);
   });
 
   it('"dss config export --json": data keys match AGENTS.md\'s `{ exported, path }`', async () => {

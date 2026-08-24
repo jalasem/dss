@@ -510,7 +510,7 @@ Host other.com
       consoleSpy.mockRestore();
     });
 
-    it('uses -i/-o IdentitiesOnly=yes -T with the given host, same as testHostAccess', async () => {
+    it('uses -i/-o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -T with the given host, same as testHostAccess', async () => {
       (mockExecFile as unknown as jest.Mock).mockImplementation(
         (_file: string, _args: string[], callback: any) => {
           callback(null, { stdout: '', stderr: '' });
@@ -522,7 +522,13 @@ Host other.com
 
       expect(mockExecFile).toHaveBeenCalledWith(
         'ssh',
-        ['-i', mockSshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', 'git@github.com'],
+        [
+          '-i', mockSshKeyPath,
+          '-o', 'IdentitiesOnly=yes',
+          '-o', 'BatchMode=yes',
+          '-o', 'ConnectTimeout=10',
+          '-T', 'git@github.com'
+        ],
         expect.any(Function)
       );
     });
@@ -592,7 +598,7 @@ Host other.com
   });
 
   describe('testHostAccess', () => {
-    it('uses -i/-o IdentitiesOnly=yes with the given host and does NOT ssh-add the key first (behavior change from testGithubAccess)', async () => {
+    it('uses -i/-o IdentitiesOnly=yes/-o BatchMode=yes/-o ConnectTimeout=10 with the given host (via checkHostAccess) and does NOT ssh-add the key first (behavior change from testGithubAccess)', async () => {
       (mockExecFile as unknown as jest.Mock).mockImplementation(
         (_file: string, _args: string[], callback: any) => {
           callback(null, { stdout: '', stderr: '' });
@@ -605,7 +611,13 @@ Host other.com
 
       expect(mockExecFile).toHaveBeenCalledWith(
         'ssh',
-        ['-i', mockSshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', 'git@github.com'],
+        [
+          '-i', mockSshKeyPath,
+          '-o', 'IdentitiesOnly=yes',
+          '-o', 'BatchMode=yes',
+          '-o', 'ConnectTimeout=10',
+          '-T', 'git@github.com'
+        ],
         expect.any(Function)
       );
       expect(mockExecFile).not.toHaveBeenCalledWith(
@@ -747,7 +759,13 @@ Host other.com
 
       expect(mockExecFile).toHaveBeenCalledWith(
         'ssh',
-        ['-i', spacedKeyPath, '-o', 'IdentitiesOnly=yes', '-T', 'git@github.com'],
+        [
+          '-i', spacedKeyPath,
+          '-o', 'IdentitiesOnly=yes',
+          '-o', 'BatchMode=yes',
+          '-o', 'ConnectTimeout=10',
+          '-T', 'git@github.com'
+        ],
         expect.any(Function)
       );
 

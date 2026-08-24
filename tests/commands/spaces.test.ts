@@ -1318,6 +1318,34 @@ describe('commands/spaces', () => {
       expect(calls.some(call => call && call.includes && call.includes('Refreshed 1 binding(s); 0 need attention.'))).toBe(true);
     });
 
+    // Task 5 item 1: the binding-refresh loop above is now exported as
+    // refreshRegisteredBindings (also used by `dss key rotate`) rather than
+    // living only as modifySpace's private inline loop. Directly exercised
+    // here so its contract (per-binding bindRepository call, warn-and-keep
+    // on failure, returned counts) is covered independent of modifySpace's
+    // surrounding rename/email/userName logic.
+    it('refreshRegisteredBindings re-runs bindRepository per binding, warns and keeps the registry entry on a dead path, and returns the refreshed/needsAttention counts', async () => {
+      const { refreshRegisteredBindings } = require('../../src/commands/spaces');
+      mockBindRepository.mockImplementation(async (repositoryPath: string) => {
+        if (repositoryPath === '/repos/dead') throw new Error('not a git repository');
+        return {} as any;
+      });
+      const bindings = [
+        { path: '/repos/live', identity: 'test-space' },
+        { path: '/repos/dead', identity: 'test-space' }
+      ];
+      const space = { name: 'test-space', email: 't@x.com', userName: 'T', sshKeyPath: mockSshKeyPath };
+
+      const result = await refreshRegisteredBindings(bindings, space);
+
+      expect(result).toEqual({ refreshed: 1, needsAttention: 1 });
+      expect(mockBindRepository).toHaveBeenCalledWith('/repos/live', space, {});
+      expect(mockBindRepository).toHaveBeenCalledWith('/repos/dead', space, {});
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('Could not refresh binding for /repos/dead'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('Refreshed 1 binding(s); 1 need attention.'))).toBe(true);
+    });
+
     it('prompts for the host with the current value as the select default, and makes no change when re-selecting it', async () => {
       const spaceWithHost = { ...mockSpace, host: 'gitlab.com' };
       mockLoadStore.mockResolvedValue(storeOf([spaceWithHost]));

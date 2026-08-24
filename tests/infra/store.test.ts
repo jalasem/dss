@@ -195,6 +195,34 @@ describe('infra/store', () => {
       expect(onDisk.identities).toHaveLength(1);
     });
 
+    it('hard-errors on a non-numeric string version instead of silently migrating it as v1', async () => {
+      await fs.outputJson(configPath, {
+        version: '2',
+        identities: [{ name: 'stringy', email: 's@x.com', userName: 'S', host: 'github.com' }],
+        bindings: []
+      });
+
+      await expect(store.loadStore()).rejects.toThrow(/version/);
+
+      // The file itself must be left untouched — no destructive migration.
+      const onDisk = await fs.readJson(configPath);
+      expect(onDisk.version).toBe('2');
+      expect(onDisk.identities).toHaveLength(1);
+    });
+
+    it('hard-errors on an object version instead of silently migrating it as v1', async () => {
+      await fs.outputJson(configPath, {
+        version: {},
+        identities: [{ name: 'objecty', email: 'o@x.com', userName: 'O', host: 'github.com' }],
+        bindings: []
+      });
+
+      await expect(store.loadStore()).rejects.toThrow(/version/);
+
+      const onDisk = await fs.readJson(configPath);
+      expect(onDisk.identities).toHaveLength(1);
+    });
+
     it('treats an explicit version === 1 as v1-migratable (same as an absent version)', async () => {
       await fs.outputJson(configPath, {
         version: 1,

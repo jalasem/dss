@@ -319,7 +319,18 @@ export interface HostAccessCheck {
  */
 export async function checkHostAccess(sshKeyPath: string, host: string): Promise<HostAccessCheck> {
   try {
-    await execFileAsync('ssh', ['-i', sshKeyPath, '-o', 'IdentitiesOnly=yes', '-T', `git@${host}`]);
+    await execFileAsync('ssh', [
+      '-i', sshKeyPath,
+      '-o', 'IdentitiesOnly=yes',
+      // BatchMode disables every interactive prompt (host-key confirmation,
+      // key passphrase) so an unknown-host or passphrase-protected key fails
+      // fast instead of blocking on /dev/tty; ConnectTimeout bounds network
+      // stalls. Both matter for `dss doctor`, which must never hang a
+      // script/CI invocation waiting on stdin or a dead connection.
+      '-o', 'BatchMode=yes',
+      '-o', 'ConnectTimeout=10',
+      '-T', `git@${host}`
+    ]);
     return { ok: true, detail: `Successfully authenticated with ${host}.` };
   } catch (error) {
     const { stderr, stdout } = error as { stderr?: string; stdout?: string };

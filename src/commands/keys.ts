@@ -5,13 +5,14 @@ import { generateKey } from '../infra/keys';
 import { addToAgent } from '../infra/ssh';
 import { copyToClipboard } from '../infra/clipboard';
 import { loadStore, saveStore, setIdentityKey, toSpace } from '../infra/store';
+import { writeIdentityGitconfig } from '../infra/git';
 import { findIdentity, slugify } from '../core/identity';
 import { IIdentity, IStoreV2 } from '../core/types';
 import { keySettingsUrl } from '../core/hosts';
 import { UIHelper } from './ui';
 import { fail } from './fail';
 import { guardedConfirm, UsageError } from './prompts';
-import { reapplyActiveIdentity } from './spaces';
+import { reapplyActiveIdentity, refreshRegisteredBindings } from './spaces';
 import { jsonData } from './jsonOutput';
 
 function keySettingsLine(host: string): string {
@@ -168,6 +169,34 @@ export async function rotateKey(identityName?: string): Promise<void> {
     }
   }
 
+  // Repo-local `dss link` bindings for this identity: rotate changes the
+  // key path, so a bound repo's private config keeps pointing at the OLD
+  // key's core.sshCommand until re-bound — refresh every registered binding
+  // the same way modifySpace does, via the shared helper (bulkUpdateSpaces,
+  // the original carrier of this follow-up, was cut in Phase 3; this is the
+  // only remaining caller besides modifySpace itself).
+  const matchingBindings = store.bindings.filter(
+    (binding) => slugify(binding.identity) === slugify(identity.name)
+  );
+  let bindingsRefreshed = 0;
+  if (matchingBindings.length > 0) {
+    const result = await refreshRegisteredBindings(matchingBindings, toSpace(identity));
+    bindingsRefreshed = result.refreshed;
+  }
+
+  // An identity with existing directory rules gets its
+  // ~/.dss/identities/<slug>.gitconfig rewritten too, mirroring
+  // modifySpace's ruled-identity refresh — otherwise a rule compiled
+  // against this identity keeps applying the OLD key's sshCommand.
+  const hasRules = store.rules.some((rule) => slugify(rule.identity) === slugify(identity.name));
+  if (hasRules) {
+    try {
+      await writeIdentityGitconfig(identity);
+    } catch (error) {
+      UIHelper.warning(`Key rotated, but refreshing the rule gitconfig for "${identity.name}" failed: ${(error as Error).message}`);
+    }
+  }
+
   try {
     await addToAgent(keyInfo.path);
   } catch (error) {
@@ -197,6 +226,7 @@ export async function rotateKey(identityName?: string): Promise<void> {
   jsonData({
     rotated: identity.name,
     key: { algorithm: keyInfo.algorithm, fingerprint: keyInfo.fingerprint ?? null },
+    bindingsRefreshed,
   });
 }
 
