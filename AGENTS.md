@@ -130,6 +130,22 @@ host-match step) — useful for cloning a fixture or another local repository. `
 (not a failure — exit `0`) when the clone itself succeeded but the post-clone bind couldn't be
 completed.
 
+Install the wrong-identity guard (an opt-in pre-commit hook that blocks a commit made
+under the wrong identity) in the current repository, and check it directly (the same
+check the hook itself runs):
+
+```bash
+dss guard install --json
+dss guard check --json
+```
+`install data: { installed: string }` — the git-resolved hook path (`.git/hooks/pre-commit`,
+worktree-safe). `check data: { ok: boolean, expected: { identity, email, source } | null,
+effective: string | null }` — `expected`/`effective` are both `null` when no identity applies
+here at all (nothing to guard, exit `0`). Exit `1` on a mismatch (effective git identity here
+doesn't match `expected`); `--quiet` suppresses the success line only — a mismatch always
+prints. `dss guard uninstall --json` removes the hook (`data: { removed: string | null }`) —
+only if DSS installed it; a foreign pre-commit hook is refused (exit `1`) either way.
+
 ## Notes
 
 - `dss <command> --help` documents every flag for that command; in `--json` mode,

@@ -1,8 +1,7 @@
 import fs from 'fs-extra';
 import { loadStore } from '../infra/store';
-import { findIdentity } from '../core/identity';
-import { matchRule } from '../core/rules';
 import { getRepositoryBindingStatus, RepositoryBindingStatus } from '../infra/repoBinding';
+import { resolveAppliesHere } from '../infra/identityResolution';
 import { checkKeyLoadedInAgent } from '../infra/ssh';
 import { firstRunFlow } from './firstRun';
 import { UIHelper } from './ui';
@@ -51,7 +50,11 @@ export async function dashboard(): Promise<void> {
 
   // getRepositoryBindingStatus throws when cwd isn't a Git repo (or on any
   // other lookup failure) — treated as "not bound" so the dashboard never
-  // crashes just because it was run outside a repo.
+  // crashes just because it was run outside a repo. Kept as its own call
+  // (rather than reusing resolveAppliesHere's internal binding lookup)
+  // because the dashboard also needs the raw `bound` flag below for its
+  // "this repo uses the global identity" hint, independent of which
+  // identity ultimately applies.
   let bindingStatus: RepositoryBindingStatus | undefined;
   try {
     bindingStatus = await getRepositoryBindingStatus(process.cwd());
@@ -59,34 +62,16 @@ export async function dashboard(): Promise<void> {
     bindingStatus = undefined;
   }
 
-  let identity = bindingStatus?.bound && bindingStatus.spaceName
-    ? findIdentity(store, bindingStatus.spaceName)
-    : undefined;
-  let source: 'bound to this repo' | 'directory rule' | 'global default' = 'bound to this repo';
-
-  // Precedence: bound (above) > directory rule > global default — matching
-  // the real includeIf resolution order (repo-local binding is read last by
-  // git, rules.gitconfig's includeIf sections next, active.gitconfig's
-  // unconditional [user] first/lowest — see infra/git.ts's
-  // ensureGlobalInclude for the include-order rationale).
-  if (!identity) {
-    let canonicalCwd: string | undefined;
-    try {
-      canonicalCwd = await fs.realpath(process.cwd());
-    } catch {
-      canonicalCwd = undefined;
-    }
-    const rule = canonicalCwd ? matchRule(canonicalCwd, store.rules) : undefined;
-    if (rule) {
-      identity = findIdentity(store, rule.identity);
-      source = 'directory rule';
-    }
-  }
-
-  if (!identity) {
-    identity = store.active ? findIdentity(store, store.active) : undefined;
-    source = 'global default';
-  }
+  // Precedence — bound > directory rule > global default, matching the real
+  // includeIf resolution order — lives in resolveAppliesHere (infra/
+  // identityResolution.ts), shared with doctor's commit-history drift check
+  // and the `dss guard check` pre-commit guard.
+  const resolved = await resolveAppliesHere(process.cwd(), store);
+  const identity = resolved.identity ?? undefined;
+  const source: 'bound to this repo' | 'directory rule' | 'global default' =
+    resolved.source === 'bound' ? 'bound to this repo'
+    : resolved.source === 'rule' ? 'directory rule'
+    : 'global default';
 
   if (!identity) {
     UIHelper.warning('No identity is active here.');
@@ -157,7 +142,7 @@ export async function dashboard(): Promise<void> {
 
   jsonData({
     identity: { name: identity.name, email: identity.email, userName: identity.userName, host: identity.host },
-    source: source === 'bound to this repo' ? 'bound' : source === 'directory rule' ? 'rule' : 'global',
+    source: resolved.source,
     health: { key: keyHealth, agent: agentHealth },
     identities: count,
   });

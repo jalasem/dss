@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import { loadStore, fromSpace } from '../../src/infra/store';
 import { getRepositoryBindingStatus } from '../../src/infra/repoBinding';
 import { checkKeyLoadedInAgent, checkSshConfigHost, checkHostAccess } from '../../src/infra/ssh';
-import { getGitUser } from '../../src/infra/git';
+import { getGitUser, getRecentCommitAuthors } from '../../src/infra/git';
 import { doctor } from '../../src/commands/doctor';
 import { IStoreV2, ISpace } from '../../src/core/types';
 
@@ -20,7 +20,8 @@ jest.mock('../../src/infra/ssh', () => ({
   checkHostAccess: jest.fn()
 }));
 jest.mock('../../src/infra/git', () => ({
-  getGitUser: jest.fn()
+  getGitUser: jest.fn(),
+  getRecentCommitAuthors: jest.fn()
 }));
 
 const mockFs = fs as jest.Mocked<typeof fs>;
@@ -30,6 +31,7 @@ const mockCheckKeyLoadedInAgent = checkKeyLoadedInAgent as jest.MockedFunction<t
 const mockCheckSshConfigHost = checkSshConfigHost as jest.MockedFunction<typeof checkSshConfigHost>;
 const mockCheckHostAccess = checkHostAccess as jest.MockedFunction<typeof checkHostAccess>;
 const mockGetGitUser = getGitUser as jest.MockedFunction<typeof getGitUser>;
+const mockGetRecentCommitAuthors = getRecentCommitAuthors as jest.MockedFunction<typeof getRecentCommitAuthors>;
 
 function storeOf(spaces: ISpace[], active?: string, rules: IStoreV2['rules'] = []): IStoreV2 {
   return { version: 2, identities: spaces.map(fromSpace), active, bindings: [], rules };
@@ -55,6 +57,7 @@ describe('commands/doctor', () => {
     mockCheckSshConfigHost.mockResolvedValue('match');
     mockCheckHostAccess.mockResolvedValue({ ok: true, detail: 'Successfully authenticated with github.com.' });
     mockGetGitUser.mockResolvedValue({ userName: 'Work User', email: 'work@example.com' });
+    mockGetRecentCommitAuthors.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -326,6 +329,126 @@ describe('commands/doctor', () => {
       // ASCII dash — no decorative "—" should leak into piped/CI output.
       expect(calls.some(c => typeof c === 'string' && /\d+ issues? -/.test(c))).toBe(true);
       expect(calls.every(c => typeof c !== 'string' || !c.includes('—'))).toBe(true);
+    });
+  });
+
+  describe('Commit history drift (wrong-identity guard, part 1)', () => {
+    function bound(spaceName = 'work') {
+      mockGetRepositoryBindingStatus.mockResolvedValue({
+        repositoryRoot: '/repo',
+        configPath: '/repo/.git/dss/config',
+        bound: true,
+        spaceName
+      });
+    }
+
+    it('omits the section entirely when cwd is not a git repository', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
+      // beforeEach's default already rejects getRepositoryBindingStatus.
+
+      await doctor('work');
+
+      expect(mockGetRecentCommitAuthors).not.toHaveBeenCalled();
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Commit history'))).toBe(false);
+    });
+
+    it('omits the section entirely for an empty repository (no commits yet)', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
+      bound();
+      mockGetRecentCommitAuthors.mockResolvedValue([]);
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Commit history'))).toBe(false);
+    });
+
+    it('reports a ✓ match when every recent commit author matches the checked identity', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
+      bound();
+      mockGetRecentCommitAuthors.mockResolvedValue([
+        { email: 'work@example.com', name: 'Work User' },
+        { email: 'work@example.com', name: 'Work User' },
+        { email: 'work@example.com', name: 'Work User' }
+      ]);
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Commit history') && c.includes('last 3 commits match'))).toBe(true);
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('reports a ! warning (M of N, not exit 1) when some recent commits were authored under a different identity', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
+      bound();
+      mockGetRecentCommitAuthors.mockResolvedValue([
+        { email: 'work@example.com', name: 'Work User' },
+        { email: 'other@example.com', name: 'Someone Else' },
+        { email: 'other@example.com', name: 'Someone Else' }
+      ]);
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c =>
+        typeof c === 'string' &&
+        c.includes('Commit history') &&
+        c.includes('2 of 3 recent commits authored as other@example.com')
+      )).toBe(true);
+      // Warning class — never sets exit code 1, per the established ✗-vs-! calibration.
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('dedupes mismatched emails, listing up to 3 then "+K more"', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work'));
+      bound();
+      mockGetRecentCommitAuthors.mockResolvedValue([
+        { email: 'a@example.com', name: 'A' },
+        { email: 'b@example.com', name: 'B' },
+        { email: 'c@example.com', name: 'C' },
+        { email: 'd@example.com', name: 'D' },
+        { email: 'e@example.com', name: 'E' }
+      ]);
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c =>
+        typeof c === 'string' &&
+        c.includes('5 of 5 recent commits authored as a@example.com, b@example.com, c@example.com +2 more')
+      )).toBe(true);
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('uses resolveAppliesHere (bound > rule > global) as the expected identity when no identityName is given — proven by a case where it diverges from the main "Doctor: <name>" identity', async () => {
+      // cwd is UNBOUND but falls under a directory rule for "acme"; the
+      // store's global active is "personal". Doctor's own (unchanged)
+      // resolveIdentity has no rule support, so the header identity stays
+      // "personal" — but the commit-history section's EXPECTED identity
+      // must come from resolveAppliesHere (bound > rule > global), which
+      // resolves the RULED identity ("acme") here — proving the new
+      // section really calls the shared resolver, not a copy of the old
+      // bound/active-only fallback.
+      const personal: ISpace = { ...keyedIdentity, name: 'personal', email: 'personal@example.com' };
+      const acme: ISpace = { ...keyedIdentity, name: 'acme', email: 'acme@example.com', userName: 'Acme User' };
+      mockLoadStore.mockResolvedValue(
+        storeOf([keyedIdentity, personal, acme], 'personal', [{ dir: '/code/acme', identity: 'acme' }])
+      );
+      mockGetRepositoryBindingStatus.mockResolvedValue({
+        repositoryRoot: '/code/acme/project',
+        configPath: '/code/acme/project/.git/dss/config',
+        bound: false
+      });
+      mockFs.realpath.mockResolvedValue('/code/acme/project' as never);
+      mockGetRecentCommitAuthors.mockResolvedValue([{ email: 'acme@example.com', name: 'Acme User' }]);
+
+      await doctor();
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Doctor: personal'))).toBe(true);
+      expect(calls.some(c => typeof c === 'string' && c.includes('Commit history') && c.includes('last 1 commits match'))).toBe(true);
     });
   });
 });

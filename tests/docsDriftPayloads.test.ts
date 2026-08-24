@@ -44,9 +44,9 @@ describe('docs drift: recipe payload shapes (CLI, spawned process)', () => {
     };
   }
 
-  function runCli(args: string[]): { stdout: string; stderr: string; status: number | null } {
+  function runCli(args: string[], cwd?: string): { stdout: string; stderr: string; status: number | null } {
     const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
-      cwd: temporaryHome,
+      cwd: cwd ?? temporaryHome,
       encoding: 'utf8',
       env: cliEnvironment(),
       input: '',
@@ -237,6 +237,52 @@ describe('docs drift: recipe payload shapes (CLI, spawned process)', () => {
     const parsed = parseSoleJsonObject(result.stdout);
     expect(parsed.ok).toBe(true);
     expectDataKeys(parsed.data, ['cloned', 'url', 'identity', 'reason', 'bound']);
+  });
+
+  it('"dss guard install --json": data keys match AGENTS.md\'s `{ installed }`', async () => {
+    const repoDir = path.join(temporaryHome, 'repo');
+    await fs.ensureDir(repoDir);
+    execFileSync('git', ['init'], { cwd: repoDir, env: cliEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
+
+    const result = runCli(['guard', 'install', '--json'], repoDir);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['installed']);
+  });
+
+  it('"dss guard check --json": data keys match AGENTS.md\'s `{ ok, expected, effective }`', async () => {
+    // `dss new -y` (not writeConfig) so the identity is actually SWITCHED
+    // to — writing active.gitconfig and the global include.path entry —
+    // otherwise `git config user.email` would resolve to nothing and this
+    // would exercise the mismatch (exit 1) path instead of the documented
+    // match shape.
+    const create = runCli(['new', '--json', '--name', 'work', '--email', 'work@x.com', '--user', 'Work', '--host', 'github.com', '--key', 'none', '-y']);
+    expect(create.status).toBe(0);
+    const repoDir = path.join(temporaryHome, 'repo');
+    await fs.ensureDir(repoDir);
+    execFileSync('git', ['init'], { cwd: repoDir, env: cliEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
+
+    const result = runCli(['guard', 'check', '--json'], repoDir);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['ok', 'expected', 'effective']);
+  });
+
+  it('"dss guard uninstall --json": data keys match AGENTS.md\'s `{ removed }`', async () => {
+    const repoDir = path.join(temporaryHome, 'repo');
+    await fs.ensureDir(repoDir);
+    execFileSync('git', ['init'], { cwd: repoDir, env: cliEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
+
+    const result = runCli(['guard', 'uninstall', '--json'], repoDir);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['removed']);
   });
 
   it('"dss config import --json -y": data keys match AGENTS.md\'s `{ imported, skipped }`', async () => {

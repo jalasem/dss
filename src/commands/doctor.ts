@@ -5,7 +5,8 @@ import { matchRule } from '../core/rules';
 import { IIdentity, IStoreV2 } from '../core/types';
 import { getRepositoryBindingStatus, RepositoryBindingStatus } from '../infra/repoBinding';
 import { checkKeyLoadedInAgent, checkSshConfigHost, checkHostAccess } from '../infra/ssh';
-import { getGitUser } from '../infra/git';
+import { getGitUser, getRecentCommitAuthors } from '../infra/git';
+import { resolveAppliesHere } from '../infra/identityResolution';
 import { UIHelper } from './ui';
 import { fail } from './fail';
 import { EXIT_CODES } from '../core/exitCodes';
@@ -234,6 +235,48 @@ export async function doctor(identityName?: string): Promise<void> {
             `check ~/.dss/rules.gitconfig is included after active.gitconfig in ~/.gitconfig, and no repo-local binding overrides it`);
       } catch {
         report(run, 'warning', 'Rule drift', 'unable to check', 'unable to read the effective git user.name/user.email here');
+      }
+    }
+  }
+
+  // Wrong-identity guard, part 1 (Phase 5 · Task 3): a cwd-scoped, drift-
+  // ONLY check (never a hard failure — attention, not breakage, per the
+  // established ✗-vs-! calibration) over the repo's own recent commit
+  // history, independent of which identity THIS doctor run is checking —
+  // same shape as "Directory rule" above. Section is omitted entirely
+  // (not even its header) when cwd isn't a Git repo, or is one with no
+  // commits yet — getRecentCommitAuthors tolerates both by returning [].
+  if (bindingStatus) {
+    const commitAuthors = await getRecentCommitAuthors(process.cwd());
+    if (commitAuthors.length > 0) {
+      section('Commit history');
+
+      // The "expected" identity here mirrors resolveIdentity's own
+      // omitted-vs-named split: an explicitly named identity (`dss doctor
+      // work`) is compared against directly — the same identity every
+      // other section above checks; an omitted name defers to
+      // resolveAppliesHere (bound > rule > global), the same "which
+      // identity applies HERE" resolution the dashboard and the guard use,
+      // which can legitimately differ from `identity` above when a
+      // directory rule applies to a DIFFERENT identity than the active one.
+      const expected = identityName ? identity : (await resolveAppliesHere(process.cwd(), store)).identity ?? undefined;
+
+      if (!expected) {
+        report(run, 'info', 'Commit history', 'no identity to compare against');
+      } else {
+        const mismatched = commitAuthors.filter(author => author.email !== expected.email);
+        if (mismatched.length === 0) {
+          report(run, 'success', 'Commit history', `last ${commitAuthors.length} commits match`);
+        } else {
+          const distinctEmails = Array.from(new Set(mismatched.map(author => author.email)));
+          const shown = distinctEmails.slice(0, 3);
+          const remainder = distinctEmails.length - shown.length;
+          const emailList = shown.join(', ') + (remainder > 0 ? ` +${remainder} more` : '');
+          report(run, 'warning', 'Commit history',
+            `${mismatched.length} of ${commitAuthors.length} recent commits authored as ${emailList}`,
+            `${mismatched.length} of the last ${commitAuthors.length} commits here were authored as ${emailList}, ` +
+              `not "${expected.name}" (${expected.email}) — install the guard (dss guard install) to catch this before it happens again`);
+        }
       }
     }
   }

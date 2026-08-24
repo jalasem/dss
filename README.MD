@@ -82,9 +82,10 @@ Identities are stored under `~/.dss/spaces/config.json` (schema `version: 2`, ve
 | `dss unlink` | Remove the repo-local binding (`-p <path>` for an explicit repo) |
 | `dss clone <url> [directory]` | Clone a repository with the right identity (rule/host-aware selection), binding it automatically; `-i/--identity <name>` overrides selection |
 | `dss rule add\|ls\|rm <directory> [identityName]` | Add/list/remove a directory rule: an identity that applies automatically under a directory tree, compiled to a native git `includeIf` |
+| `dss guard install\|uninstall\|check` | Wrong-identity guard: install/remove an opt-in pre-commit hook, or run the check it performs directly |
 | `dss key show\|copy\|rotate [identityName]` | Print, clipboard-copy, or regenerate an identity's SSH key |
 | `dss config export\|import [path]` | Back up or restore identity configuration (SSH keys are never included) |
-| `dss doctor [identityName]` | Full health check: key files/permissions, ssh-agent, ssh-config, host auth, Git identity drift, repo binding |
+| `dss doctor [identityName]` | Full health check: key files/permissions, ssh-agent, ssh-config, host auth, Git identity drift, repo binding, commit-history drift |
 | `dss status` | Show the current repository's DSS binding |
 | `dss completion [shell]` | Generate a bash/zsh/fish completion script |
 
@@ -150,6 +151,28 @@ Each rule compiles to a native git `includeIf "gitdir:<directory>/"` section in 
 **Precedence** (most to least specific): a repo-local **binding** (`dss link`) wins over a matching **directory rule**, which wins over the **global** active identity (`dss use`) — matching the order git itself resolves conditional includes and repo-local config.
 
 Directories must exist to add a rule (`~` is expanded, symlinks resolved); the identity doesn't need a key. Removing every rule leaves an empty (harmless) `rules.gitconfig` — its `include.path` entry stays in place. `dss doctor` flags rule drift (the effective git identity in the current directory not matching a configured rule) the same way it flags a stale binding or global switch.
+
+## Wrong-identity guard
+
+`dss doctor` already flags recent commits authored under the wrong identity (a "Commit
+history" section, warning-class — attention, not a hard failure) whenever it runs inside a
+repository with commits. `dss guard` is the opt-in, proactive half: a pre-commit hook that
+refuses a commit outright when it would be made under the wrong identity.
+
+```bash
+dss guard install     # install the hook in the current repository
+dss guard check       # run the same check directly (what the hook runs)
+dss guard uninstall   # remove it
+```
+
+`dss guard install` writes a small `#!/bin/sh` script to the repository's `.git/hooks/pre-commit`
+(resolved via `git rev-parse --git-path`, so it works correctly from a linked worktree too) —
+never overwriting a pre-commit hook DSS didn't write; a foreign hook is refused with the exact
+line to add to it by hand. Re-running `install` over a DSS-installed hook rewrites it silently.
+`dss guard check` resolves the identity expected here the same way the dashboard does (bound >
+directory rule > global default) and compares it against the EFFECTIVE `git config user.email`
+in the repository; a mismatch exits `1` with a message naming the fix (`dss use`/`dss link`). If
+`dss` isn't on `PATH` when a commit happens, the hook no-ops instead of blocking every commit.
 
 ## Cloning with the right identity
 
@@ -253,6 +276,7 @@ src/
 │   ├── dashboard.ts       # Bare-`dss` context dashboard
 │   ├── doctor.ts          # dss doctor (combined health check)
 │   ├── rule.ts             # dss rule add/ls/rm (directory rules → native includeIf)
+│   ├── guard.ts             # dss guard install/uninstall/check (pre-commit wrong-identity guard)
 │   ├── firstRun.ts        # Automatic first-run flow (replaces old `onboard`)
 │   ├── completion.ts      # Shell completion script generation
 │   ├── prompts.ts         # Shared/cancellation-safe prompt helpers
@@ -267,6 +291,8 @@ src/
     ├── store.ts             # Config store (~/.dss/spaces/config.json, v1→v2 migration)
     ├── git.ts               # active/identity gitconfig + global include (includeIf-first)
     ├── rules.ts              # rules.gitconfig compiler (directory rules → includeIf)
+    ├── identityResolution.ts # resolveAppliesHere (bound > rule > global) — shared by dashboard/doctor/guard
+    ├── guard.ts               # pre-commit hook script + git-path resolution + marker detection
     ├── ssh.ts               # ssh-config (parse-don't-splice) and host access checks
     ├── keys.ts              # SSH key generation (system ssh-keygen binary)
     ├── clipboard.ts          # Platform-specific clipboard operations

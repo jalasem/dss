@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { ISpace, IIdentity } from '../core/types';
-import { buildSshCommand } from './repoBinding';
+import { buildSshCommand, gitEnvironment } from './repoBinding';
 import { slugify } from '../core/identity';
 
 const execFileAsync = promisify(execFile);
@@ -29,6 +29,67 @@ export async function getGitUser(): Promise<{ userName: string; email: string }>
   const { stdout: userNameOutput } = await execFileAsync('git', ['config', '--global', '--includes', 'user.name']);
   const { stdout: emailOutput } = await execFileAsync('git', ['config', '--global', '--includes', 'user.email']);
   return { userName: userNameOutput.trim(), email: emailOutput.trim() };
+}
+
+/**
+ * Reads the EFFECTIVE, repo-scoped `user.email` for `cwd` — a bare `git
+ * config user.email` (no `--global`/`--local` restriction), which lets
+ * git's normal repo-scope resolution apply naturally: repo-local config,
+ * any `includeIf`/`include.path` chain (rules.gitconfig, a repo-local
+ * binding), all the way out to the global default. This is deliberately
+ * NOT `getGitUser()` above (which is hard-scoped to `--global`) — `dss
+ * guard check` needs "what will git actually commit as, right here,
+ * right now", the same value `git commit` itself would use. Returns
+ * `undefined` when unset (git exits 1) rather than throwing.
+ */
+export async function getEffectiveRepoGitUserEmail(cwd: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'config', 'user.email'], {
+      encoding: 'utf8',
+      env: gitEnvironment()
+    });
+    const value = stdout.trim();
+    return value || undefined;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Reads up to `count` most recent commits' author email + name
+ * (`git log -N --format=%ae%n%an`, execFile) for `cwd` — the raw material
+ * for `dss doctor`'s "Commit history" drift section. Tolerates an empty
+ * repository (no commits yet — git exits non-zero) and any other git
+ * failure by returning an empty array rather than throwing; the caller
+ * treats an empty return the same as "nothing to check" and skips the
+ * section entirely, per the brief ("only when cwd is a git repo with ≥1
+ * commit").
+ */
+export async function getRecentCommitAuthors(
+  cwd: string,
+  count: number = 20
+): Promise<Array<{ email: string; name: string }>> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
+      'git',
+      ['-C', cwd, 'log', `-${count}`, '--format=%ae%n%an'],
+      { encoding: 'utf8', env: gitEnvironment() }
+    ));
+  } catch {
+    return [];
+  }
+
+  const trimmed = stdout.replace(/\n+$/, '');
+  if (!trimmed) return [];
+
+  const lines = trimmed.split('\n');
+  const authors: Array<{ email: string; name: string }> = [];
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    authors.push({ email: lines[i], name: lines[i + 1] });
+  }
+  return authors;
 }
 
 // ---------------------------------------------------------------------------

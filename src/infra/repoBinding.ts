@@ -21,7 +21,14 @@ const GIT_REPOSITORY_ENVIRONMENT_VARIABLES = [
   'GIT_PREFIX'
 ] as const;
 
-function gitEnvironment(): NodeJS.ProcessEnv {
+/** Strips the Git-repository-scoped env vars (GIT_DIR, GIT_WORK_TREE, ...) a
+ * hook or a wrapping git invocation may have set, so every git subprocess
+ * this codebase spawns resolves paths from its own `-C <cwd>`/cwd argument
+ * instead of an inherited, possibly stale environment. Exported so the
+ * guard (dss guard install/check) and doctor's commit-history check reuse
+ * the exact same defensive stripping repository binding already relies on,
+ * rather than a second copy slowly drifting from this one. */
+export function gitEnvironment(): NodeJS.ProcessEnv {
   const environment = { ...process.env };
   for (const variable of GIT_REPOSITORY_ENVIRONMENT_VARIABLES) {
     delete environment[variable];

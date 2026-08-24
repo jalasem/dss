@@ -21,6 +21,7 @@ import {
 import { setAssumeYes } from '../commands/prompts';
 import { doctor } from '../commands/doctor';
 import { addRule, listRules, rmRule } from '../commands/rule';
+import { installGuard, uninstallGuard, checkGuard } from '../commands/guard';
 import { cloneRepository } from '../commands/clone';
 import { isJsonMode, captureCommanderOutput } from '../commands/jsonOutput';
 
@@ -226,6 +227,26 @@ export function buildProgram(): BuiltProgram {
     .command('rm <directory>')
     .description('Remove a directory rule')
     .action(rmRule);
+
+  const guardCommand = program
+    .command('guard')
+    .description('Wrong-identity guard: an opt-in pre-commit hook that blocks a commit under the wrong identity');
+
+  guardCommand
+    .command('install')
+    .description('Install the pre-commit guard hook in the current repository')
+    .action(installGuard);
+
+  guardCommand
+    .command('uninstall')
+    .description('Remove the pre-commit guard hook (only if DSS installed it)')
+    .action(uninstallGuard);
+
+  guardCommand
+    .command('check')
+    .description('Check whether the effective git identity here matches what DSS expects (the check the hook runs)')
+    .option('--quiet', 'Suppress the success line (a mismatch always prints)')
+    .action(checkGuard);
 
   program
     .command("completion [shell]")
