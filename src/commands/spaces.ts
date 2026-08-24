@@ -23,6 +23,7 @@ import { ISpace, IKeyInfo, IStoreV2 } from "../core/types";
 import { keySettingsUrl } from "../core/hosts";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
+import { jsonData } from "./jsonOutput";
 import { slugify, findSpace, validateIdentityName } from "../core/identity";
 import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/store";
 // Circular import: ./firstRun imports addSpace back from this file. Safe
@@ -233,8 +234,8 @@ export async function addSpace(options: NewIdentityOptions = {}) {
         settingsUrl ? `${host} SSH Keys: ${settingsUrl}` : `Add the public key to your ${host} account.`
       ]);
 
-      console.log(UIHelper.dim("\nPublic SSH Key:"));
-      console.log(UIHelper.highlight(publicKey));
+      UIHelper.print(UIHelper.dim("\nPublic SSH Key:"));
+      UIHelper.print(UIHelper.highlight(publicKey));
     } catch (err) {
       // The space was still created successfully — a clipboard/read failure
       // here is cosmetic, not terminal, so warn rather than fail().
@@ -276,17 +277,44 @@ export async function addSpace(options: NewIdentityOptions = {}) {
 
   if (switchToNewSpace) {
     UIHelper.info("Switching to new identity...");
+    // switchSpace is `use`'s own handler and sets its own jsonData
+    // (switched/previous) when reused here — reassert `new`'s payload
+    // below so its own `switched` key stays the boolean this command's
+    // contract promises, not `use`'s space-name string.
     await switchSpace(slugifiedSpaceName);
   } else {
     UIHelper.success(`Identity "${UIHelper.highlight(slugifiedSpaceName)}" added successfully!`);
     UIHelper.info("Use " + UIHelper.command(`dss use ${slugifiedSpaceName}`) + " to activate it.");
   }
+
+  jsonData({
+    created: { name: slugifiedSpaceName, email, userName, host },
+    key: generatedKeyInfo
+      ? { algorithm: generatedKeyInfo.algorithm, fingerprint: generatedKeyInfo.fingerprint ?? null }
+      : null,
+    switched: switchToNewSpace,
+  });
 }
 
 export async function listSpaces() {
   const { config } = await loadConfig();
 
+  jsonData({
+    identities: config.spaces.map(space => ({
+      name: space.name,
+      email: space.email,
+      userName: space.userName,
+      host: space.host ?? 'github.com',
+      active: space.name === config.activeSpace,
+      hasKey: Boolean(space.sshKeyPath),
+    })),
+    active: config.activeSpace ?? null,
+  });
+
   if (config.spaces.length === 0) {
+    // firstRunFlow's own optional "create your first identity now?" confirm
+    // resolves false without prompting in JSON mode (isNonInteractive() is
+    // true), so this never opens the interactive addSpace() flow here.
     await firstRunFlow(config);
     return;
   }
@@ -333,7 +361,7 @@ export async function switchSpace(
     fail(`Identity "${selectedSpaceName}" not found.`);
     UIHelper.info("Available identities:");
     config.spaces.forEach(s => {
-      console.log(`  ${UIHelper.bullet()} ${UIHelper.highlight(s.name)} (${s.email})`);
+      UIHelper.print(`  ${UIHelper.bullet()} ${UIHelper.highlight(s.name)} (${s.email})`);
     });
     return;
   }
@@ -397,8 +425,10 @@ export async function switchSpace(
       );
     }
 
+    const previousActive = config.activeSpace ?? null;
     config.activeSpace = space.name;
     await persistConfig(store, config, originalBySpace);
+    jsonData({ switched: space.name, previous: previousActive });
 
     UIHelper.clearProgress();
     UIHelper.printSuccessBox("Identity Activated", [
@@ -427,7 +457,7 @@ export async function switchSpace(
       }
     }
 
-    console.log(""); // Add spacing
+    UIHelper.print(""); // Add spacing
     await listSpaces();
   } catch (error) {
     UIHelper.clearProgress();
@@ -475,11 +505,11 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
   }
 
   // Show details of what will be removed
-  console.log(UIHelper.dim("\nIdentity to be removed:"));
-  console.log(`  Name: ${UIHelper.highlight(spaceToRemove.name)}`);
-  console.log(`  Email: ${spaceToRemove.email}`);
-  console.log(`  User: ${spaceToRemove.userName}`);
-  console.log(`  SSH Key: ${UIHelper.filename(spaceToRemove.sshKeyPath)}`);
+  UIHelper.print(UIHelper.dim("\nIdentity to be removed:"));
+  UIHelper.print(`  Name: ${UIHelper.highlight(spaceToRemove.name)}`);
+  UIHelper.print(`  Email: ${spaceToRemove.email}`);
+  UIHelper.print(`  User: ${spaceToRemove.userName}`);
+  UIHelper.print(`  SSH Key: ${UIHelper.filename(spaceToRemove.sshKeyPath)}`);
 
   // Check for dry-run mode
   if (options?.dryRun) {
@@ -517,6 +547,7 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
     // Remove from config
     config.spaces = config.spaces.filter((space) => space.name !== spaceToRemove.name);
     await persistConfig(store, config, originalBySpace);
+    jsonData({ removed: spaceToRemove.name });
 
     UIHelper.clearProgress();
     UIHelper.success(`Identity '${UIHelper.highlight(spaceToRemove.name)}' has been removed successfully.`);
@@ -533,16 +564,16 @@ export async function removeSpace(spaceName?: string, options?: { dryRun?: boole
         `still bound to the removed identity "${spaceToRemove.name}":`
       );
       orphanedBindings.forEach((binding) => {
-        console.log(`  ${UIHelper.bullet()} ${binding.path}`);
+        UIHelper.print(`  ${UIHelper.bullet()} ${binding.path}`);
       });
       UIHelper.info(`Run ${UIHelper.command('dss unlink')} in each repository to clear the binding.`);
     }
 
     // Show remaining identities
     if (config.spaces.length > 0) {
-      console.log(UIHelper.dim("\nRemaining identities:"));
+      UIHelper.print(UIHelper.dim("\nRemaining identities:"));
       config.spaces.forEach(space => {
-        console.log(`  ${UIHelper.bullet()} ${UIHelper.highlight(space.name)} (${space.email})`);
+        UIHelper.print(`  ${UIHelper.bullet()} ${UIHelper.highlight(space.name)} (${space.email})`);
       });
     } else {
       UIHelper.info("No identities remaining. Use " + UIHelper.command("dss new") + " to create a new one.");
@@ -658,6 +689,7 @@ export async function modifySpace(spaceName?: string, options: EditIdentityOptio
 
   let isUpdateMade = false;
   let keyDirMoved = false;
+  const changes: Record<string, string> = {};
   if (slugify(newSpaceName) !== slugify(space.name)) {
     const newSlug = slugify(newSpaceName);
     const isDuplicate = config.spaces.some(
@@ -687,18 +719,22 @@ export async function modifySpace(spaceName?: string, options: EditIdentityOptio
     if (wasActive) {
       config.activeSpace = newSlug;
     }
+    changes.name = newSlug;
     isUpdateMade = true;
   }
   if (email !== originalEmail) {
     space.email = email;
+    changes.email = email;
     isUpdateMade = true;
   }
   if (userName !== originalUserName) {
     space.userName = userName;
+    changes.userName = userName;
     isUpdateMade = true;
   }
   if (host !== originalHost) {
     space.host = host;
+    changes.host = host;
     isUpdateMade = true;
   }
 
@@ -776,5 +812,7 @@ export async function modifySpace(spaceName?: string, options: EditIdentityOptio
   } else {
     UIHelper.info("No changes were made to the identity.");
   }
+
+  jsonData({ updated: space.name, changes });
 }
 

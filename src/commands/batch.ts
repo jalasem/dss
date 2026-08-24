@@ -7,6 +7,7 @@ import { fail } from './fail';
 import { guardedConfirm, guardedCheckbox, UsageError } from './prompts';
 import { slugify, findSpace, validateIdentityName } from '../core/identity';
 import { loadConfig, persistConfig } from '../infra/store';
+import { jsonData } from './jsonOutput';
 
 function hasLineBreak(value: unknown): boolean {
   return typeof value === 'string' && /[\r\n]/.test(value);
@@ -69,6 +70,8 @@ export async function exportSpaceConfiguration(exportPath?: string) {
     `Saved to: ${resolvedExportPath}`,
     'Note: SSH keys not included for security'
   ]);
+
+  jsonData({ exported: selectedSpaces.length, path: resolvedExportPath });
 }
 
 export async function importSpaceConfiguration(importPathArg?: string) {
@@ -94,6 +97,7 @@ export async function importSpaceConfiguration(importPathArg?: string) {
 
     const { store, config, originalBySpace } = await loadConfig();
 
+    const skipped: string[] = [];
     const spacesToImport = importData.spaces.filter((importSpace: any) => {
       // Imported name/email/userName/host/sshKeyPath are unvalidated JSON —
       // a line break in any of them would eventually reach
@@ -110,6 +114,7 @@ export async function importSpaceConfiguration(importPathArg?: string) {
         || hasLineBreak(importSpace.sshKeyPath)
       ) {
         UIHelper.warning(`Identity '${importSpace.name}' contains a line break in its name/email/userName/host - skipping.`);
+        skipped.push(importSpace.name);
         return false;
       }
 
@@ -119,18 +124,21 @@ export async function importSpaceConfiguration(importPathArg?: string) {
       const nameValidation = validateIdentityName(importSpace.name);
       if (nameValidation !== true) {
         UIHelper.warning(`Identity '${importSpace.name}' has an invalid name (${nameValidation}) - skipping.`);
+        skipped.push(importSpace.name);
         return false;
       }
 
       const exists = Boolean(findSpace(config, importSpace.name));
       if (exists) {
         UIHelper.warning(`Identity '${importSpace.name}' already exists - skipping.`);
+        skipped.push(importSpace.name);
       }
       return !exists;
     });
 
     if (spacesToImport.length === 0) {
       UIHelper.info('No new identities to import.');
+      jsonData({ imported: 0, skipped });
       return;
     }
 
@@ -144,6 +152,7 @@ export async function importSpaceConfiguration(importPathArg?: string) {
 
     if (!confirmImport) {
       UIHelper.info('Import cancelled.');
+      jsonData({ imported: 0, skipped });
       return;
     }
 
@@ -164,6 +173,8 @@ export async function importSpaceConfiguration(importPathArg?: string) {
       'Note: SSH keys need to be set up manually',
       'Use `dss edit <identity>` to configure SSH keys'
     ]);
+
+    jsonData({ imported: spacesToImport.length, skipped });
 
   } catch (error) {
     // Let a UsageError from the guarded import confirm keep its own exit-2

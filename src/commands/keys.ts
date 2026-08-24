@@ -12,6 +12,7 @@ import { UIHelper } from './ui';
 import { fail } from './fail';
 import { guardedConfirm, UsageError } from './prompts';
 import { reapplyActiveIdentity } from './spaces';
+import { jsonData } from './jsonOutput';
 
 function keySettingsLine(host: string): string {
   const url = keySettingsUrl(host);
@@ -78,10 +79,19 @@ export async function showKey(identityName?: string): Promise<void> {
   UIHelper.printStatus('Algorithm', identity.key.algorithm, 'info');
   UIHelper.printStatus('Fingerprint', identity.key.fingerprint ?? 'unknown', 'info');
   UIHelper.printStatus('Created', identity.key.createdAt ?? 'unknown', 'info');
-  console.log(UIHelper.dim('\nPublic SSH Key:'));
-  console.log(UIHelper.highlight(publicKey.trim()));
-  console.log('');
+  UIHelper.print(UIHelper.dim('\nPublic SSH Key:'));
+  UIHelper.print(UIHelper.highlight(publicKey.trim()));
+  UIHelper.print('');
   UIHelper.info(keySettingsLine(identity.host));
+
+  jsonData({
+    name: identity.name,
+    algorithm: identity.key.algorithm,
+    fingerprint: identity.key.fingerprint ?? null,
+    createdAt: identity.key.createdAt ?? null,
+    publicKey: publicKey.trim(),
+    settingsUrl: keySettingsUrl(identity.host) ?? null,
+  });
 }
 
 export async function copyKey(identityName?: string): Promise<void> {
@@ -99,6 +109,7 @@ export async function copyKey(identityName?: string): Promise<void> {
     const publicKey = await fs.readFile(publicKeyPath, 'utf8');
     await copyToClipboard(publicKey);
     UIHelper.success(`Public key for "${identity.name}" copied to clipboard.`);
+    jsonData({ copied: true, name: identity.name });
   } catch (error) {
     fail(`Failed to copy public key: ${(error as Error).message}`);
   }
@@ -179,9 +190,14 @@ export async function rotateKey(identityName?: string): Promise<void> {
   ]);
 
   if (publicKey) {
-    console.log(UIHelper.dim('\nPublic SSH Key:'));
-    console.log(UIHelper.highlight(publicKey.trim()));
+    UIHelper.print(UIHelper.dim('\nPublic SSH Key:'));
+    UIHelper.print(UIHelper.highlight(publicKey.trim()));
   }
+
+  jsonData({
+    rotated: identity.name,
+    key: { algorithm: keyInfo.algorithm, fingerprint: keyInfo.fingerprint ?? null },
+  });
 }
 
 export async function keyCommand(action: string, identityName?: string): Promise<void> {

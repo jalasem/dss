@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { performance } from 'perf_hooks';
+import { isJsonMode } from './jsonOutput';
 
 // The calm output voice (Phase 3 · Task 1): one accent (cyan), a small
 // glyph set instead of emoji, no box-drawing, and a PLAIN degrade for
@@ -31,6 +32,29 @@ export class UIHelper {
   }
 
   /**
+   * Every decorative/status write to stdout — inside UIHelper and out —
+   * routes through here (or `write`, for the spinner's raw
+   * `process.stdout.write` calls) so `--json` mode's "exactly one JSON
+   * object on stdout, nothing else" guarantee holds regardless of which
+   * command or renderer produced the line. A no-op in JSON mode; otherwise
+   * `console.log(text)`. Public so command modules with their own raw
+   * `console.log` calls (a public-key dump, a repo listing, ...) can route
+   * through the same guard instead of duplicating the isJsonMode() check.
+   */
+  static print(text: string = ''): void {
+    if (isJsonMode()) return;
+    console.log(text);
+  }
+
+  /** JSON-mode-guarded `process.stdout.write` — see `print`'s note. Used by
+   * the progress spinner, which writes partial lines (`\r...`) that
+   * `print`'s trailing newline would break. */
+  private static write(text: string): void {
+    if (isJsonMode()) return;
+    process.stdout.write(text);
+  }
+
+  /**
    * Swaps decorative glyphs (`·`, `—`) for a plain ASCII dash when in PLAIN
    * mode; a no-op otherwise. Applied wherever a string that might carry one
    * of these glyphs reaches the terminal, so PLAIN output never leaks rich
@@ -50,19 +74,19 @@ export class UIHelper {
   }
 
   static success(message: string): void {
-    console.log(this.isPlain() ? this.plainify(message) : chalk.green(`${GLYPH.success} ${message}`));
+    this.print(this.isPlain() ? this.plainify(message) : chalk.green(`${GLYPH.success} ${message}`));
   }
 
   static error(message: string): void {
-    console.log(this.isPlain() ? `error: ${this.plainify(message)}` : chalk.red(`${GLYPH.error} ${message}`));
+    this.print(this.isPlain() ? `error: ${this.plainify(message)}` : chalk.red(`${GLYPH.error} ${message}`));
   }
 
   static warning(message: string): void {
-    console.log(this.isPlain() ? `warn: ${this.plainify(message)}` : chalk.yellow(`${GLYPH.warning} ${message}`));
+    this.print(this.isPlain() ? `warn: ${this.plainify(message)}` : chalk.yellow(`${GLYPH.warning} ${message}`));
   }
 
   static info(message: string): void {
-    console.log(this.isPlain() ? this.plainify(message) : chalk.dim(message));
+    this.print(this.isPlain() ? this.plainify(message) : chalk.dim(message));
   }
 
   static highlight(text: string): string {
@@ -106,7 +130,7 @@ export class UIHelper {
     if (this.isPlain()) return;
     const terminalWidth = process.stdout.columns || 80;
     const lineWidth = Math.min(width ?? 60, terminalWidth - 4);
-    console.log(chalk.dim('─'.repeat(Math.max(0, lineWidth))));
+    this.print(chalk.dim('─'.repeat(Math.max(0, lineWidth))));
   }
 
   /**
@@ -115,10 +139,10 @@ export class UIHelper {
    */
   static printHeader(title: string): void {
     if (this.isPlain()) {
-      console.log(title);
+      this.print(title);
       return;
     }
-    console.log(chalk.bold.cyan(title));
+    this.print(chalk.bold.cyan(title));
     this.printSeparator(title.length);
   }
 
@@ -147,10 +171,10 @@ export class UIHelper {
 
     if (this.isPlain()) {
       // No box-drawing, no color: a simple tab-separated table that pipes cleanly.
-      console.log(['Name', 'Email', 'User', 'Host', 'Status'].join('\t'));
+      this.print(['Name', 'Email', 'User', 'Host', 'Status'].join('\t'));
       spaces.forEach(space => {
         const name = space.name === activeSpace ? `* ${space.name}` : space.name;
-        console.log([name, space.email, space.userName, host(space), status(space)].join('\t'));
+        this.print([name, space.email, space.userName, host(space), status(space)].join('\t'));
       });
       return;
     }
@@ -167,7 +191,7 @@ export class UIHelper {
       this.padWithColors(chalk.bold('Host'), hostWidth),
       chalk.bold('Status'),
     ].join('  ');
-    console.log(header);
+    this.print(header);
     this.printSeparator(nameWidth + emailWidth + userWidth + hostWidth + 6 + 8);
 
     spaces.forEach(space => {
@@ -182,7 +206,7 @@ export class UIHelper {
         this.padWithColors(chalk.dim(host(space)), hostWidth),
         statusCell,
       ].join('  ');
-      console.log(row);
+      this.print(row);
     });
   }
 
@@ -200,7 +224,7 @@ export class UIHelper {
 
     if (this.isPlain()) {
       // No animation off a TTY — a single static line instead of a spinner.
-      console.log(`${message}...`);
+      this.print(`${message}...`);
       return;
     }
 
@@ -216,7 +240,7 @@ export class UIHelper {
       const spinner = this.progressState.spinner[this.progressState.index % this.progressState.spinner.length];
       const timeStr = elapsed > 0 ? ` (${elapsed}s)` : '';
 
-      process.stdout.write(`\r${chalk.cyan(spinner)} ${this.progressState.message}...${chalk.dim(timeStr)}`);
+      this.write(`\r${chalk.cyan(spinner)} ${this.progressState.message}...${chalk.dim(timeStr)}`);
       this.progressState.index++;
     };
 
@@ -234,7 +258,7 @@ export class UIHelper {
     if (this.isPlain()) return; // nothing was drawn to erase
 
     const terminalWidth = process.stdout.columns || 80;
-    process.stdout.write('\r' + ' '.repeat(terminalWidth) + '\r');
+    this.write('\r' + ' '.repeat(terminalWidth) + '\r');
   }
 
   static updateProgress(message: string): void {
@@ -259,7 +283,7 @@ export class UIHelper {
       .map(line => line.replace(/^\s*[✓✗!⚠]\s*/, '').trim())
       .filter(line => line.length > 0)
       .forEach(line => {
-        console.log(this.isPlain() ? `  - ${this.plainify(line)}` : chalk.dim(`  ${GLYPH.bullet} ${line}`));
+        this.print(this.isPlain() ? `  - ${this.plainify(line)}` : chalk.dim(`  ${GLYPH.bullet} ${line}`));
       });
   }
 
@@ -296,13 +320,13 @@ export class UIHelper {
     };
 
     if (this.isPlain()) {
-      console.log(`${plainTagByStatus[status]}${this.plainify(label)}: ${this.plainify(value)}`);
+      this.print(`${plainTagByStatus[status]}${this.plainify(label)}: ${this.plainify(value)}`);
       return;
     }
 
     const glyph = glyphByStatus[status];
     const prefix = glyph ? `${colorByStatus[status](glyph)} ` : '';
-    console.log(`${prefix}${chalk.bold(label)}: ${value}`);
+    this.print(`${prefix}${chalk.bold(label)}: ${value}`);
   }
 
   /**
@@ -329,12 +353,12 @@ export class UIHelper {
    */
   static printWelcome(): void {
     if (this.isPlain()) {
-      console.log('Dev Spaces Switcher');
-      console.log('Manage isolated development environments with ease');
+      this.print('Dev Spaces Switcher');
+      this.print('Manage isolated development environments with ease');
       return;
     }
-    console.log(chalk.bold.cyan('Dev Spaces Switcher'));
-    console.log(chalk.dim('Manage isolated development environments with ease'));
+    this.print(chalk.bold.cyan('Dev Spaces Switcher'));
+    this.print(chalk.dim('Manage isolated development environments with ease'));
   }
 
   /** A calm, one-line "switched" success — the frameless replacement for

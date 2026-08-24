@@ -3,6 +3,7 @@ import { handleTopLevelError, mapCommanderExitCode } from '../../src/commands/er
 import { UsageError } from '../../src/commands/prompts';
 import { UIHelper } from '../../src/commands/ui';
 import { EXIT_CODES } from '../../src/core/exitCodes';
+import { setJsonMode, _resetJsonStateForTests } from '../../src/commands/jsonOutput';
 
 // Phase 4 · Task 2 — unit-level coverage for the exit-code contract's 130
 // (cancelled) row, which can't be forced at the CLI level: spawnSync's
@@ -68,6 +69,87 @@ describe('handleTopLevelError', () => {
     const boom = new Error('boom');
     expect(() => handleTopLevelError(boom)).toThrow(boom);
     expect(process.exitCode).toBeUndefined();
+  });
+});
+
+// Phase 4 · Task 3 — handleTopLevelError's --json integration: every
+// handled error path (cancelled/UsageError/CommanderError) must flush a
+// single `{ok:false, command, error}` object to stdout in JSON mode.
+describe('handleTopLevelError (JSON mode)', () => {
+  let writeSpy: jest.SpyInstance;
+  let exitSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    process.exitCode = undefined;
+    writeSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    process.exitCode = undefined;
+    _resetJsonStateForTests();
+  });
+
+  it('130: an ExitPromptError flushes {ok:false, error:{message:"cancelled"}} before exiting', () => {
+    setJsonMode('use');
+    handleTopLevelError(new ExitPromptError('User force closed the prompt with 0 null'));
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: false,
+      command: 'use',
+      error: { message: 'cancelled' },
+    });
+    expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.CANCELLED);
+  });
+
+  it('2: a UsageError flushes {ok:false, error:{message: <the UsageError message>}}', () => {
+    setJsonMode('new');
+    handleTopLevelError(new UsageError('Missing required value: pass --name (non-interactive mode)'));
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: false,
+      command: 'new',
+      error: { message: 'Missing required value: pass --name (non-interactive mode)' },
+    });
+    expect(process.exitCode).toBe(EXIT_CODES.USAGE);
+  });
+
+  it('2: an unknown-command CommanderError flushes {ok:false, error:{message}}', () => {
+    setJsonMode('dss');
+    const error = new CommanderError(1, 'commander.unknownCommand', "error: unknown command 'nope'");
+
+    handleTopLevelError(error);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: false,
+      command: 'dss',
+      error: { message: "error: unknown command 'nope'" },
+    });
+    expect(process.exitCode).toBe(EXIT_CODES.USAGE);
+  });
+
+  it('a --help/--version CommanderError (exit 0) does NOT get an error object — ok:true, no data', () => {
+    setJsonMode('dss');
+    const error = new CommanderError(0, 'commander.helpDisplayed', '(display help)');
+
+    handleTopLevelError(error);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: true,
+      command: 'dss',
+      data: {},
+    });
+    expect(process.exitCode).toBe(EXIT_CODES.OK);
+  });
+
+  it('not in JSON mode: no stdout write at all (existing UIHelper.error/info behavior unchanged)', () => {
+    handleTopLevelError(new UsageError('missing --name'));
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });
 

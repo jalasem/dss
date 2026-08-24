@@ -23,6 +23,7 @@ import { setAssumeYes } from './commands/prompts';
 import { handleTopLevelError } from './commands/errorHandling';
 import { dashboard } from './commands/dashboard';
 import { doctor } from './commands/doctor';
+import { setJsonMode, isJsonMode, flushJson } from './commands/jsonOutput';
 
 program
   .name("dss")
@@ -37,7 +38,17 @@ program
   // hook rather than read per-command so it's live before any command's
   // action runs, including the bare-`dss` dashboard path.
   .option('-y, --yes', 'Assume "yes" for every confirmation prompt')
-  .on('option:yes', () => setAssumeYes(true));
+  .on('option:yes', () => setAssumeYes(true))
+  // Global machine-readable output (Phase 4 · Task 3): emits exactly ONE
+  // JSON object to stdout and nothing else — see src/commands/jsonOutput.ts
+  // for the full contract. Implies non-interactive mode (isNonInteractive()
+  // in src/commands/prompts.ts checks isJsonMode() too). `'dss'` here is
+  // only a placeholder command name for errors thrown before any command
+  // resolves (e.g. an unknown command) — the preAction hook below overwrites
+  // it with the actually-resolved primary command name once Commander
+  // matches one.
+  .option('--json', 'Emit machine-readable JSON output (implies non-interactive mode)')
+  .on('option:json', () => setJsonMode('dss'));
 
 // Makes Commander THROW a CommanderError instead of calling process.exit
 // itself for every one of its own errors (unknown command/option, missing
@@ -48,6 +59,12 @@ program
 // Commander copies the exit-override callback onto a subcommand only at
 // the moment that subcommand is created.
 program.exitOverride();
+
+// Maps each deprecated-alias Command object to the primary command name it
+// stands in for (e.g. the "list" alias command -> "ls"), so the --json
+// preAction hook below can report the PRIMARY name for `dss list --json`
+// instead of "list" — see primaryCommandName.
+const aliasPrimaryName = new Map<Command, string>();
 
 /**
  * Registers `oldNameAndArgs` as a legacy alias for `newName`: a hidden
@@ -69,6 +86,7 @@ function deprecatedAlias(
   const cmd = program.command(oldNameAndArgs, { hidden: true });
   cmd.description(`Deprecated: alias for "dss ${newName}" (removed in v3)`);
   if (configure) configure(cmd);
+  aliasPrimaryName.set(cmd, newName);
   cmd.action(async (...args: any[]) => {
     console.error(UIHelper.dim(
       `"dss ${oldName}" is deprecated and will be removed in v3. Use "dss ${newName}".`
@@ -76,6 +94,31 @@ function deprecatedAlias(
     return handler(...args);
   });
 }
+
+/**
+ * The primary-command-name reported in `--json` mode's `{ok, command, ...}`
+ * object: a deprecated alias (`dss list --json`) reports its PRIMARY name
+ * ("ls"), and an ordinary (possibly nested, e.g. `config export`) command
+ * reports its own full space-joined path.
+ */
+function primaryCommandName(actionCommand: Command): string {
+  const aliasTarget = aliasPrimaryName.get(actionCommand);
+  if (aliasTarget) return aliasTarget;
+
+  const parts: string[] = [];
+  for (let current: Command | null = actionCommand; current && current !== program; current = current.parent) {
+    parts.unshift(current.name());
+  }
+  return parts.join(' ');
+}
+
+// Runs before every matched command's action — the earliest point at which
+// Commander has resolved which command (including which alias) was actually
+// invoked. A no-op unless `--json` was already turned on by the option:json
+// handler above.
+program.hook('preAction', (_program, actionCommand) => {
+  if (isJsonMode()) setJsonMode(primaryCommandName(actionCommand));
+});
 
 // --- Primary command surface -------------------------------------------
 
@@ -220,11 +263,35 @@ deprecatedAlias('inspect [identityName]', 'doctor', doctor);
 // of this file so it can be unit-tested without importing this file's own
 // top-level parse/dispatch side effect.
 
-// Bare `dss` (no args at all) runs the context dashboard instead of
-// Commander's own dispatch — `dss --help`/`dss <command> --help` are
-// untouched, since those still have an arg for Commander to parse.
-if (!process.argv.slice(2).length) {
-  dashboard().catch(handleTopLevelError);
+// Bare `dss` (no args at all — or args that are ONLY the global -y/--yes/
+// --json flags, which have no command of their own to attach to) runs the
+// context dashboard instead of Commander's own dispatch — `dss --help`/
+// `dss <command> --help` are untouched, since those still have an arg
+// Commander needs to parse (a real command, or one of its own flags).
+const rawArgs = process.argv.slice(2);
+const GLOBAL_ONLY_FLAGS = new Set(['-y', '--yes', '--json']);
+const isBareDashboardInvocation = rawArgs.every(arg => GLOBAL_ONLY_FLAGS.has(arg));
+
+// handleTopLevelError already flushes for every error shape it handles
+// (see src/commands/errorHandling.ts) — the try/finally here is belt and
+// braces so an error it doesn't handle (rethrown, propagating past this
+// point as an unhandled rejection) still can't skip the flush.
+function runAndFlush(run: () => Promise<unknown>): void {
+  run()
+    .then(() => flushJson())
+    .catch(error => {
+      try {
+        handleTopLevelError(error);
+      } finally {
+        flushJson();
+      }
+    });
+}
+
+if (isBareDashboardInvocation) {
+  if (rawArgs.includes('-y') || rawArgs.includes('--yes')) setAssumeYes(true);
+  if (rawArgs.includes('--json')) setJsonMode('dashboard');
+  runAndFlush(dashboard);
 } else {
-  program.parseAsync(process.argv).catch(handleTopLevelError);
+  runAndFlush(() => program.parseAsync(process.argv));
 }

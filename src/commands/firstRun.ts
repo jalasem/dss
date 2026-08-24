@@ -33,7 +33,7 @@ export async function firstRunFlow(config?: IConfig): Promise<boolean> {
   if (resolvedConfig.spaces.length > 0) return false;
 
   UIHelper.printWelcome();
-  console.log('');
+  UIHelper.print('');
 
   // Optional/informational: triggered automatically (not a command the
   // caller explicitly ran), so non-interactive mode without -y silently

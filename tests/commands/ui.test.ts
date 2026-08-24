@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { UIHelper } from '../../src/commands/ui';
+import { setJsonMode, _resetJsonStateForTests } from '../../src/commands/jsonOutput';
 
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\[[0-9;]*m/;
@@ -361,6 +362,50 @@ describe('UIHelper', () => {
         expect(fragment).not.toMatch(ANSI_RE);
         expect(fragment).not.toMatch(/[✓✗]/);
       }
+    });
+  });
+
+  // Phase 4 · Task 3 — every stdout printer becomes a no-op once `--json`
+  // mode is on, in BOTH PLAIN and rich rendering (the "--json wins over
+  // PLAIN decorations trivially" case from the brief: JSON mode short-
+  // circuits before isPlain() is even consulted).
+  describe('JSON mode suppression', () => {
+    afterEach(() => {
+      _resetJsonStateForTests();
+    });
+
+    it('suppresses every UIHelper stdout printer (PLAIN mode) once --json is on', () => {
+      setJsonMode('ls');
+
+      UIHelper.success('ok');
+      UIHelper.error('bad');
+      UIHelper.warning('careful');
+      UIHelper.info('fyi');
+      UIHelper.printHeader('Title');
+      UIHelper.printSeparator();
+      UIHelper.printSpaceTable([{ name: 'x', email: 'x@y.z', userName: 'X', sshKeyPath: '' }], 'x');
+      UIHelper.printStatus('Label', 'value', 'success');
+      UIHelper.printSuccessBox('Done', ['detail']);
+      UIHelper.printWelcome();
+      UIHelper.printSpaceSwitched('x');
+      UIHelper.print('raw line');
+
+      expect(loggedLines()).toHaveLength(0);
+    });
+
+    it('suppresses UIHelper printers in rich (TTY) mode too — JSON mode wins trivially over PLAIN\'s own decorations', () => {
+      withRichMode(() => {
+        setJsonMode('ls');
+        UIHelper.success('ok');
+        UIHelper.printHeader('Title');
+        UIHelper.print('raw line');
+        expect(loggedLines()).toHaveLength(0);
+      });
+    });
+
+    it('UIHelper.print() is a normal console.log when JSON mode is off', () => {
+      UIHelper.print('hello');
+      expect(loggedLines()).toContain('hello');
     });
   });
 });

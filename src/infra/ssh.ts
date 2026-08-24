@@ -366,8 +366,8 @@ export async function testHostAccess(sshKeyPath: string, host: string): Promise<
     if (!showPublicKey) return;
     const publicKeyPath = `${sshKeyPath}.pub`;
     const publicKey = await fs.readFile(publicKeyPath, 'utf8');
-    console.log(UIHelper.dim("\nPublic SSH Key:"));
-    console.log(UIHelper.highlight(publicKey));
+    UIHelper.print(UIHelper.dim("\nPublic SSH Key:"));
+    UIHelper.print(UIHelper.highlight(publicKey));
   } catch (error) {
     fail(`Error testing SSH access to ${host}: ` + (error as Error).message);
     UIHelper.info(`Ensure the public key has been added to your ${host} account.`);

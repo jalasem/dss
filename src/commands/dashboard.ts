@@ -5,6 +5,7 @@ import { getRepositoryBindingStatus, RepositoryBindingStatus } from '../infra/re
 import { checkKeyLoadedInAgent } from '../infra/ssh';
 import { firstRunFlow } from './firstRun';
 import { UIHelper } from './ui';
+import { isJsonMode, jsonData } from './jsonOutput';
 
 /**
  * The bare-`dss` front door: which identity applies HERE (bound to this
@@ -21,6 +22,13 @@ export async function dashboard(): Promise<void> {
   const store = await loadStore();
 
   if (store.identities.length === 0) {
+    // firstRunFlow's interactive "create your first one now?" offer has no
+    // machine-readable shape — skip it entirely in JSON mode and just
+    // report the empty state (per the brief: `{identities:0, identity:null}`).
+    if (isJsonMode()) {
+      jsonData({ identities: 0, identity: null });
+      return;
+    }
     await firstRunFlow({ spaces: [], activeSpace: store.active });
     return;
   }
@@ -51,19 +59,23 @@ export async function dashboard(): Promise<void> {
     UIHelper.info(
       `${count} identit${count === 1 ? 'y' : 'ies'} available — use ${UIHelper.command('dss use')} to activate one.`
     );
+    jsonData({ identity: null, source: null, identities: count });
     return;
   }
 
-  console.log(
+  UIHelper.print(
     `${UIHelper.activeSpace(identity.name)}   ${UIHelper.dim(identity.email)} ${UIHelper.dim('· ' + source)}`
   );
 
   const healthFragments: string[] = [];
+  let keyHealth: 'ok' | 'missing' | 'none' = 'none';
+  let agentHealth: 'loaded' | 'not-loaded' | 'unknown' = 'unknown';
 
   if (!identity.key) {
     healthFragments.push(UIHelper.statusFragment('warning', 'no key'));
   } else {
     const keyExists = await fs.pathExists(identity.key.path);
+    keyHealth = keyExists ? 'ok' : 'missing';
     healthFragments.push(
       keyExists
         ? UIHelper.statusFragment('success', `key ${identity.key.algorithm}`)
@@ -73,8 +85,10 @@ export async function dashboard(): Promise<void> {
     if (keyExists) {
       const agentCheck = await checkKeyLoadedInAgent(`${identity.key.path}.pub`);
       if (!agentCheck.checked) {
+        agentHealth = 'unknown';
         healthFragments.push(UIHelper.statusFragment('warning', 'agent unknown'));
       } else {
+        agentHealth = agentCheck.loaded ? 'loaded' : 'not-loaded';
         healthFragments.push(
           agentCheck.loaded
             ? UIHelper.statusFragment('success', 'agent loaded')
@@ -84,22 +98,29 @@ export async function dashboard(): Promise<void> {
     }
   }
 
-  console.log(`  ${healthFragments.join('   ')}`);
+  UIHelper.print(`  ${healthFragments.join('   ')}`);
 
   if (!identity.key) {
-    console.log('  ' + UIHelper.dim(`${UIHelper.command(`dss key rotate ${identity.name}`)} to add one`));
+    UIHelper.print('  ' + UIHelper.dim(`${UIHelper.command(`dss key rotate ${identity.name}`)} to add one`));
   }
 
   // Only when cwd genuinely IS a git repo (bindingStatus resolved without
   // throwing) and it's simply unbound — not when cwd isn't a repo at all.
   if (source === 'global default' && bindingStatus && !bindingStatus.bound) {
-    console.log(
+    UIHelper.print(
       '  ' + UIHelper.dim(`· this repo uses the global identity — ${UIHelper.command(`dss link ${identity.name}`)} to bind it`)
     );
   }
 
-  console.log('');
+  UIHelper.print('');
   const count = store.identities.length;
-  console.log(UIHelper.dim(`${count} identit${count === 1 ? 'y' : 'ies'} · ${UIHelper.command('dss ls')}`));
-  console.log(UIHelper.dim(`${UIHelper.command('dss doctor')} for a full check`));
+  UIHelper.print(UIHelper.dim(`${count} identit${count === 1 ? 'y' : 'ies'} · ${UIHelper.command('dss ls')}`));
+  UIHelper.print(UIHelper.dim(`${UIHelper.command('dss doctor')} for a full check`));
+
+  jsonData({
+    identity: { name: identity.name, email: identity.email, userName: identity.userName, host: identity.host },
+    source: source === 'bound to this repo' ? 'bound' : 'global',
+    health: { key: keyHealth, agent: agentHealth },
+    identities: count,
+  });
 }

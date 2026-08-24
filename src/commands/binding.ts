@@ -14,6 +14,7 @@ import { fail } from './fail';
 import { EXIT_CODES } from '../core/exitCodes';
 import { findSpace } from '../core/identity';
 import { loadStore, saveStore, toSpace, recordBinding, removeBinding } from '../infra/store';
+import { jsonData } from './jsonOutput';
 
 export interface BindCommandOptions {
   path?: string;
@@ -97,6 +98,7 @@ export async function bindSpaceToRepository(
         await updateBindingRegistry(store => recordBinding(store, status.repositoryRoot, space.name));
       }
       printStatus(status);
+      jsonData({ bound: [{ path: status.repositoryRoot, identity: space.name }], failed: [] });
       return;
     }
 
@@ -110,7 +112,7 @@ export async function bindSpaceToRepository(
     }
 
     UIHelper.printHeader(options.dryRun ? 'Recursive Binding Preview' : 'Repositories to Bind');
-    repositories.forEach(repository => console.log(`  ${repository}`));
+    repositories.forEach(repository => UIHelper.print(`  ${repository}`));
 
     if (!options.dryRun) {
       // Required-affirm (recursive-bind approval): touches every matching
@@ -136,6 +138,10 @@ export async function bindSpaceToRepository(
     result.failed.forEach(item => UIHelper.error(`${item.repositoryPath}: ${item.message}`));
     if (result.failed.length > 0) process.exitCode = EXIT_CODES.FAILURE;
     UIHelper.info(`${result.successful.length} succeeded, ${result.failed.length} failed.`);
+    jsonData({
+      bound: result.successful.map(status => ({ path: status.repositoryRoot, identity: space.name })),
+      failed: result.failed,
+    });
   } catch (error) {
     // A UsageError from a guarded prompt (resolveSpace's identity picker,
     // the recursive-bind confirm) carries its own exit-2 contract — let it
@@ -150,7 +156,13 @@ export async function unbindSpaceFromRepository(
   options: RepositoryCommandOptions = {}
 ): Promise<void> {
   try {
-    const status = await unbindRepository(options.path || process.cwd(), {
+    const targetPath = options.path || process.cwd();
+    // unbindRepository's own returned status reflects the POST-removal
+    // state (already unbound) once it's actually run — check the PRE-op
+    // state ourselves so the JSON payload can report which path (if any)
+    // actually had a binding removed.
+    const wasBound = (await getRepositoryBindingStatus(targetPath)).bound;
+    const status = await unbindRepository(targetPath, {
       dryRun: options.dryRun
     });
     if (options.dryRun) {
@@ -163,6 +175,7 @@ export async function unbindSpaceFromRepository(
       await updateBindingRegistry(store => removeBinding(store, status.repositoryRoot));
     }
     printStatus(status);
+    jsonData({ unbound: wasBound ? status.repositoryRoot : null });
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -172,7 +185,9 @@ export async function showRepositoryBindingStatus(
   options: RepositoryCommandOptions = {}
 ): Promise<void> {
   try {
-    printStatus(await getRepositoryBindingStatus(options.path || process.cwd()));
+    const status = await getRepositoryBindingStatus(options.path || process.cwd());
+    printStatus(status);
+    jsonData({ ...status });
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }

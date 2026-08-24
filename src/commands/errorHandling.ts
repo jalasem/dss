@@ -2,6 +2,7 @@ import { CommanderError } from 'commander';
 import { UIHelper } from './ui';
 import { isPromptExitError, UsageError } from './prompts';
 import { EXIT_CODES } from '../core/exitCodes';
+import { isJsonMode, jsonFail, flushJson } from './jsonOutput';
 
 // Commander's own usage-class errors (bad/missing invocation input) belong
 // in the same exit-2 bucket as our own UsageError — everything else about
@@ -58,10 +59,21 @@ export function mapCommanderExitCode(error: CommanderError): number {
  * help, and version — see mapCommanderExitCode above) has already printed
  * its own message, so it's just mapped to the right exit code; anything
  * else rethrows.
+ *
+ * In JSON mode (--json), each of the three handled cases ALSO records the
+ * failure via jsonFail (skipped for a CommanderError success code — --help/
+ * --version — which isn't a failure) and flushes the single JSON object to
+ * stdout before returning/exiting — flushJson() is idempotent, so index.ts's
+ * own end-of-chain flush (or a second call here) is always safe.
  */
 export function handleTopLevelError(error: unknown): void {
   if (isPromptExitError(error)) {
-    UIHelper.info('Prompt closed before an answer was given. No changes were made.');
+    if (isJsonMode()) {
+      jsonFail('cancelled');
+    } else {
+      UIHelper.info('Prompt closed before an answer was given. No changes were made.');
+    }
+    flushJson();
     process.exit(EXIT_CODES.CANCELLED);
     // Unreachable in production (process.exit never returns) — the return
     // is here so a test that stubs process.exit (it must, to assert 130
@@ -70,12 +82,22 @@ export function handleTopLevelError(error: unknown): void {
     return;
   }
   if (error instanceof UsageError) {
-    UIHelper.error(error.message);
+    if (isJsonMode()) {
+      jsonFail(error.message);
+    } else {
+      UIHelper.error(error.message);
+    }
+    flushJson();
     process.exitCode = EXIT_CODES.USAGE;
     return;
   }
   if (error instanceof CommanderError) {
-    process.exitCode = mapCommanderExitCode(error);
+    const exitCode = mapCommanderExitCode(error);
+    if (isJsonMode() && exitCode !== EXIT_CODES.OK) {
+      jsonFail(error.message);
+    }
+    flushJson();
+    process.exitCode = exitCode;
     return;
   }
   throw error;

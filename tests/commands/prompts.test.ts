@@ -12,6 +12,7 @@ import {
   assumeYes,
   UsageError,
 } from '../../src/commands/prompts';
+import { setJsonMode, _resetJsonStateForTests } from '../../src/commands/jsonOutput';
 
 jest.mock('@inquirer/prompts', () => ({
   confirm: jest.fn(),
@@ -157,6 +158,20 @@ describe('commands/prompts — isNonInteractive', () => {
     expect(isNonInteractive()).toBe(false);
     (process.stdin as any).isTTY = false;
     expect(isNonInteractive()).toBe(true);
+  });
+
+  // Phase 4 · Task 3 — `--json` implies non-interactive mode too, even on a
+  // TTY with DSS_NO_INPUT unset (a machine-readable invocation must never
+  // block on a prompt).
+  it('is true when JSON mode is on, even on a TTY with DSS_NO_INPUT unset', () => {
+    (process.stdin as any).isTTY = true;
+    delete process.env.DSS_NO_INPUT;
+    setJsonMode('ls');
+    try {
+      expect(isNonInteractive()).toBe(true);
+    } finally {
+      _resetJsonStateForTests();
+    }
   });
 });
 

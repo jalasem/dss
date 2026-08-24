@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import { UIHelper } from './ui';
 import { guardedSelect, guardedConfirm } from './prompts';
+import { jsonData } from './jsonOutput';
 
 export async function generateCompletionScript(shell?: string): Promise<void> {
   UIHelper.printHeader('Shell Completion Setup');
@@ -34,9 +35,11 @@ export async function generateCompletionScript(shell?: string): Promise<void> {
     'Installation instructions will be shown after the script'
   ]);
 
-  console.log('\n' + UIHelper.dim('--- Completion Script ---'));
-  console.log(completionScript);
-  console.log(UIHelper.dim('--- End of Script ---\n'));
+  UIHelper.print('\n' + UIHelper.dim('--- Completion Script ---'));
+  UIHelper.print(completionScript);
+  UIHelper.print(UIHelper.dim('--- End of Script ---\n'));
+
+  jsonData({ shell: selectedShell, script: completionScript });
 
   // Show installation instructions
   showInstallationInstructions(selectedShell);

@@ -1,6 +1,7 @@
 import { confirm, password, select, input, checkbox } from '@inquirer/prompts';
 import { KNOWN_HOSTS } from '../core/hosts';
 import { EXIT_CODES } from '../core/exitCodes';
+import { isJsonMode } from './jsonOutput';
 
 // @inquirer/prompts throws ExitPromptError when stdin closes (piped input
 // exhausted, non-interactive shell) or the user presses Ctrl+C.
@@ -86,13 +87,15 @@ export async function promptHost(currentHost?: string): Promise<string> {
 
 /**
  * True when this process should never wait on stdin for a prompt answer:
- * `DSS_NO_INPUT=1` is set, or stdin is not a TTY (piped/closed/redirected,
- * the shape any script or CI runner uses). A live check — like ui.ts's
- * isPlain() — not a value captured once at startup, so tests (and a
- * long-lived process whose stdin changes) always see the current state.
+ * `DSS_NO_INPUT=1` is set, stdin is not a TTY (piped/closed/redirected, the
+ * shape any script or CI runner uses), or `--json` is on (a machine-
+ * readable invocation must never block on a prompt either — see
+ * src/commands/jsonOutput.ts). A live check — like ui.ts's isPlain() — not
+ * a value captured once at startup, so tests (and a long-lived process
+ * whose stdin changes) always see the current state.
  */
 export function isNonInteractive(): boolean {
-  return process.env.DSS_NO_INPUT === '1' || !process.stdin.isTTY;
+  return process.env.DSS_NO_INPUT === '1' || !process.stdin.isTTY || isJsonMode();
 }
 
 let assumeYesFlag = false;

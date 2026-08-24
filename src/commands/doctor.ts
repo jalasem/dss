@@ -8,22 +8,39 @@ import { getGitUser } from '../infra/git';
 import { UIHelper } from './ui';
 import { fail } from './fail';
 import { EXIT_CODES } from '../core/exitCodes';
+import { jsonData } from './jsonOutput';
 
 type CheckStatus = 'success' | 'error' | 'warning' | 'info';
+type JsonCheckStatus = 'ok' | 'warn' | 'error';
+
+interface DoctorCheck {
+  name: string;
+  status: JsonCheckStatus;
+  detail: string;
+}
 
 interface DoctorRun {
   sawHardFailure: boolean;
   issues: string[];
+  checks: DoctorCheck[];
 }
 
 function section(title: string): void {
-  console.log('');
-  console.log(UIHelper.dim(`${title}:`));
+  UIHelper.print('');
+  UIHelper.print(UIHelper.dim(`${title}:`));
 }
 
-/** Renders one checklist line and folds it into the run's issue/failure tally. */
+function toJsonCheckStatus(status: CheckStatus): JsonCheckStatus {
+  if (status === 'warning') return 'warn';
+  if (status === 'error') return 'error';
+  return 'ok';
+}
+
+/** Renders one checklist line and folds it into the run's issue/failure/
+ * JSON-check tally. */
 function report(run: DoctorRun, status: CheckStatus, label: string, value: string, hint?: string): void {
   UIHelper.printStatus(label, value, status);
+  run.checks.push({ name: label, status: toJsonCheckStatus(status), detail: value });
   if (status === 'error') {
     run.sawHardFailure = true;
     run.issues.push(hint ?? `${label}: ${value}`);
@@ -89,7 +106,7 @@ export async function doctor(identityName?: string): Promise<void> {
 
   UIHelper.printHeader(`Doctor: ${identity.name}`);
 
-  const run: DoctorRun = { sawHardFailure: false, issues: [] };
+  const run: DoctorRun = { sawHardFailure: false, issues: [], checks: [] };
   const isActive = Boolean(store.active) && slugify(store.active as string) === slugify(identity.name);
   const boundHere = Boolean(
     bindingStatus?.bound && bindingStatus.spaceName && slugify(bindingStatus.spaceName) === slugify(identity.name)
@@ -186,7 +203,7 @@ export async function doctor(identityName?: string): Promise<void> {
     }
   }
 
-  console.log('');
+  UIHelper.print('');
   if (!run.sawHardFailure && run.issues.length === 0) {
     UIHelper.success('All checks passed.');
   } else {
@@ -197,4 +214,13 @@ export async function doctor(identityName?: string): Promise<void> {
   if (run.sawHardFailure) {
     process.exitCode = EXIT_CODES.FAILURE;
   }
+
+  const summary = run.checks.reduce(
+    (totals, check) => {
+      totals[check.status]++;
+      return totals;
+    },
+    { ok: 0, warn: 0, error: 0 }
+  );
+  jsonData({ identity: identity.name, checks: run.checks, summary });
 }
