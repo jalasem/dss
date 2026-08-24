@@ -1,4 +1,4 @@
-import { confirm, password, select, input } from '@inquirer/prompts';
+import { confirm, password, select, input, checkbox } from '@inquirer/prompts';
 import { KNOWN_HOSTS } from '../core/hosts';
 
 // @inquirer/prompts throws ExitPromptError when stdin closes (piped input
@@ -138,6 +138,24 @@ interface SelectConfig {
   choices: readonly SelectChoice[];
   default?: unknown;
 }
+type CheckboxChoice = { name?: string; value: string; description?: string; checked?: boolean; disabled?: boolean | string };
+interface CheckboxConfig {
+  message: string;
+  choices: readonly CheckboxChoice[];
+  required?: boolean;
+}
+interface GuardedCheckboxOptions {
+  /** The flag (e.g. "--all") a script should pass instead of answering this
+   * prompt — see guardedCheckbox's own note on why this is largely
+   * theoretical today (every current call site supplies
+   * nonInteractiveDefault, so this never actually throws yet), but every
+   * other guarded wrapper requires it, and a future required-selection
+   * checkbox will need it for real. */
+  flagName: string;
+  /** When set, non-interactive mode resolves to this value instead of
+   * throwing (e.g. "all choices selected" for `dss config export`). */
+  nonInteractiveDefault?: string[];
+}
 
 /** Guarded `input`: interactive → normal prompt; non-interactive → the
  * configured default, or a UsageError naming `flagName`. Never touches
@@ -211,4 +229,20 @@ export async function guardedConfirm(opts: {
   }
   if (opts.optional) return false;
   throw new UsageError(`Confirmation required: pass ${opts.flag ?? '-y/--yes'} (non-interactive mode)`);
+}
+
+/** Guarded `checkbox` (multi-select; string-valued choices only — the one
+ * checkbox in this codebase, `dss config export`'s identity picker). Same
+ * interactive/non-interactive contract as guardedSelect, except the default
+ * is an array: pass `nonInteractiveDefault: choices.map(c => c.value)` for
+ * a "select everything" default (a script exporting non-interactively
+ * wants all identities, not none), or omit it for a genuinely required
+ * selection with no sane default. */
+export async function guardedCheckbox(opts: CheckboxConfig & GuardedCheckboxOptions): Promise<string[]> {
+  const { flagName, nonInteractiveDefault, ...rest } = opts;
+  if (isNonInteractive()) {
+    if (nonInteractiveDefault !== undefined) return nonInteractiveDefault;
+    throw new UsageError(`Missing required value: pass ${flagName} (non-interactive mode)`);
+  }
+  return checkbox(rest);
 }

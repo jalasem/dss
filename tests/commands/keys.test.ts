@@ -5,6 +5,7 @@ import { copyToClipboard } from '../../src/infra/clipboard';
 import { confirm } from '@inquirer/prompts';
 import { IIdentity, IKeyInfo, IStoreV2 } from '../../src/core/types';
 import { UIHelper } from '../../src/commands/ui';
+import { UsageError } from '../../src/commands/prompts';
 
 jest.mock('fs-extra');
 jest.mock('@inquirer/prompts', () => ({
@@ -111,13 +112,11 @@ describe('commands/keys', () => {
       expect(process.exitCode).toBeUndefined();
     });
 
-    it('fails with exit 1 when no identity is named and none is active', async () => {
+    it('throws a UsageError (exit 2) naming the identityName argument when no identity is named and none is active — "missing input the user should have supplied", not an ordinary lookup failure', async () => {
       mockLoadStore.mockResolvedValue(storeWith([keyedIdentity]));
 
-      await showKey();
-
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('No active identity.'));
-      expect(process.exitCode).toBe(1);
+      await expect(showKey()).rejects.toThrow(UsageError);
+      await expect(showKey()).rejects.toThrow('Missing required value: pass the identityName argument');
     });
   });
 

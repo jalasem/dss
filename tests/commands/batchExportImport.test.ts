@@ -66,6 +66,36 @@ describe('commands/batch export/import — host carry', () => {
   });
 
   describe('exportSpaceConfiguration', () => {
+    // Fix-report follow-up (Important #1): the identity checkbox now goes
+    // through guardedCheckbox — non-interactive mode exports ALL identities
+    // instead of hanging on the selection prompt (controller ruling).
+    it('non-interactive: exports ALL identities with no checkbox prompt (never hangs on stdin)', async () => {
+      const original = process.stdin.isTTY;
+      (process.stdin as any).isTTY = false;
+      try {
+        const glSpace: ISpace = { name: 'work', email: 'w@x.com', userName: 'W', host: 'gitlab.com', sshKeyPath: '' };
+        const defaultSpace: ISpace = { name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' };
+        mockLoadStore.mockResolvedValue(storeOf([glSpace, defaultSpace]));
+        (mockFs.writeJson as unknown as jest.Mock).mockResolvedValue(undefined);
+
+        await exportSpaceConfiguration();
+
+        expect(mockCheckbox).not.toHaveBeenCalled();
+        expect(mockFs.writeJson).toHaveBeenCalledWith(
+          exportPath,
+          expect.objectContaining({
+            spaces: [
+              expect.objectContaining({ name: 'work' }),
+              expect.objectContaining({ name: 'personal' })
+            ]
+          }),
+          expect.anything()
+        );
+      } finally {
+        (process.stdin as any).isTTY = original;
+      }
+    });
+
     it('includes each space\'s host in the exported data, defaulting to github.com when unset', async () => {
       const glSpace: ISpace = { name: 'work', email: 'w@x.com', userName: 'W', host: 'gitlab.com', sshKeyPath: '' };
       const defaultSpace: ISpace = { name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' };

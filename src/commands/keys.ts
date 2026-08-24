@@ -10,7 +10,7 @@ import { IIdentity, IStoreV2 } from '../core/types';
 import { keySettingsUrl } from '../core/hosts';
 import { UIHelper } from './ui';
 import { fail } from './fail';
-import { guardedConfirm } from './prompts';
+import { guardedConfirm, UsageError } from './prompts';
 import { reapplyActiveIdentity } from './spaces';
 
 function keySettingsLine(host: string): string {
@@ -28,9 +28,18 @@ async function resolveTargetIdentity(store: IStoreV2, identityName?: string): Pr
     return identity;
   }
 
+  // No positional AND no active identity to fall back to: there is no
+  // input left to resolve an identity from at all — this is "missing
+  // input the user should have supplied" (Phase 4 exit-2 contract), not
+  // an ordinary lookup failure (those — a named-but-unknown identity,
+  // above, or an active identity that's since been deleted, below — stay
+  // at fail()'s exit 1). Unconditional (not gated by isNonInteractive):
+  // there's no picker this could ever fall back to opening, interactive
+  // or not.
   if (!store.active) {
-    fail('No active identity. Specify an identity name or switch to one first.');
-    return undefined;
+    throw new UsageError(
+      'Missing required value: pass the identityName argument (no active identity to fall back to)'
+    );
   }
 
   const identity = findIdentity(store, store.active);

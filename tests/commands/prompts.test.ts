@@ -1,4 +1,4 @@
-import { select, input, confirm, password } from '@inquirer/prompts';
+import { select, input, confirm, password, checkbox } from '@inquirer/prompts';
 import {
   promptHost,
   guardedInput,
@@ -6,6 +6,7 @@ import {
   guardedPassword,
   guardedPromptHost,
   guardedConfirm,
+  guardedCheckbox,
   isNonInteractive,
   setAssumeYes,
   assumeYes,
@@ -16,13 +17,15 @@ jest.mock('@inquirer/prompts', () => ({
   confirm: jest.fn(),
   password: jest.fn(),
   select: jest.fn(),
-  input: jest.fn()
+  input: jest.fn(),
+  checkbox: jest.fn()
 }));
 
 const mockSelect = select as jest.MockedFunction<typeof select>;
 const mockInput = input as jest.MockedFunction<typeof input>;
 const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
 const mockPassword = password as jest.MockedFunction<typeof password>;
+const mockCheckbox = checkbox as jest.MockedFunction<typeof checkbox>;
 
 /** Puts this test in non-interactive mode by making stdin look like a
  * closed/piped, non-TTY stream — tests/setup.ts's global beforeEach
@@ -392,5 +395,55 @@ describe('commands/prompts — guardedConfirm', () => {
     mockConfirm.mockRejectedValue(new ExitPromptError('closed'));
 
     await expect(guardedConfirm({ message: 'Sure?' })).resolves.toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Fix-report follow-up (Important #1): guardedCheckbox — added so
+// `dss config export`'s multi-select has a proper guarded home instead of
+// a hand-rolled bypass, following the same wrapper contract as every other
+// guarded* prompt (interactive passthrough / non-interactive default or
+// UsageError).
+// ---------------------------------------------------------------------
+
+describe('commands/prompts — guardedCheckbox', () => {
+  const choices = [
+    { name: 'work', value: 'work' },
+    { name: 'personal', value: 'personal' },
+  ];
+
+  it('interactive: delegates to checkbox() unchanged (flagName/nonInteractiveDefault stripped)', async () => {
+    mockCheckbox.mockResolvedValue(['work']);
+
+    const result = await guardedCheckbox({
+      message: 'Select identities to export:',
+      choices,
+      flagName: '--all',
+    });
+
+    expect(result).toEqual(['work']);
+    expect(mockCheckbox).toHaveBeenCalledWith({ message: 'Select identities to export:', choices });
+  });
+
+  it('non-interactive with nonInteractiveDefault (export-all): resolves the default, never touches checkbox()', async () => {
+    makeNonInteractive();
+
+    const result = await guardedCheckbox({
+      message: 'Select identities to export:',
+      choices,
+      flagName: '--all',
+      nonInteractiveDefault: ['work', 'personal'],
+    });
+
+    expect(result).toEqual(['work', 'personal']);
+    expect(mockCheckbox).not.toHaveBeenCalled();
+  });
+
+  it('non-interactive, no default: throws UsageError naming flagName, never touches checkbox()', async () => {
+    makeNonInteractive();
+
+    await expect(guardedCheckbox({ message: 'Select:', choices, flagName: '--all' }))
+      .rejects.toThrow('Missing required value: pass --all (non-interactive mode)');
+    expect(mockCheckbox).not.toHaveBeenCalled();
   });
 });

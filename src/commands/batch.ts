@@ -1,11 +1,10 @@
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
-import { checkbox } from '@inquirer/prompts';
 import { ISpace } from '../core/types';
 import { UIHelper } from './ui';
 import { fail } from './fail';
-import { guardedConfirm, UsageError } from './prompts';
+import { guardedConfirm, guardedCheckbox, UsageError } from './prompts';
 import { slugify, findSpace, validateIdentityName } from '../core/identity';
 import { loadConfig, persistConfig } from '../infra/store';
 
@@ -29,13 +28,18 @@ export async function exportSpaceConfiguration(exportPath?: string) {
 
   UIHelper.printHeader('Export Identity Configuration');
 
-  const selectedSpaces = await checkbox({
+  // Non-interactive default is "export everything" (controller ruling) —
+  // a script running `dss config export` without a TTY wants all
+  // identities, not none; subset selection stays an interactive nicety.
+  const selectedSpaces = await guardedCheckbox({
     message: 'Select identities to export:',
     choices: config.spaces.map(space => ({
       name: space.name,
       value: space.name,
       description: `${space.email} (${space.userName})`
-    }))
+    })),
+    flagName: '--all',
+    nonInteractiveDefault: config.spaces.map(space => space.name),
   });
 
   if (selectedSpaces.length === 0) {

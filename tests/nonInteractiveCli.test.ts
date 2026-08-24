@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
@@ -308,6 +308,75 @@ describe('non-interactive foundation (CLI, stdin closed + DSS_NO_INPUT=1)', () =
       expect(result.stdout).not.toContain('Would you like to save this script');
       const scriptPath = path.join(temporaryHome, 'dss-completion.bash');
       expect(await fs.pathExists(scriptPath)).toBe(false);
+    });
+  });
+
+  // Fix-report follow-up (Important #1): `dss config export` used to call
+  // raw @inquirer/prompts checkbox() with no non-interactive guard at all —
+  // reviewer repro: `sleep 30 | DSS_NO_INPUT=1 node build/index.js config
+  // export` hung indefinitely (checkbox() ignored DSS_NO_INPUT/non-TTY
+  // entirely and just kept reading stdin). Now routed through
+  // guardedCheckbox: non-interactive mode exports ALL identities, no
+  // prompt, no stdin read at all.
+  describe('dss config export', () => {
+    it('non-interactive (stdin closed): exports ALL identities with zero prompt text and exit 0', async () => {
+      await writeConfig([
+        { name: 'work', email: 'work@example.com', userName: 'Work' },
+        { name: 'personal', email: 'personal@example.com', userName: 'Personal' }
+      ]);
+
+      const result = runCli(['config', 'export']);
+
+      expectNoHang(result);
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain('Select identities to export');
+      const exported = await fs.readJson(path.join(temporaryHome, 'dss-export.json'));
+      expect(exported.spaces.map((s: { name: string }) => s.name).sort()).toEqual(['personal', 'work']);
+    });
+
+    /**
+     * The reviewer's exact repro shape: a stdin pipe that stays OPEN with
+     * no EOF ever sent (`sleep 30 | ...`, mirrored here by never calling
+     * `child.stdin.end()`). This is the one scenario `spawnSync(...,
+     * { input: '' })` can't reproduce — that closes stdin (sends EOF)
+     * immediately, which happens to unblock even an unguarded prompt via
+     * ExitPromptError. An open-but-silent pipe does not: the old
+     * unguarded `checkbox()` call would block forever waiting for
+     * keypresses that never arrive. Asserts the process exits well within
+     * a bound instead of being killed for exceeding it.
+     */
+    it('non-interactive (stdin OPEN, no EOF — the reviewer\'s exact repro): does not hang past a bounded timeout', async () => {
+      await writeConfig([{ name: 'work', email: 'work@example.com', userName: 'Work' }]);
+
+      const startedAt = Date.now();
+      const child = spawn(process.execPath, [CLI_PATH, 'config', 'export'], {
+        cwd: temporaryHome,
+        env: cliEnvironment(),
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      // Deliberately do NOT write to or end child.stdin — it stays open,
+      // like the `sleep 30 |` side of the reviewer's repro pipe.
+
+      const outcome = await new Promise<{ hung: boolean; code: number | null; stdout: string }>((resolve) => {
+        let stdout = '';
+        child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          resolve({ hung: true, code: null, stdout });
+        }, 4000);
+        child.on('exit', (code) => {
+          clearTimeout(timer);
+          resolve({ hung: false, code, stdout });
+        });
+      });
+      child.stdin.destroy();
+
+      expect(outcome.hung).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(4000);
+      expect(outcome.code).toBe(0);
+      expect(outcome.stdout).not.toContain('Select identities to export');
+      const exported = await fs.readJson(path.join(temporaryHome, 'dss-export.json'));
+      expect(exported.spaces.map((s: { name: string }) => s.name)).toEqual(['work']);
     });
   });
 
