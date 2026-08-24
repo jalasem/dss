@@ -43,7 +43,18 @@ const SUCCESS_ERROR_CODES = new Set([
  * defaults every error it doesn't special-case to 1).
  */
 export function mapCommanderExitCode(error: CommanderError): number {
-  if (SUCCESS_ERROR_CODES.has(error.code)) return EXIT_CODES.OK;
+  if (SUCCESS_ERROR_CODES.has(error.code)) {
+    // 'commander.help' is dual-purpose in Commander v12: help REQUESTED
+    // (`--help`, `dss help ls`) exits 0, but Commander also reuses the same
+    // code/handler for help printed to STDERR because the invocation itself
+    // was wrong (`dss config` with no subcommand, `dss help badcmd`) — that
+    // path sets error.exitCode to 1 (see Command.prototype.help in
+    // commander's source). Trusting error.exitCode here (rather than
+    // unconditionally returning OK for the whole SUCCESS_ERROR_CODES set)
+    // is what keeps a wrong invocation at exit 2, matching base behavior
+    // (both cases used to exit 1) instead of regressing to 0.
+    return error.exitCode === 0 ? EXIT_CODES.OK : EXIT_CODES.USAGE;
+  }
   if (USAGE_ERROR_CODES.has(error.code)) return EXIT_CODES.USAGE;
   return error.exitCode;
 }
@@ -119,6 +130,13 @@ export function handleTopLevelError(error: unknown): void {
         } else {
           jsonData({ help: output });
         }
+      } else if (SUCCESS_ERROR_CODES.has(error.code)) {
+        // The dual-purpose help-as-error case (review finding #1): Commander's
+        // own `error.message` here is just its internal placeholder
+        // ('(outputHelp)') and any captured writeOut text is the help dump
+        // itself, not a real diagnostic — neither belongs in `error.message`,
+        // so report a real message instead.
+        jsonFail('missing or unknown subcommand');
       } else {
         jsonFail(error.message);
       }

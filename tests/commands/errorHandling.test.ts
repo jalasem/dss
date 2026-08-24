@@ -168,6 +168,26 @@ describe('handleTopLevelError (JSON mode)', () => {
     expect(process.exitCode).toBe(EXIT_CODES.OK);
   });
 
+  // Review finding #1: the dual-purpose 'commander.help' case, mapped to
+  // exit 2 by mapCommanderExitCode — its own error.message is just
+  // Commander's internal placeholder ('(outputHelp)'), so a real message is
+  // substituted instead of surfacing that placeholder (or an empty
+  // data.help) as the JSON error.
+  it('a wrong-invocation commander.help CommanderError (exit 2) flushes a real error message, not the "(outputHelp)" placeholder', () => {
+    setJsonMode('dss');
+    const error = new CommanderError(1, 'commander.help', '(outputHelp)');
+
+    handleTopLevelError(error);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(writeSpy.mock.calls[0][0] as string)).toEqual({
+      ok: false,
+      command: 'dss',
+      error: { message: 'missing or unknown subcommand' },
+    });
+    expect(process.exitCode).toBe(EXIT_CODES.USAGE);
+  });
+
   it('not in JSON mode: flushJson() never writes (UIHelper.error is still called exactly as the non-JSON describe block above already proves)', () => {
     // UIHelper.error() itself still calls the real console.log -> a real
     // process.stdout.write (proven directly below) — mocked out here so
@@ -203,8 +223,19 @@ describe('mapCommanderExitCode', () => {
     'commander.helpDisplayed',
     'commander.help',
     'commander.version'
-  ])('maps %s to exit 0 (success)', (code) => {
+  ])('maps %s to exit 0 (success) when error.exitCode is 0', (code) => {
     expect(mapCommanderExitCode(new CommanderError(0, code, 'message'))).toBe(EXIT_CODES.OK);
+  });
+
+  // Review finding #1: 'commander.help' is dual-purpose — Commander also
+  // reuses it for help printed to stderr because the invocation was wrong
+  // (`dss config` with no subcommand, `dss help badcmd`), which it signals
+  // via error.exitCode: 1, not a different code. Trusting error.exitCode
+  // (rather than blanket-mapping every SUCCESS_ERROR_CODES entry to OK) is
+  // what keeps this at exit 2 instead of regressing to the pre-Phase-4
+  // behavior's exit 1 turning into an erroneous exit 0.
+  it('maps commander.help to exit 2 (usage) when error.exitCode is 1 (wrong invocation, not a real help request)', () => {
+    expect(mapCommanderExitCode(new CommanderError(1, 'commander.help', '(outputHelp)'))).toBe(EXIT_CODES.USAGE);
   });
 
   it('keeps the exitCode of any other CommanderError as-is', () => {

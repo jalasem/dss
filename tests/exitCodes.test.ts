@@ -62,6 +62,10 @@ describe('exit-code contract (CLI, spawned process)', () => {
   }
 
   beforeAll(() => {
+    // See tests/nonInteractiveCli.test.ts's beforeAll for why this is
+    // skippable (review finding #5) — CI sets DSS_SKIP_TEST_BUILD=1 since
+    // it already builds as its own step; local `npm test` still builds.
+    if (process.env.DSS_SKIP_TEST_BUILD === '1') return;
     execFileSync('npm', ['run', 'build'], {
       cwd: path.join(__dirname, '..'),
       stdio: 'inherit'
@@ -169,6 +173,38 @@ describe('exit-code contract (CLI, spawned process)', () => {
       const result = runCli(['new', '--name']);
       expect(result.status).toBe(2);
       expect(result.stderr).toContain('argument missing');
+    });
+
+    // Review finding #1: 'commander.help' is dual-purpose in Commander v12 —
+    // `dss config` alone (a command with subcommands, none given) reuses the
+    // same code as a real --help request, but signals it's actually a wrong
+    // invocation via error.exitCode: 1. Base (pre-Phase-4) behavior exited 1
+    // for this; the exit-code contract maps that to 2 (usage), not 0.
+    it('"dss config" with no subcommand (commander.help, wrong-invocation case)', () => {
+      const result = runCli(['config']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('Usage: dss config');
+    });
+
+    // Review finding #3: a name-less "use" has nothing to prompt for and no
+    // store to select from, on a completely fresh (empty) store — this must
+    // NOT silently detour into firstRunFlow's optional (declines-silently)
+    // confirm and exit 0; it's a missing positional in non-interactive mode,
+    // same as the non-empty-store case above.
+    it('"dss use" non-interactive on a FRESH (empty) store — no positional, no store to select from', async () => {
+      await writeConfig([]);
+      const result = runCli(['use']);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toContain('Missing required value: pass the identityName argument (non-interactive mode)');
+    });
+
+    // Review finding #4: an unsupported shell value used to print an error
+    // and exit 0 — it's a bad argument value (UsageError), same as any other
+    // invalid flag/argument value in this CLI.
+    it('"dss completion tcsh" (unsupported shell — bad argument value)', () => {
+      const result = runCli(['completion', 'tcsh']);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toContain('not supported');
     });
   });
 

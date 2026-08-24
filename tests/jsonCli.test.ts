@@ -71,6 +71,10 @@ describe('global --json (CLI, spawned process)', () => {
   }
 
   beforeAll(() => {
+    // See tests/nonInteractiveCli.test.ts's beforeAll for why this is
+    // skippable (review finding #5) — CI sets DSS_SKIP_TEST_BUILD=1 since
+    // it already builds as its own step; local `npm test` still builds.
+    if (process.env.DSS_SKIP_TEST_BUILD === '1') return;
     execFileSync('npm', ['run', 'build'], {
       cwd: path.join(__dirname, '..'),
       stdio: 'inherit'
@@ -169,24 +173,26 @@ describe('global --json (CLI, spawned process)', () => {
 
     // Keyless identity: doctor's key/ssh-config/host-auth checks all skip
     // (no network call), keeping this deterministic and fast. Review
-    // finding #1 (controller ruling): `ok` mirrors process.exitCode at
-    // flush time, full stop — doctor's own exit-1 "hard failure" (a
-    // keyless identity) is therefore ok:false, with a generic fallback
-    // error message (doctor never calls fail()/jsonFail() for this path)
-    // and NO `data` key (the checks/summary the non-JSON path prints are
-    // not present on the JSON error object).
-    it('"dss doctor <name> --json" (keyless, network-free, hard failure): ok:false, exit 1, generic error message, no data', async () => {
+    // finding #2 (ruled fix): a JSON failure payload keeps `data` ALONGSIDE
+    // `error` whenever the command produced one — doctor's own exit-1 "hard
+    // failure" (a keyless identity) still carries its full checks[]/summary
+    // (exactly what AGENTS.md documents for this recipe), plus a real error
+    // message (not the generic "command failed" fallback) naming how many
+    // checks failed.
+    it('"dss doctor <name> --json" (keyless, network-free, hard failure): ok:false, exit 1, real error message, data present with checks/summary', async () => {
       await writeConfig([{ name: 'personal', email: 'p@x.com', userName: 'P', sshKeyPath: '' }]);
 
       const result = runCli(['doctor', 'personal', '--json']);
 
       expect(result.status).toBe(1);
       const parsed = parseSoleJsonObject(result.stdout);
-      expect(parsed).toEqual({
-        ok: false,
-        command: 'doctor',
-        error: { message: 'command failed' }
-      });
+      expect(parsed.ok).toBe(false);
+      expect(parsed.command).toBe('doctor');
+      expect(parsed.error.message).toBe('1 check(s) failed');
+      expect(parsed.data.identity).toBe('personal');
+      expect(Array.isArray(parsed.data.checks)).toBe(true);
+      expect(parsed.data.checks.length).toBeGreaterThan(0);
+      expect(parsed.data.summary).toEqual({ ok: expect.any(Number), warn: expect.any(Number), error: 1 });
     });
 
 
@@ -319,6 +325,37 @@ describe('global --json (CLI, spawned process)', () => {
       expect(parsed.error.message).toContain('not found');
     });
 
+    // Review finding #3: a fresh (empty) store must not detour "use <name>"
+    // into firstRunFlow and exit 0 — a name was supplied, so it's looked up
+    // and fails "not found" (exit 1) exactly like the non-empty-store case
+    // above, regardless of store size.
+    it('"dss use nope --json" on a FRESH (empty) store: ok:false, exit 1, "not found"', async () => {
+      await writeConfig([]);
+
+      const result = runCli(['use', 'nope', '--json']);
+
+      expect(result.status).toBe(1);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.command).toBe('use');
+      expect(parsed.error.message).toContain('not found');
+    });
+
+    // Review finding #1: 'commander.help' dual-purpose case, in JSON mode —
+    // a wrong invocation (no subcommand) must be a real error object, not an
+    // empty/placeholder data.help and not exit 0.
+    it('"dss config --json" with no subcommand: ok:false, exit 2, single parseable object with a real error message', () => {
+      const result = runCli(['config', '--json']);
+
+      expect(result.status).toBe(2);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.command).toBe('dss');
+      expect(typeof parsed.error.message).toBe('string');
+      expect(parsed.error.message.length).toBeGreaterThan(0);
+      expect(parsed.error.message).not.toBe('(outputHelp)');
+    });
+
     it('"dss ls --json --nosuchflag" (Commander unknownOption): ok:false, exit 2', () => {
       const result = runCli(['ls', '--json', '--nosuchflag']);
 
@@ -340,6 +377,19 @@ describe('global --json (CLI, spawned process)', () => {
       expect(parsed.error.message).toContain('Missing required value: pass --name (non-interactive mode)');
     });
 
+    // Review finding #4: an unsupported shell value must exit 2 (UsageError)
+    // in JSON mode too, as a single ok:false object — not exit 0 with a
+    // bare stderr/stdout error line.
+    it('"dss completion tcsh --json" (unsupported shell): ok:false, exit 2, single parseable object', () => {
+      const result = runCli(['completion', 'tcsh', '--json']);
+
+      expect(result.status).toBe(2);
+      const parsed = parseSoleJsonObject(result.stdout);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.command).toBe('completion');
+      expect(parsed.error.message).toContain('not supported');
+    });
+
     it('"dss nosuchcommand --json" (Commander unknownCommand, no command ever resolves): ok:false, exit 2, command falls back to "dss"', () => {
       const result = runCli(['--json', 'nosuchcommand']);
 
@@ -354,11 +404,15 @@ describe('global --json (CLI, spawned process)', () => {
     // must still mirror that non-zero exit code. One repo's `.git`
     // directory is made read-only so binding it fails while a sibling repo
     // succeeds, reproducing the exact "N succeeded, M failed" partial case.
+    // Review finding #2: this is exactly the "partial failure" data
+    // AGENTS.md documents (`bound`/`failed`) — it must survive onto the
+    // failure payload's `data` key alongside the generic error message
+    // (binding.ts never calls fail()/jsonFail() for this path either).
     // Skipped when running as root: chmod-based write denial has no effect
     // for root, so the induced failure (and thus the whole point of this
     // test — a genuine partial failure) wouldn't reproduce.
     const itUnlessRoot = (process.getuid?.() ?? 1) === 0 ? it.skip : it;
-    itUnlessRoot('"dss link --recursive --json" with a partial failure (one repo binds, one fails): ok:false, exit 1, generic error message', async () => {
+    itUnlessRoot('"dss link --recursive --json" with a partial failure (one repo binds, one fails): ok:false, exit 1, generic error message, data present with bound/failed', async () => {
       const parentDirectory = path.join(temporaryHome, 'parent');
       const repositoryA = path.join(parentDirectory, 'repoA');
       const repositoryB = path.join(parentDirectory, 'repoB');
@@ -379,11 +433,12 @@ describe('global --json (CLI, spawned process)', () => {
 
         expect(result.status).toBe(1);
         const parsed = parseSoleJsonObject(result.stdout);
-        expect(parsed).toEqual({
-          ok: false,
-          command: 'link',
-          error: { message: 'command failed' }
-        });
+        expect(parsed.ok).toBe(false);
+        expect(parsed.command).toBe('link');
+        expect(parsed.error).toEqual({ message: 'command failed' });
+        expect(parsed.data.bound).toEqual([{ path: repositoryA, identity: 'work' }]);
+        expect(parsed.data.failed).toHaveLength(1);
+        expect(parsed.data.failed[0].repositoryPath).toBe(repositoryB);
       } finally {
         // Restore permissions so the temp-directory cleanup in afterEach
         // can actually remove repoB's .git directory.

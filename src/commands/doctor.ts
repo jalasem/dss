@@ -8,7 +8,7 @@ import { getGitUser } from '../infra/git';
 import { UIHelper } from './ui';
 import { fail } from './fail';
 import { EXIT_CODES } from '../core/exitCodes';
-import { jsonData } from './jsonOutput';
+import { jsonData, jsonFail } from './jsonOutput';
 
 type CheckStatus = 'success' | 'error' | 'warning' | 'info';
 type JsonCheckStatus = 'ok' | 'warn' | 'error';
@@ -211,10 +211,6 @@ export async function doctor(identityName?: string): Promise<void> {
     UIHelper.warning(`${run.issues.length} issue${run.issues.length === 1 ? '' : 's'} — ${shortestHint}`);
   }
 
-  if (run.sawHardFailure) {
-    process.exitCode = EXIT_CODES.FAILURE;
-  }
-
   const summary = run.checks.reduce(
     (totals, check) => {
       totals[check.status]++;
@@ -223,4 +219,15 @@ export async function doctor(identityName?: string): Promise<void> {
     { ok: 0, warn: 0, error: 0 }
   );
   jsonData({ identity: identity.name, checks: run.checks, summary });
+
+  if (run.sawHardFailure) {
+    process.exitCode = EXIT_CODES.FAILURE;
+    // Doctor never routes its hard-failure summary through fail() (its
+    // checklist-style output has no single "the operation failed" message
+    // to print) — without an explicit jsonFail() call here, flushJson()'s
+    // generic "command failed" fallback would be the only error message a
+    // --json caller ever sees, telling them nothing the checks[] above
+    // didn't already say better (review finding #2).
+    jsonFail(`${summary.error} check(s) failed`);
+  }
 }

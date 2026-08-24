@@ -103,6 +103,10 @@ describe('repository binding CLI commands', () => {
   }
 
   beforeAll(() => {
+    // See tests/nonInteractiveCli.test.ts's beforeAll for why this is
+    // skippable (review finding #5) — CI sets DSS_SKIP_TEST_BUILD=1 since
+    // it already builds as its own step; local `npm test` still builds.
+    if (process.env.DSS_SKIP_TEST_BUILD === '1') return;
     execFileSync('npm', ['run', 'build'], {
       cwd: path.join(__dirname, '..'),
       stdio: 'inherit'

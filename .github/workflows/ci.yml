@@ -21,3 +21,11 @@ jobs:
       - run: npm run build
       - run: npm run lint:check
       - run: npm test -- --ci
+        env:
+          # The build already ran as its own step above — several CLI
+          # suites otherwise re-run `npm run build` themselves inside a
+          # beforeAll, which under Jest's parallel workers risks one
+          # worker's build clobbering another's build output mid-run
+          # (review finding #5). Unset for local `npm test`, which still
+          # builds itself.
+          DSS_SKIP_TEST_BUILD: '1'

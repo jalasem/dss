@@ -517,11 +517,27 @@ describe('commands/spaces', () => {
       expect(mockTestHostAccess).toHaveBeenCalledWith(glSpace.sshKeyPath, 'gitlab.com');
     });
 
-    it('runs the first-run flow (welcome banner + creation prompt) when there are no spaces yet, regardless of the requested name', async () => {
+    // Review finding #3: a name WAS supplied, so this must fail "not found"
+    // (like any other nonexistent identity) instead of detouring into
+    // firstRunFlow's welcome banner just because the store happens to be
+    // empty — firstRunFlow is reserved for the NO-NAME empty-store case
+    // (see the two tests below).
+    it('fails "not found" for a nonexistent name even on an empty store, instead of running the first-run flow', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([]));
+
+      await switchSpace('nonexistent-space');
+
+      expect(process.exitCode).toBe(1);
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(call => call && call.includes && call.includes('not found'))).toBe(true);
+      expect(calls.some(call => call && call.includes && call.includes('Dev Spaces Switcher'))).toBe(false);
+    });
+
+    it('runs the first-run flow (welcome banner + creation prompt) when there are no spaces yet AND no name was given', async () => {
       mockLoadStore.mockResolvedValue(storeOf([]));
       mockConfirm.mockResolvedValue(false); // decline creating an identity now
 
-      await switchSpace('nonexistent-space');
+      await switchSpace();
 
       const calls = (console.log as jest.Mock).mock.calls.flat();
       expect(calls.some(call => call && call.includes && call.includes('Dev Spaces Switcher'))).toBe(true);

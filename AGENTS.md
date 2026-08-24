@@ -19,8 +19,12 @@ Git repository.
 - Any other missing required argument/flag with no way to prompt for it also exits `2`.
 - Pass `--json` for machine-readable output: exactly one JSON object on stdout,
   `{ ok: boolean, command: string, data?: object, error?: { message: string } }`. `ok`
-  mirrors the process exit code (`true` only for exit `0`). `--json` implies
-  non-interactive mode, same as `DSS_NO_INPUT=1`.
+  mirrors the process exit code (`true` only for exit `0`). `error` is present when
+  `ok` is `false`; `data` is present whenever the command produced one — including on
+  failure (e.g. `doctor`'s `checks`/`summary`, or a partial `link --recursive`'s
+  `bound`/`failed`), so a failure's diagnostic payload is never discarded just because
+  the command didn't succeed. `--json` implies non-interactive mode, same as
+  `DSS_NO_INPUT=1`.
 - Exit codes: `0` success, `1` operational failure, `2` usage error, `130` cancelled
   (prompt closed before an answer). See README's "Exit codes" section for detail.
 
@@ -75,7 +79,9 @@ Run the full health check:
 dss doctor work --json
 ```
 `data: { identity, checks: [{ name, status: "ok" | "warn" | "error", detail }], summary: { ok, warn, error } }`.
-Exit `1` only on a hard failure (any `error`-status check) — warnings alone keep exit `0`.
+Exit `1` only on a hard failure (any `error`-status check) — warnings alone keep exit `0`. `data` is present
+even on a hard failure (`ok: false`), alongside `error.message` naming how many checks failed — the
+`checks`/`summary` breakdown is exactly what a script needs to tell which check(s) failed.
 
 Rotate an identity's SSH key:
 

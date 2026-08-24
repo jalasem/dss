@@ -135,7 +135,7 @@ Each binding is a private config file under `.git/`, referenced from the reposit
 
 ## Output
 
-DSS output is calm and scriptable: one accent color, a small glyph set (`●` `✓` `✗` `!`) instead of emoji, and no box-drawing. It respects `NO_COLOR` and automatically degrades to plain ASCII whenever stdout isn't a TTY, so piped or CI output stays greppable. Pass the global `--json` flag for machine-readable output instead: exactly one JSON object on stdout, `{ ok, command, data | error }` — see [AGENTS.md](./AGENTS.md) for the full contract and recipes.
+DSS output is calm and scriptable: one accent color, a small glyph set (`●` `✓` `✗` `!`) instead of emoji, and no box-drawing. It respects `NO_COLOR` and automatically degrades to plain ASCII whenever stdout isn't a TTY, so piped or CI output stays greppable. Pass the global `--json` flag for machine-readable output instead: exactly one JSON object on stdout, `{ ok, command, data?, error? }` — `error` is present when `ok` is `false`; `data` is present whenever the command produced one, including alongside `error` on a failure that still has diagnostics worth keeping (e.g. `doctor`'s checks) — see [AGENTS.md](./AGENTS.md) for the full contract and recipes.
 
 ## Exit codes
 

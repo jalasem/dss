@@ -9,9 +9,14 @@ describe('Integration Tests', () => {
   let originalHomeDir: string;
 
   beforeAll(() => {
-    // Build the project
-    execSync('npm run build', { cwd: path.join(__dirname, '..') });
-    
+    // See tests/nonInteractiveCli.test.ts's beforeAll for why this is
+    // skippable (review finding #5) — CI sets DSS_SKIP_TEST_BUILD=1 since
+    // it already builds as its own step; local `npm test` still builds.
+    if (process.env.DSS_SKIP_TEST_BUILD !== '1') {
+      // Build the project
+      execSync('npm run build', { cwd: path.join(__dirname, '..') });
+    }
+
     // Create a temporary home directory for testing
     testHomeDir = path.join(os.tmpdir(), 'dss-test-' + Date.now());
     fs.ensureDirSync(testHomeDir);

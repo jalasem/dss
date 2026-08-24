@@ -91,7 +91,7 @@ describe('jsonOutput', () => {
     expect(JSON.parse(writeSpy.mock.calls[0][0] as string).ok).toBe(true);
   });
 
-  it('ok is false when process.exitCode is non-zero, even if jsonFail() was never called (falls back to a generic message)', () => {
+  it('ok is false when process.exitCode is non-zero, even if jsonFail() was never called (falls back to a generic message) — data survives alongside it', () => {
     setJsonMode('doctor');
     jsonData({ identity: 'x', checks: [{ name: 'Key', status: 'error', detail: 'missing' }] });
     process.exitCode = 1;
@@ -103,9 +103,12 @@ describe('jsonOutput', () => {
       ok: false,
       command: 'doctor',
       error: { message: 'command failed' },
+      // Review finding #2: a failure payload keeps `data` ALONGSIDE `error`
+      // whenever anything was merged into it — doctor's checks[] here is
+      // exactly the diagnostic AGENTS.md documents for a failed run, and
+      // dropping it just because `ok` is false is what caused the bug.
+      data: { identity: 'x', checks: [{ name: 'Key', status: 'error', detail: 'missing' }] },
     });
-    // The data payload built via jsonData is NOT present on an ok:false object.
-    expect(written.data).toBeUndefined();
   });
 
   it('jsonFail() records the FIRST error message only — later calls are no-ops (still requires a non-zero exitCode to surface as ok:false)', () => {
@@ -124,7 +127,7 @@ describe('jsonOutput', () => {
     });
   });
 
-  it('a non-zero exitCode wins over any jsonData() — the object is ok:false with no `data` key, using the recorded jsonFail message', () => {
+  it('a non-zero exitCode wins over any jsonData() — the object is ok:false, using the recorded jsonFail message, with `data` still present (review finding #2)', () => {
     setJsonMode('new');
     jsonData({ created: { name: 'x' } });
     jsonFail('identity already exists');
@@ -135,6 +138,22 @@ describe('jsonOutput', () => {
     const written = JSON.parse(writeSpy.mock.calls[0][0] as string);
     expect(written.ok).toBe(false);
     expect(written.error).toEqual({ message: 'identity already exists' });
+    expect(written.data).toEqual({ created: { name: 'x' } });
+  });
+
+  it('a non-zero exitCode with NO data ever merged in keeps the leaner shape — no `data` key at all', () => {
+    setJsonMode('use');
+    jsonFail('identity not found');
+    process.exitCode = 1;
+
+    flushJson();
+
+    const written = JSON.parse(writeSpy.mock.calls[0][0] as string);
+    expect(written).toEqual({
+      ok: false,
+      command: 'use',
+      error: { message: 'identity not found' },
+    });
     expect(written.data).toBeUndefined();
   });
 

@@ -5,6 +5,7 @@ import path from 'path';
 import { confirm } from '@inquirer/prompts';
 import { generateCompletionScript } from '../../src/commands/completion';
 import { buildProgram } from '../../src/cli/program';
+import { UsageError } from '../../src/commands/prompts';
 
 jest.mock('@inquirer/prompts', () => ({
   confirm: jest.fn(),
@@ -139,6 +140,16 @@ describe('completion script generation', () => {
       consoleSpy.mockRestore();
     }
   }
+
+  // Review finding #4: an unsupported shell value is a bad argument value —
+  // it must throw a UsageError (exit 2 via handleTopLevelError), not print
+  // an error and return normally (which used to leave the CLI exiting 0).
+  it('throws a UsageError for an unsupported shell (e.g. "tcsh") instead of printing an error and returning', async () => {
+    const { program } = buildProgram();
+
+    await expect(generateCompletionScript('tcsh', program)).rejects.toThrow(UsageError);
+    await expect(generateCompletionScript('tcsh', program)).rejects.toThrow(/tcsh/);
+  });
 
   it.each([
     ['bash'],

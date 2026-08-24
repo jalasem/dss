@@ -103,15 +103,31 @@ export function jsonFail(message: string): void {
  * specific message (the two paths above), the error object still needs
  * SOME message — falls back to the generic "command failed" rather than
  * silently omitting `error.message`.
+ *
+ * A failure does NOT discard whatever `data` the command had already
+ * assembled before it failed (review finding #2): doctor's hard-failure
+ * summary (checks[]/summary) and a recursive `link`'s partial-failure
+ * summary (bound[]/failed[]) are exactly the payloads AGENTS.md documents
+ * as useful for failure analysis — dropping them just because `ok` came out
+ * false threw that analysis away. So the failure payload includes `data`
+ * ALONGSIDE `error` whenever anything was ever merged into it via
+ * jsonData()/jsonSetData(), giving `{ok:false, command, error, data}`; a
+ * failure that produced no data at all (most of them — a plain not-found,
+ * a Commander usage error) keeps the leaner `{ok:false, command, error}`
+ * shape unchanged.
  */
 export function flushJson(): void {
   if (!jsonModeOn || alreadyFlushed) return;
   alreadyFlushed = true;
 
   const ok = (process.exitCode ?? 0) === 0;
-  const payload = ok
+  const payload: Record<string, unknown> = ok
     ? { ok: true, command: commandName, data: pendingData }
     : { ok: false, command: commandName, error: { message: firstErrorMessage ?? 'command failed' } };
+
+  if (!ok && Object.keys(pendingData).length > 0) {
+    payload.data = pendingData;
+  }
 
   process.stdout.write(JSON.stringify(payload) + '\n');
 }

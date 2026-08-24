@@ -73,6 +73,13 @@ describe('non-interactive foundation (CLI, stdin closed + DSS_NO_INPUT=1)', () =
   }
 
   beforeAll(() => {
+    // CI already runs `npm run build` as its own step before the test step
+    // (see .github/workflows/ci.yml) — building again here, in every one of
+    // several CLI suites, under Jest's parallel workers, is redundant work
+    // that also risks one worker's build clobbering another's build output
+    // mid-run (review finding #5). Skipped there via DSS_SKIP_TEST_BUILD;
+    // unset locally, so `npm test` on its own still Just Works.
+    if (process.env.DSS_SKIP_TEST_BUILD === '1') return;
     execFileSync('npm', ['run', 'build'], {
       cwd: path.join(__dirname, '..'),
       stdio: 'inherit'
@@ -146,6 +153,27 @@ describe('non-interactive foundation (CLI, stdin closed + DSS_NO_INPUT=1)', () =
       expectNoHang(result);
       expect(result.status).toBe(2);
       expect(result.stdout).toContain('Invalid value for --key');
+    });
+
+    // Review finding #7: --passphrase only means something when a key is
+    // actually generated — silently accepting (and ignoring) it with
+    // --key none used to leave a script believing the passphrase was
+    // applied when it never was.
+    it('"--key none --passphrase" exits 2 instead of silently ignoring --passphrase', async () => {
+      await writeConfig([]);
+
+      const result = runCli([
+        'new',
+        '--name', 'wk', '--email', 'x@y.z', '--user', 'WK', '--host', 'github.com',
+        '--key', 'none', '--passphrase', 'secret'
+      ]);
+
+      expectNoHang(result);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toContain('--passphrase requires a key type other than none');
+      // Nothing was persisted.
+      const config = await fs.readJson(path.join(temporaryHome, '.dss', 'spaces', 'config.json'));
+      expect(config.identities ?? []).toHaveLength(0);
     });
 
     it('omitting --key (all other required flags given) defaults to generating an ed25519 key, matching the interactive default', async () => {

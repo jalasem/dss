@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import { Command } from 'commander';
 import { UIHelper } from './ui';
-import { guardedSelect, guardedConfirm } from './prompts';
+import { guardedSelect, guardedConfirm, UsageError } from './prompts';
 import { jsonData } from './jsonOutput';
 
 // --- describeProgram: walks a Commander `program` into a plain, derivable
@@ -184,8 +184,11 @@ export async function generateCompletionScript(shell: string | undefined, progra
   const completionScript = generateScript(selectedShell, described);
 
   if (!completionScript) {
-    UIHelper.error(`Completion script for ${selectedShell} is not supported yet.`);
-    return;
+    // An unsupported shell value (e.g. "tcsh") is a bad argument value, not
+    // an operational failure — matches every other invalid-flag-value path
+    // in this codebase (UsageError, exit 2) instead of printing an error
+    // and exiting 0 (review finding #4).
+    throw new UsageError(`Completion script for "${selectedShell}" is not supported yet (expected bash, zsh, or fish).`);
   }
 
   UIHelper.printInfoBox('Completion Script Generated', [

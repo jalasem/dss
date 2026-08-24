@@ -189,6 +189,14 @@ export async function addSpace(options: NewIdentityOptions = {}) {
     });
   }
 
+  // --passphrase only means something when a key is actually being
+  // generated — silently ignoring it when --key none is also given would
+  // let a script believe it set a passphrase that was never applied
+  // (review finding #7).
+  if (!shouldGenerateKey && options.passphrase !== undefined) {
+    throw new UsageError('--passphrase requires a key type other than none');
+  }
+
   const passphrase = !shouldGenerateKey
     ? ""
     : options.passphrase ?? await guardedPassword({
@@ -331,7 +339,15 @@ export async function switchSpace(
 ): Promise<void> {
   const { store, config, originalBySpace } = await loadConfig();
 
-  if (config.spaces.length === 0) {
+  // firstRunFlow only applies to the INTERACTIVE empty-store, no-name case
+  // (review finding #3): a name was explicitly supplied (`dss use nope`)
+  // must fail "not found" regardless of store size, rather than silently
+  // detouring into the welcome flow and exiting 0; a non-interactive
+  // invocation with no name has no identity to fall back to and no store to
+  // prompt from, so it falls through to the guardedSelect below, which
+  // throws its own UsageError (exit 2) naming the missing positional
+  // instead of firstRunFlow's optional (silently-declining) confirm.
+  if (!spaceName && config.spaces.length === 0 && !isNonInteractive()) {
     await firstRunFlow(config);
     return;
   }
