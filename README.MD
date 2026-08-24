@@ -135,7 +135,7 @@ Each binding is a private config file under `.git/`, referenced from the reposit
 
 ## Output
 
-DSS output is calm and scriptable: one accent color, a small glyph set (`●` `✓` `✗` `!`) instead of emoji, and no box-drawing. It respects `NO_COLOR` and automatically degrades to plain ASCII whenever stdout isn't a TTY, so piped or CI output stays greppable. A machine-readable `--json` mode is planned but not available yet.
+DSS output is calm and scriptable: one accent color, a small glyph set (`●` `✓` `✗` `!`) instead of emoji, and no box-drawing. It respects `NO_COLOR` and automatically degrades to plain ASCII whenever stdout isn't a TTY, so piped or CI output stays greppable. Pass the global `--json` flag for machine-readable output instead: exactly one JSON object on stdout, `{ ok, command, data | error }` — see [AGENTS.md](./AGENTS.md) for the full contract and recipes.
 
 ## Exit codes
 
@@ -157,6 +157,19 @@ dss new                 # Ctrl+C at the first prompt → exit 130
 ```
 
 Deprecated aliases (`dss list`, `dss switch`, `dss add`, ...) follow the exact same contract as the command they delegate to.
+
+## For coding agents
+
+DSS is safe to drive non-interactively: set `DSS_NO_INPUT=1` (or pipe stdin) and pass `--json`
+for a single machine-readable object on stdout instead of decorated output. See
+[AGENTS.md](./AGENTS.md) for the full non-interactive contract and a copy-paste recipe for
+every command. A few examples:
+
+```bash
+dss ls --json                                    # list identities
+dss use work --json                              # switch the active identity
+dss new --name work --email me@work.com --user "Jane Doe" --host github.com --key ed25519 --json -y
+```
 
 ## Development
 

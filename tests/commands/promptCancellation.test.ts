@@ -1,6 +1,7 @@
 import { confirm } from '@inquirer/prompts';
 import { testHostAccess } from '../../src/infra/ssh';
 import { generateCompletionScript } from '../../src/commands/completion';
+import { buildProgram } from '../../src/cli/program';
 import { bindSpaceToRepository } from '../../src/commands/binding';
 import { safeConfirm, isPromptExitError } from '../../src/commands/prompts';
 import { UIHelper } from '../../src/commands/ui';
@@ -114,7 +115,8 @@ describe('prompt cancellation handling', () => {
       const writeFile = mockFs.writeFile as unknown as jest.Mock;
       writeFile.mockResolvedValue(undefined);
 
-      await expect(generateCompletionScript('zsh')).resolves.toBeUndefined();
+      const { program } = buildProgram();
+      await expect(generateCompletionScript('zsh', program)).resolves.toBeUndefined();
 
       expect(writeFile).not.toHaveBeenCalled();
     });

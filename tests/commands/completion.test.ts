@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { confirm } from '@inquirer/prompts';
 import { generateCompletionScript } from '../../src/commands/completion';
+import { buildProgram } from '../../src/cli/program';
 
 jest.mock('@inquirer/prompts', () => ({
   confirm: jest.fn(),
@@ -129,9 +130,10 @@ describe('completion script generation', () => {
 
   async function captureCompletionOutput(shell: string): Promise<string> {
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    const { program } = buildProgram();
 
     try {
-      await generateCompletionScript(shell);
+      await generateCompletionScript(shell, program);
       return consoleSpy.mock.calls.flat().join('\n');
     } finally {
       consoleSpy.mockRestore();
@@ -185,10 +187,13 @@ describe('completion script generation', () => {
   it('includes link, unlink, and status aliases in zsh output', async () => {
     const script = extractGeneratedScript(await captureCompletionOutput('zsh'));
 
-    expect(script).toContain("'-p[Bind an explicit Git repository]'");
-    expect(script).toContain("'--path[Bind an explicit Git repository]'");
-    expect(script).toContain("'-r[Bind repositories beneath a parent directory]'");
-    expect(script).toContain("'--recursive[Bind repositories beneath a parent directory]'");
+    // Derived from the real `link` command's own option descriptions (not
+    // the "bind" deprecated alias's re-declared text) — see completion.ts's
+    // describeProgram walker.
+    expect(script).toContain("'-p[Link an explicit Git repository]'");
+    expect(script).toContain("'--path[Link an explicit Git repository]'");
+    expect(script).toContain("'-r[Link repositories beneath a parent directory]'");
+    expect(script).toContain("'--recursive[Link repositories beneath a parent directory]'");
     expect(script).toContain("'-p[Select an explicit Git repository]'");
     expect(script).toContain("'--path[Select an explicit Git repository]'");
   });

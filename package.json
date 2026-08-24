@@ -7,13 +7,15 @@
     "dss": "build/index.js"
   },
   "files": [
-    "build/**/*"
+    "build/**/*",
+    "AGENTS.md"
   ],
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "ts-node src/index.ts",
     "lint": "eslint 'src/**/*.{js,ts}' --fix",
+    "lint:check": "eslint 'src/**/*.{js,ts}'",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
