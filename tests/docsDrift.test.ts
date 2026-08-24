@@ -95,20 +95,22 @@ describe('docs drift', () => {
     });
 
     // Blanket "no hidden alias name appears in the script" word-search is
-    // deliberately scoped to just these 6 (of the 10 hidden alias names) —
-    // list/switch/add/remove/bind/unbind. Verified (see the sanity check
-    // run while writing this test) that none of the 6 collides with any
+    // deliberately scoped to just these 5 (of the 10 hidden alias names) —
+    // list/switch/remove/bind/unbind. Verified (see the sanity check run
+    // while writing this test) that none of the 5 collides with any
     // unrelated real text a script legitimately contains, so a plain
-    // word-boundary match is safe here. The other 4 are excluded WITH
+    // word-boundary match is safe here. The other 5 are excluded WITH
     // CAUSE, not by omission: "export"/"import" are also `config`'s own
-    // advertised subcommand names (a real, wanted match), and "test"/
-    // "inspect" — "test" collides with fish's own `test -f ...` builtin
-    // call inside `__dss_get_spaces`, and by construction "inspect" is
-    // never advertised text either way, so the leak that actually matters
-    // for that pair (test/inspect -> doctor) is already covered by
+    // advertised subcommand names (a real, wanted match); "add" is also
+    // `rule`'s own advertised subcommand name (`dss rule add`, a real,
+    // wanted match — same shape as export/import) since Phase 5 · Task 1;
+    // and "test"/"inspect" — "test" collides with fish's own `test -f ...`
+    // builtin call inside `__dss_get_spaces`, and by construction "inspect"
+    // is never advertised text either way, so the leak that actually
+    // matters for that pair (test/inspect -> doctor) is already covered by
     // completion.test.ts's "advertises doctor (not test/inspect)" case,
     // anchored to the dss-subcommand usage specifically rather than a
-    // blanket word match. This covers 6 of the 10; the other 4 have
+    // blanket word match. This covers 5 of the 10; the other 5 have
     // narrower, targeted coverage elsewhere.
     // Excluded WITH CAUSE (see comment above), not by omission — collision
     // risk, not "not worth checking". Computed in beforeAll, not at
@@ -116,20 +118,32 @@ describe('docs drift', () => {
     // outer beforeAll (above) has run.
     let collisionFreeHiddenAliases: string[];
     beforeAll(() => {
-      const excludedFromLeakCheck = new Set(['export', 'import', 'test', 'inspect']);
+      const excludedFromLeakCheck = new Set(['export', 'import', 'test', 'inspect', 'add']);
       const hiddenNames = described.commands.filter(cmd => cmd.hidden).map(cmd => cmd.name);
       collisionFreeHiddenAliases = hiddenNames.filter(name => !excludedFromLeakCheck.has(name));
     });
 
-    it('covers exactly the 6 collision-free hidden aliases (list/switch/add/remove/bind/unbind)', () => {
-      expect([...collisionFreeHiddenAliases].sort()).toEqual(['add', 'bind', 'list', 'remove', 'switch', 'unbind']);
+    it('covers exactly the 5 collision-free hidden aliases (list/switch/remove/bind/unbind)', () => {
+      expect([...collisionFreeHiddenAliases].sort()).toEqual(['bind', 'list', 'remove', 'switch', 'unbind']);
     });
 
-    it.each(generators)('none of the 6 collision-free hidden aliases is advertised in the %s script', (_shell, generate) => {
+    it.each(generators)('none of the 5 collision-free hidden aliases is advertised in the %s script', (_shell, generate) => {
       const script = generate(described);
       for (const alias of collisionFreeHiddenAliases) {
         expect(script).not.toMatch(new RegExp(`\\b${alias}\\b`));
       }
+    });
+
+    // "add" is excluded from the blanket leak check above (real collision
+    // with `rule add`), so its actual leak-prevention needs its own
+    // targeted case, mirroring completion.test.ts's test/inspect coverage:
+    // the hidden `dss add` alias itself must still never be independently
+    // advertised as a TOP-LEVEL command name in any script.
+    it.each(generators)('the hidden "add" alias is not advertised as a top-level command in the %s script', (_shell, generate) => {
+      const script = generate(described);
+      const topLevelCommandNames = nonHidden.map(cmd => cmd.name);
+      expect(topLevelCommandNames).not.toContain('add');
+      expect(script).toContain('rule'); // sanity: rule (and its "add" action) IS legitimately present
     });
   });
 

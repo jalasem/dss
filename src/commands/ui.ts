@@ -210,6 +210,26 @@ export class UIHelper {
     });
   }
 
+  static printRuleTable(rules: Array<{ dir: string; identity: string }>): void {
+    if (rules.length === 0) {
+      this.warning('No directory rules yet.');
+      return;
+    }
+
+    if (this.isPlain()) {
+      this.print(['Directory', 'Identity'].join('\t'));
+      rules.forEach(rule => this.print([rule.dir, rule.identity].join('\t')));
+      return;
+    }
+
+    const dirWidth = Math.max(9, ...rules.map(rule => rule.dir.length));
+    this.print(this.padWithColors(chalk.bold('Directory'), dirWidth) + '  ' + chalk.bold('Identity'));
+    this.printSeparator(dirWidth + 2 + 8);
+    rules.forEach(rule => {
+      this.print(this.padWithColors(chalk.dim(rule.dir), dirWidth) + '  ' + this.highlight(rule.identity));
+    });
+  }
+
   private static progressState = {
     active: false,
     startTime: 0,

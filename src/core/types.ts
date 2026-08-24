@@ -31,9 +31,18 @@ export interface IBinding {
   identity: string;
 }
 
+/** A directory rule: `identity` applies automatically to any Git repository
+ * whose (canonical, absolute) directory falls under `dir` — compiled to a
+ * native `includeIf "gitdir:<dir>/"` section in ~/.dss/rules.gitconfig. */
+export interface IRule {
+  dir: string;
+  identity: string;
+}
+
 export interface IStoreV2 {
   version: 2;
   identities: IIdentity[];
   active?: string;
   bindings: IBinding[];
+  rules: IRule[];
 }

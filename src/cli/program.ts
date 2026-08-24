@@ -20,6 +20,7 @@ import {
 } from '../commands/binding';
 import { setAssumeYes } from '../commands/prompts';
 import { doctor } from '../commands/doctor';
+import { addRule, listRules, rmRule } from '../commands/rule';
 import { isJsonMode, captureCommanderOutput } from '../commands/jsonOutput';
 
 export interface BuiltProgram {
@@ -205,6 +206,25 @@ export function buildProgram(): BuiltProgram {
     .command('import [path]')
     .description('Import identity configuration')
     .action(importSpaceConfiguration);
+
+  const ruleCommand = program
+    .command('rule')
+    .description('Manage directory rules (compiled to native git includeIf)');
+
+  ruleCommand
+    .command('add <directory> <identityName>')
+    .description('Add a directory rule: this identity applies automatically under <directory>')
+    .action(addRule);
+
+  ruleCommand
+    .command('ls')
+    .description('List directory rules')
+    .action(listRules);
+
+  ruleCommand
+    .command('rm <directory>')
+    .description('Remove a directory rule')
+    .action(rmRule);
 
   program
     .command("completion [shell]")

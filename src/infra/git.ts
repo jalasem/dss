@@ -3,8 +3,9 @@ import { promisify } from 'util';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { ISpace } from '../core/types';
+import { ISpace, IIdentity } from '../core/types';
 import { buildSshCommand } from './repoBinding';
+import { slugify } from '../core/identity';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,15 +31,21 @@ export function activeGitconfigPath(): string {
   return path.join(os.homedir(), '.dss', 'active.gitconfig');
 }
 
-function quoteGitConfigValue(value: string): string {
+/** Absolute path to the per-identity gitconfig a directory rule's
+ * `includeIf` points at (~/.dss/identities/<slug>.gitconfig). */
+export function identityGitconfigPath(identityName: string): string {
+  return path.join(os.homedir(), '.dss', 'identities', `${slugify(identityName)}.gitconfig`);
+}
+
+export function quoteGitConfigValue(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /**
  * A raw `\n`/`\r` in a value that's about to be interpolated into a
  * double-quoted single-line gitconfig value would either break the file's
- * line structure (breaking every git invocation that reads it, since
- * active.gitconfig is unconditionally included) or, worse, splice
+ * line structure (breaking every git invocation that reads it, since these
+ * files are unconditionally or conditionally included) or, worse, splice
  * attacker-controlled config lines into a global, always-included file
  * (e.g. an email ending in `"\n[core]\n\tsshCommand = ..."` — arbitrary
  * command execution the next time git shells out over SSH). This is the
@@ -46,13 +53,51 @@ function quoteGitConfigValue(value: string): string {
  * return in a value that ends up in the file, regardless of what prompt
  * validation callers do or don't have upstream.
  */
-function assertNoNewline(label: string, value: string): void {
+function assertNoNewline(target: string, label: string, value: string): void {
   if (/[\r\n]/.test(value)) {
     throw new Error(
-      `Refusing to write active.gitconfig: ${label} contains a line break, ` +
-      'which could corrupt or inject into this globally-included config file.'
+      `Refusing to write ${target}: ${label} contains a line break, ` +
+      'which could corrupt or inject into this config file.'
     );
   }
+}
+
+interface GitconfigIdentityValues {
+  userName: string;
+  email: string;
+  sshKeyPath?: string;
+}
+
+/**
+ * Renders the `[user]` (+ optional `[core] sshCommand`) content shared by
+ * active.gitconfig and every per-identity gitconfig — the section-rendering
+ * guts writeActiveGitconfig and writeIdentityGitconfig both defer to, so the
+ * two file shapes can never drift from each other.
+ */
+function renderIdentityGitconfig(target: string, values: GitconfigIdentityValues): string {
+  assertNoNewline(target, 'userName', values.userName);
+  assertNoNewline(target, 'email', values.email);
+  if (values.sshKeyPath) {
+    assertNoNewline(target, 'sshKeyPath', values.sshKeyPath);
+  }
+
+  const lines = [
+    '[user]',
+    `\tname = ${quoteGitConfigValue(values.userName)}`,
+    `\temail = ${quoteGitConfigValue(values.email)}`
+  ];
+  if (values.sshKeyPath) {
+    lines.push('[core]', `\tsshCommand = ${quoteGitConfigValue(buildSshCommand(values.sshKeyPath))}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** Atomically writes `content` to `configPath` (ensureDir + tmp-file + move-overwrite). */
+async function atomicWriteFile(configPath: string, content: string): Promise<void> {
+  await fs.ensureDir(path.dirname(configPath));
+  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, content);
+  await fs.move(tmpPath, configPath, { overwrite: true });
 }
 
 /**
@@ -63,40 +108,58 @@ function assertNoNewline(label: string, value: string): void {
  * gets a `[user]`-only file.
  */
 export async function writeActiveGitconfig(space: ISpace): Promise<void> {
-  assertNoNewline('userName', space.userName);
-  assertNoNewline('email', space.email);
-  if (space.sshKeyPath) {
-    assertNoNewline('sshKeyPath', space.sshKeyPath);
-  }
-
   const configPath = activeGitconfigPath();
-  const lines = [
-    '[user]',
-    `\tname = ${quoteGitConfigValue(space.userName)}`,
-    `\temail = ${quoteGitConfigValue(space.email)}`
-  ];
-  if (space.sshKeyPath) {
-    lines.push('[core]', `\tsshCommand = ${quoteGitConfigValue(buildSshCommand(space.sshKeyPath))}`);
-  }
-  const content = `${lines.join('\n')}\n`;
-
-  await fs.ensureDir(path.dirname(configPath));
-  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmpPath, content);
-  await fs.move(tmpPath, configPath, { overwrite: true });
+  const content = renderIdentityGitconfig('active.gitconfig', space);
+  await atomicWriteFile(configPath, content);
 }
 
 /**
- * Ensures the user's global Git config includes active.gitconfig, adding it
- * exactly once (idempotent — never a duplicate `include.path` entry).
- *
- * KNOWN CAVEAT: Git applies config in file order, so a `[user]` section that
- * appears AFTER the include line in the user's own ~/.gitconfig still wins
- * over the values in active.gitconfig. DSS can't fix a user's own file
- * ordering here; Phase 3's `doctor` command will detect and flag that case.
+ * Atomically writes `~/.dss/identities/<slug>.gitconfig` for `identity` —
+ * same [user]/[core] shape as active.gitconfig (via the same
+ * renderIdentityGitconfig helper), but named for a directory rule's
+ * `includeIf` to point at rather than the global include. Written/refreshed
+ * on `dss rule add` for the ruled identity, and re-applied whenever an
+ * identity with existing rules is edited (see spaces.ts's modifySpace).
  */
-export async function ensureGlobalInclude(): Promise<void> {
-  const configPath = activeGitconfigPath();
+export async function writeIdentityGitconfig(identity: IIdentity): Promise<void> {
+  const configPath = identityGitconfigPath(identity.name);
+  const content = renderIdentityGitconfig(`${slugify(identity.name)}.gitconfig`, {
+    userName: identity.userName,
+    email: identity.email,
+    sshKeyPath: identity.key?.path
+  });
+  await atomicWriteFile(configPath, content);
+}
+
+/**
+ * Ensures the user's global Git config includes `configPath`, adding it
+ * exactly once (idempotent — never a duplicate `include.path` entry).
+ * Generalized over both DSS-managed includes: active.gitconfig (the global
+ * switch) and rules.gitconfig (directory rules) each call this with their
+ * own path.
+ *
+ * ORDERING: git applies conditional includes in file order, so
+ * rules.gitconfig's `includeIf` sections only override active.gitconfig's
+ * unconditional `[user]` inside a ruled directory when rules.gitconfig's
+ * `include.path` entry comes AFTER active.gitconfig's in ~/.gitconfig.
+ * Since this function only ever APPENDS a missing entry (never reorders
+ * existing ones), the normal call order — `dss new`/`dss use` adding
+ * active.gitconfig's include before any `dss rule add` adds rules.gitconfig's
+ * — produces the correct order for free. KNOWN CAVEAT: if `dss rule add` is
+ * run before active.gitconfig's include has ever been added (no identity
+ * has been switched to yet), or if the user hand-edits ~/.gitconfig and
+ * flips the two entries' order, directory rules will NOT override the
+ * global default as expected — `dss doctor` surfaces drift against the
+ * ruled identity, but doesn't fix mis-ordered entries a user's own file put
+ * there.
+ *
+ * KNOWN CAVEAT (unchanged from before generalization): git applies config
+ * in file order, so a `[user]` section that appears AFTER the include line
+ * in the user's own ~/.gitconfig still wins over the values in an included
+ * file. DSS can't fix a user's own file ordering here; `dss doctor` detects
+ * and flags that case.
+ */
+export async function ensureGlobalInclude(configPath: string): Promise<void> {
   let includes: string[] = [];
   try {
     const { stdout } = await execFileAsync('git', ['config', '--global', '--get-all', 'include.path']);

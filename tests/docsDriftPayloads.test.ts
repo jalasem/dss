@@ -179,6 +179,43 @@ describe('docs drift: recipe payload shapes (CLI, spawned process)', () => {
     expectDataKeys(parsed.data, ['exported', 'path']);
   });
 
+  it('"dss rule add --json": data keys match AGENTS.md\'s `{ added, rules }`', async () => {
+    await writeConfig([{ name: 'work', email: 'work@x.com', userName: 'Work', sshKeyPath: '' }]);
+    const ruleDir = await createTemporaryDirectory();
+
+    const result = runCli(['rule', 'add', ruleDir, 'work', '--json']);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['added', 'rules']);
+  });
+
+  it('"dss rule ls --json": data keys match AGENTS.md\'s `{ rules }`', async () => {
+    await writeConfig([{ name: 'work', email: 'work@x.com', userName: 'Work', sshKeyPath: '' }]);
+
+    const result = runCli(['rule', 'ls', '--json']);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['rules']);
+  });
+
+  it('"dss rule rm --json": data keys match AGENTS.md\'s `{ removed, rules }`', async () => {
+    await writeConfig([{ name: 'work', email: 'work@x.com', userName: 'Work', sshKeyPath: '' }]);
+    const ruleDir = await createTemporaryDirectory();
+    const addResult = runCli(['rule', 'add', ruleDir, 'work', '--json']);
+    expect(addResult.status).toBe(0);
+
+    const result = runCli(['rule', 'rm', ruleDir, '--json']);
+
+    expect(result.status).toBe(0);
+    const parsed = parseSoleJsonObject(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expectDataKeys(parsed.data, ['removed', 'rules']);
+  });
+
   it('"dss config import --json -y": data keys match AGENTS.md\'s `{ imported, skipped }`', async () => {
     await writeConfig([{ name: 'x', email: 'x@y.z', userName: 'X', sshKeyPath: '' }]);
     const exportPath = path.join(temporaryHome, 'export.json');

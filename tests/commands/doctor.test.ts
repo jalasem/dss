@@ -31,8 +31,8 @@ const mockCheckSshConfigHost = checkSshConfigHost as jest.MockedFunction<typeof 
 const mockCheckHostAccess = checkHostAccess as jest.MockedFunction<typeof checkHostAccess>;
 const mockGetGitUser = getGitUser as jest.MockedFunction<typeof getGitUser>;
 
-function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
-  return { version: 2, identities: spaces.map(fromSpace), active, bindings: [] };
+function storeOf(spaces: ISpace[], active?: string, rules: IStoreV2['rules'] = []): IStoreV2 {
+  return { version: 2, identities: spaces.map(fromSpace), active, bindings: [], rules };
 }
 
 const keyedIdentity: ISpace = {
@@ -270,6 +270,48 @@ describe('commands/doctor', () => {
 
       const calls = (console.log as jest.Mock).mock.calls.flat();
       expect(calls.some(c => typeof c === 'string' && c.includes('Repo binding'))).toBe(false);
+    });
+
+    it('shows a Directory rule section and flags rule drift as a warning when the effective git identity does not match the ruled identity', async () => {
+      const ruledIdentity: ISpace = { ...keyedIdentity, name: 'acme', email: 'acme@example.com', userName: 'Acme User' };
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity, ruledIdentity], 'work', [{ dir: '/code/acme', identity: 'acme' }]));
+      mockFs.realpath.mockResolvedValue('/code/acme/project' as never);
+      // beforeEach's mockGetGitUser resolves to keyedIdentity's own
+      // userName/email — matches "work" (the identity being doctored) but
+      // NOT "acme" (the ruled identity for this cwd), so the rule-drift
+      // check must flag a mismatch independent of which identity `doctor`
+      // was asked to check.
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Directory rule'))).toBe(true);
+      expect(calls.some(c => typeof c === 'string' && c.includes('/code/acme') && c.includes('acme'))).toBe(true);
+      expect(calls.some(c => typeof c === 'string' && c.includes('Rule drift'))).toBe(true);
+      expect(process.exitCode).toBeUndefined(); // rule drift is a warning, not a hard failure
+    });
+
+    it('shows Rule drift as a match when the effective git identity equals the ruled identity', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work', [{ dir: '/code/acme', identity: 'work' }]));
+      mockFs.realpath.mockResolvedValue('/code/acme/project' as never);
+      // beforeEach's mockGetGitUser already matches keyedIdentity ("work"),
+      // which is also this rule's identity — no drift.
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Rule drift') && c.includes('matches'))).toBe(true);
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('omits the Directory rule section entirely when cwd matches no configured rule', async () => {
+      mockLoadStore.mockResolvedValue(storeOf([keyedIdentity], 'work', [{ dir: '/code/acme', identity: 'work' }]));
+      mockFs.realpath.mockResolvedValue('/somewhere/else' as never);
+
+      await doctor('work');
+
+      const calls = (console.log as jest.Mock).mock.calls.flat();
+      expect(calls.some(c => typeof c === 'string' && c.includes('Directory rule'))).toBe(false);
     });
 
     it('exits 0 with a warning summary when only ! issues occurred (no ✗)', async () => {

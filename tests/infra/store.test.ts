@@ -53,7 +53,8 @@ describe('infra/store', () => {
           }
         ],
         active: 'my-space',
-        bindings: []
+        bindings: [],
+        rules: []
       });
     });
 
@@ -137,7 +138,8 @@ describe('infra/store', () => {
           }
         ],
         active: 'already-v2',
-        bindings: [{ path: '/repo/one', identity: 'already-v2' }]
+        bindings: [{ path: '/repo/one', identity: 'already-v2' }],
+        rules: [{ dir: '/code/acme', identity: 'already-v2' }]
       };
       await fs.outputJson(configPath, v2Store, { spaces: 2 });
 
@@ -155,14 +157,14 @@ describe('infra/store', () => {
 
       const result = await store.loadStore();
 
-      expect(result).toEqual({ version: 2, identities: [], bindings: [] });
+      expect(result).toEqual({ version: 2, identities: [], bindings: [], rules: [] });
 
       const corruptBackupPath = `${configPath}.corrupt.bak`;
       expect(await fs.pathExists(corruptBackupPath)).toBe(true);
       expect(await fs.readFile(corruptBackupPath, 'utf8')).toBe('{ this is not valid json');
 
       const onDisk = await fs.readJson(configPath);
-      expect(onDisk).toEqual({ version: 2, identities: [], bindings: [] });
+      expect(onDisk).toEqual({ version: 2, identities: [], bindings: [], rules: [] });
     });
 
     it('does not overwrite an existing config.json.corrupt.bak', async () => {
@@ -213,7 +215,8 @@ describe('infra/store', () => {
       const toSave = {
         version: 2 as const,
         identities: [],
-        bindings: [{ path: '/repo/a', identity: 'personal' }]
+        bindings: [{ path: '/repo/a', identity: 'personal' }],
+        rules: [{ dir: '/code/acme', identity: 'personal' }]
       };
 
       await store.saveStore(toSave);
@@ -228,11 +231,12 @@ describe('infra/store', () => {
     });
 
     it('overwrites an existing config.json on a subsequent save', async () => {
-      await store.saveStore({ version: 2, identities: [], bindings: [] });
+      await store.saveStore({ version: 2, identities: [], bindings: [], rules: [] });
       const second = {
         version: 2 as const,
         identities: [{ name: 'a', email: 'a@x.com', userName: 'A', host: 'github.com' }],
-        bindings: []
+        bindings: [],
+        rules: []
       };
 
       await store.saveStore(second);
@@ -243,7 +247,7 @@ describe('infra/store', () => {
 
   describe('recordBinding / removeBinding', () => {
     it('inserts a new binding', () => {
-      const s = { version: 2 as const, identities: [], bindings: [] };
+      const s = { version: 2 as const, identities: [], bindings: [], rules: [] };
       store.recordBinding(s, '/repo/a', 'personal');
       expect(s.bindings).toEqual([{ path: '/repo/a', identity: 'personal' }]);
     });
@@ -252,7 +256,8 @@ describe('infra/store', () => {
       const s = {
         version: 2 as const,
         identities: [],
-        bindings: [{ path: '/repo/a', identity: 'personal' }]
+        bindings: [{ path: '/repo/a', identity: 'personal' }],
+        rules: []
       };
       store.recordBinding(s, '/repo/a', 'work');
       expect(s.bindings).toEqual([{ path: '/repo/a', identity: 'work' }]);
@@ -265,7 +270,8 @@ describe('infra/store', () => {
         bindings: [
           { path: '/repo/a', identity: 'personal' },
           { path: '/repo/b', identity: 'work' }
-        ]
+        ],
+        rules: []
       };
       store.recordBinding(s, '/repo/a', 'other');
       expect(s.bindings).toEqual([
@@ -281,7 +287,8 @@ describe('infra/store', () => {
         bindings: [
           { path: '/repo/a', identity: 'personal' },
           { path: '/repo/b', identity: 'work' }
-        ]
+        ],
+        rules: []
       };
       store.removeBinding(s, '/repo/a');
       expect(s.bindings).toEqual([{ path: '/repo/b', identity: 'work' }]);
@@ -291,10 +298,74 @@ describe('infra/store', () => {
       const s = {
         version: 2 as const,
         identities: [],
-        bindings: [{ path: '/repo/a', identity: 'personal' }]
+        bindings: [{ path: '/repo/a', identity: 'personal' }],
+        rules: []
       };
       store.removeBinding(s, '/does/not/exist');
       expect(s.bindings).toEqual([{ path: '/repo/a', identity: 'personal' }]);
+    });
+  });
+
+  describe('upsertRule / removeRule', () => {
+    it('inserts a new rule', () => {
+      const s = { version: 2 as const, identities: [], bindings: [], rules: [] };
+      store.upsertRule(s, '/code/acme', 'work');
+      expect(s.rules).toEqual([{ dir: '/code/acme', identity: 'work' }]);
+    });
+
+    it('upserts by canonical dir instead of duplicating', () => {
+      const s = {
+        version: 2 as const,
+        identities: [],
+        bindings: [],
+        rules: [{ dir: '/code/acme', identity: 'work' }]
+      };
+      store.upsertRule(s, '/code/acme', 'other');
+      expect(s.rules).toEqual([{ dir: '/code/acme', identity: 'other' }]);
+    });
+
+    it('leaves other rules untouched when upserting one', () => {
+      const s = {
+        version: 2 as const,
+        identities: [],
+        bindings: [],
+        rules: [
+          { dir: '/code/acme', identity: 'work' },
+          { dir: '/code/personal', identity: 'personal' }
+        ]
+      };
+      store.upsertRule(s, '/code/acme', 'other');
+      expect(s.rules).toEqual([
+        { dir: '/code/acme', identity: 'other' },
+        { dir: '/code/personal', identity: 'personal' }
+      ]);
+    });
+
+    it('removes a rule by dir and reports it was removed', () => {
+      const s = {
+        version: 2 as const,
+        identities: [],
+        bindings: [],
+        rules: [
+          { dir: '/code/acme', identity: 'work' },
+          { dir: '/code/personal', identity: 'personal' }
+        ]
+      };
+      const removed = store.removeRule(s, '/code/acme');
+      expect(removed).toBe(true);
+      expect(s.rules).toEqual([{ dir: '/code/personal', identity: 'personal' }]);
+    });
+
+    it('is a no-op and reports false when removing a dir that has no rule', () => {
+      const s = {
+        version: 2 as const,
+        identities: [],
+        bindings: [],
+        rules: [{ dir: '/code/acme', identity: 'work' }]
+      };
+      const removed = store.removeRule(s, '/does/not/exist');
+      expect(removed).toBe(false);
+      expect(s.rules).toEqual([{ dir: '/code/acme', identity: 'work' }]);
     });
   });
 

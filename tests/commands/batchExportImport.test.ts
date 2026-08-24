@@ -51,7 +51,7 @@ const typedFromSpace = fromSpace as typeof FromSpace;
 const exportPath = path.join('/mock/home', 'dss-export.json');
 
 function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
-  return { version: 2, identities: spaces.map(typedFromSpace), active, bindings: [] };
+  return { version: 2, identities: spaces.map(typedFromSpace), active, bindings: [], rules: [] };
 }
 
 describe('commands/batch export/import — host carry', () => {

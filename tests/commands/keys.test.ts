@@ -49,7 +49,7 @@ const mockFs = fs as jest.Mocked<typeof fs>;
 const mockReapplyActiveIdentity = reapplyActiveIdentity as jest.MockedFunction<(space: unknown, store: IStoreV2) => Promise<void>>;
 
 function storeWith(identities: IIdentity[], active?: string): IStoreV2 {
-  return { version: 2, identities, active, bindings: [] };
+  return { version: 2, identities, active, bindings: [], rules: [] };
 }
 
 describe('commands/keys', () => {

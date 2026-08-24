@@ -43,7 +43,7 @@ jest.mock('../src/infra/store', () => {
 });
 
 function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
-  return { version: 2, identities: spaces.map(fromSpace), active, bindings: [] };
+  return { version: 2, identities: spaces.map(fromSpace), active, bindings: [], rules: [] };
 }
 
 describe('Performance Tests', () => {

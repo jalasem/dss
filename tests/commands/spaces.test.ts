@@ -97,7 +97,7 @@ const mockSaveStore = saveStore as jest.MockedFunction<typeof SaveStore>;
 const typedFromSpace = fromSpace as typeof FromSpace;
 
 function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
-  return { version: 2, identities: spaces.map(typedFromSpace), active, bindings: [] };
+  return { version: 2, identities: spaces.map(typedFromSpace), active, bindings: [], rules: [] };
 }
 
 // Mirrors @inquirer/core exactly: the class does NOT override `name`,
@@ -168,7 +168,8 @@ describe('commands/spaces', () => {
           key: mockKeyInfo
         }],
         active: undefined,
-        bindings: []
+        bindings: [],
+        rules: []
       });
     });
 
@@ -828,7 +829,8 @@ describe('commands/spaces', () => {
         bindings: [
           { path: '/repos/one', identity: 'test-space' },
           { path: '/repos/two', identity: 'test-space' }
-        ]
+        ],
+        rules: []
       });
       mockSelect.mockResolvedValue('test-space');
       mockConfirm.mockResolvedValue(true);
@@ -1246,7 +1248,8 @@ describe('commands/spaces', () => {
         bindings: [
           { path: '/repos/live', identity: 'test-space' },
           { path: '/repos/dead', identity: 'test-space' }
-        ]
+        ],
+        rules: []
       });
       (mockFs.pathExists as unknown as jest.Mock).mockResolvedValue(true);
       (mockFs.move as unknown as jest.Mock).mockResolvedValue(undefined);
@@ -1290,7 +1293,8 @@ describe('commands/spaces', () => {
       mockLoadStore.mockResolvedValue({
         version: 2,
         identities: [typedFromSpace(spaceToEdit)],
-        bindings: [{ path: '/repos/live', identity: 'test-space' }]
+        bindings: [{ path: '/repos/live', identity: 'test-space' }],
+        rules: []
       });
       mockBindRepository.mockResolvedValue({} as any);
 
@@ -1469,7 +1473,8 @@ describe('commands/spaces', () => {
       mockLoadStore.mockResolvedValue({
         version: 2,
         identities: [identityA, identityB],
-        bindings: []
+        bindings: [],
+        rules: []
       });
 
       mockInput
@@ -1486,7 +1491,8 @@ describe('commands/spaces', () => {
           identityB
         ],
         active: undefined,
-        bindings: []
+        bindings: [],
+        rules: []
       });
     });
   });

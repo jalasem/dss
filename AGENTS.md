@@ -42,8 +42,8 @@ Detect the current identity (bound to this repo, or the global default):
 ```bash
 dss --json
 ```
-`data: { identity: { name, email, userName, host } | null, source: "bound" | "global" | null, health: { key, agent } | null, identities: number }`.
-All four keys are always present — `null` means "not applicable" (no identity resolved), not "omitted".
+`data: { identity: { name, email, userName, host } | null, source: "bound" | "rule" | "global" | null, health: { key, agent } | null, identities: number }`.
+All four keys are always present — `null` means "not applicable" (no identity resolved), not "omitted". Resolution order: bound (`dss link`) > directory rule (`dss rule add`) > global default (`dss use`).
 
 List all identities:
 
@@ -98,9 +98,26 @@ dss config import ./backup.json --json -y
 ```
 `export data: { exported: number, path: string }` · `import data: { imported: number, skipped: string[] }`
 
+Add a directory rule (this identity applies automatically to every repository under the
+directory, compiled to a native git `includeIf` — no `--json` payload from `dss use`/`dss link`
+needed for it to take effect):
+
+```bash
+dss rule add ~/code/acme work --json
+```
+`data: { added: { dir: string, identity: string }, rules: number }`
+
+List / remove directory rules:
+
+```bash
+dss rule ls --json
+dss rule rm ~/code/acme --json
+```
+`ls data: { rules: [{ dir, identity }] }` · `rm data: { removed: string, rules: number }`
+
 ## Notes
 
 - `dss <command> --help` documents every flag for that command; in `--json` mode,
   `--help`/`--version` also emit JSON (`data.help` / `data.version`) instead of plain text.
-- Rules files, repo cloning, and prompt templates are not part of this CLI (planned
-  separately, not yet available).
+- Repo cloning and prompt templates are not part of this CLI (planned separately, not yet
+  available).

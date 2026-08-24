@@ -4,7 +4,7 @@ import path from "path";
 import { generateKey } from "../infra/keys";
 import { copyToClipboard } from "../infra/clipboard";
 import { addToAgent, removeSSHKeyFromAgent, setHostSSHKey, testHostAccess } from "../infra/ssh";
-import { writeActiveGitconfig, ensureGlobalInclude } from "../infra/git";
+import { writeActiveGitconfig, writeIdentityGitconfig, ensureGlobalInclude, activeGitconfigPath } from "../infra/git";
 import { bindRepository } from "../infra/repoBinding";
 import {
   isPromptExitError,
@@ -24,8 +24,9 @@ import { keySettingsUrl } from "../core/hosts";
 import { UIHelper } from "./ui";
 import { fail } from "./fail";
 import { jsonData, jsonSetData, isJsonMode } from "./jsonOutput";
-import { slugify, findSpace, validateIdentityName } from "../core/identity";
+import { slugify, findSpace, findIdentity, validateIdentityName } from "../core/identity";
 import { loadConfig, persistConfig, saveStore, setIdentityKey } from "../infra/store";
+import { writeRulesGitconfig } from "../infra/rules";
 // Circular import: ./firstRun imports addSpace back from this file. Safe
 // under CommonJS only because `firstRunFlow` is called exclusively inside
 // listSpaces/switchSpace's async bodies below, never at module scope — see
@@ -100,7 +101,7 @@ export async function reapplyActiveIdentity(space: ISpace, store: IStoreV2): Pro
   if (!store.active || slugify(store.active) !== slugify(space.name)) return;
 
   await writeActiveGitconfig(space);
-  await ensureGlobalInclude();
+  await ensureGlobalInclude(activeGitconfigPath());
   if (space.sshKeyPath) {
     await setHostSSHKey(space.sshKeyPath, space.host ?? 'github.com');
   }
@@ -419,7 +420,7 @@ export async function switchSpace(
     // active.gitconfig and make sure the user's global config includes it,
     // rather than writing user.name/user.email directly).
     await writeActiveGitconfig(space);
-    await ensureGlobalInclude();
+    await ensureGlobalInclude(activeGitconfigPath());
     UIHelper.success(`Git user set to ${UIHelper.highlight(space.userName)} <${UIHelper.highlight(space.email)}>.`);
 
     if (hasKey) {
@@ -775,6 +776,16 @@ export async function modifySpace(spaceName?: string, options: EditIdentityOptio
   const matchingBindings = store.bindings.filter(
     (binding) => slugify(binding.identity) === slugify(originalName)
   );
+  // Directory rules referencing this identity — same slug-aware match as
+  // matchingBindings above, and the same rename-condition trigger
+  // (bindingRefreshNeeded) for regenerating the ruled identity's own
+  // gitconfig file: a rename/email/userName/key-path edit must reach
+  // ~/.dss/identities/<slug>.gitconfig the same way it reaches a repo-local
+  // binding's private config, or the rule silently keeps applying stale
+  // values.
+  const matchingRules = store.rules.filter(
+    (rule) => slugify(rule.identity) === slugify(originalName)
+  );
   const bindingRefreshNeeded = renamed
     || space.email !== originalEmail
     || space.userName !== originalUserName
@@ -783,6 +794,12 @@ export async function modifySpace(spaceName?: string, options: EditIdentityOptio
   if (matchingBindings.length > 0 && renamed) {
     matchingBindings.forEach((binding) => {
       binding.identity = space.name;
+    });
+  }
+
+  if (matchingRules.length > 0 && renamed) {
+    matchingRules.forEach((rule) => {
+      rule.identity = space.name;
     });
   }
 
@@ -811,6 +828,32 @@ export async function modifySpace(spaceName?: string, options: EditIdentityOptio
       `Repositories bound to this identity via ${UIHelper.command('dss link')} may still reference the old key path — ` +
       `re-bind them with ${UIHelper.command(`dss link ${space.name}`)}.`
     );
+  }
+
+  // Same trigger as the binding refresh above: an identity with existing
+  // directory rules gets its ~/.dss/identities/<slug>.gitconfig rewritten
+  // whenever a rename/email/userName/key-path edit touches it. A rename
+  // additionally rewrites rules.gitconfig itself (matchingRules' entries
+  // above already point at the NEW slug, so the compiled file must
+  // reference identities/<new-slug>.gitconfig, not the old one).
+  if (matchingRules.length > 0) {
+    if (renamed) {
+      try {
+        await writeRulesGitconfig(store.rules);
+      } catch (error) {
+        UIHelper.warning(`Could not refresh the rules file: ${(error as Error).message}`);
+      }
+    }
+    if (bindingRefreshNeeded) {
+      const refreshedIdentity = findIdentity(store, space.name);
+      if (refreshedIdentity) {
+        try {
+          await writeIdentityGitconfig(refreshedIdentity);
+        } catch (error) {
+          UIHelper.warning(`Could not refresh the rule gitconfig for "${space.name}": ${(error as Error).message}`);
+        }
+      }
+    }
   }
 
   // Unified with bindingRefreshNeeded (rename, email, userName, or key-path

@@ -128,7 +128,8 @@ describe('prompt cancellation handling', () => {
       mockLoadStore.mockResolvedValue({
         version: 2,
         identities: [fromSpace({ name: 'Work', email: 'w@x.com', userName: 'W', sshKeyPath: '/mock/key' })],
-        bindings: []
+        bindings: [],
+        rules: []
       });
       discoverRepositories.mockResolvedValue(['/repo/a', '/repo/b']);
       mockConfirm.mockRejectedValue(createExitPromptError());

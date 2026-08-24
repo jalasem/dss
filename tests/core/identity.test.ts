@@ -9,7 +9,8 @@ describe('spaceLookup', () => {
         { name: 'Legacy Name', email: 'legacy@x.com', userName: 'Legacy', host: 'github.com' },
         { name: 'personal', email: 'personal@x.com', userName: 'Personal', host: 'github.com' }
       ],
-      bindings: []
+      bindings: [],
+      rules: []
     };
 
     it('finds an identity by an exact name match', () => {
@@ -33,7 +34,7 @@ describe('spaceLookup', () => {
     });
 
     it('returns undefined for an empty store', () => {
-      const emptyStore: IStoreV2 = { version: 2, identities: [], bindings: [] };
+      const emptyStore: IStoreV2 = { version: 2, identities: [], bindings: [], rules: [] };
       expect(findIdentity(emptyStore, 'anything')).toBeUndefined();
     });
   });

@@ -80,6 +80,7 @@ Identities are stored under `~/.dss/spaces/config.json` (schema `version: 2`, ve
 | `dss rm [identityName]` | Remove an identity; `--dry-run` previews it. Cannot remove the active identity. Key files are **not** deleted from disk |
 | `dss link [identityName]` | Bind an identity to the current repository (or `-p <path>` / `-r [parent]` for recursive binding); `--dry-run` previews |
 | `dss unlink` | Remove the repo-local binding (`-p <path>` for an explicit repo) |
+| `dss rule add\|ls\|rm <directory> [identityName]` | Add/list/remove a directory rule: an identity that applies automatically under a directory tree, compiled to a native git `includeIf` |
 | `dss key show\|copy\|rotate [identityName]` | Print, clipboard-copy, or regenerate an identity's SSH key |
 | `dss config export\|import [path]` | Back up or restore identity configuration (SSH keys are never included) |
 | `dss doctor [identityName]` | Full health check: key files/permissions, ssh-agent, ssh-config, host auth, Git identity drift, repo binding |
@@ -132,6 +133,22 @@ dss unlink
 ```
 
 Each binding is a private config file under `.git/`, referenced from the repository's Git config via an `includeIf.gitdir:` condition scoped to that worktree — it's never committed, and different worktrees of the same repository can each be bound to a different identity. `dss unlink` removes only that exact condition and file, leaving `extensions.worktreeConfig` and any unrelated includes untouched. Binding requires Git 2.30 or newer.
+
+## Directory rules
+
+Binding pins one identity to one already-existing repository. A directory rule is broader: it applies an identity to **every** Git repository under a directory tree — existing ones and any you clone or create there later — without touching each repository's own config:
+
+```bash
+dss rule add ~/code/acme work    # any repo under ~/code/acme uses "work"
+dss rule ls
+dss rule rm ~/code/acme
+```
+
+Each rule compiles to a native git `includeIf "gitdir:<directory>/"` section in `~/.dss/rules.gitconfig`, pointing at that identity's own `~/.dss/identities/<slug>.gitconfig` — the same `[user]`/`[core] sshCommand` shape as `active.gitconfig`. `~/.dss/rules.gitconfig` is included from your global Git config once, right after `active.gitconfig`'s own include, so a rule overrides the global default *inside* its directory without needing per-repository setup. This is entirely git's own conditional-include mechanism — nothing DSS-specific has to run for it to take effect, even in an editor's or CI's own git invocation.
+
+**Precedence** (most to least specific): a repo-local **binding** (`dss link`) wins over a matching **directory rule**, which wins over the **global** active identity (`dss use`) — matching the order git itself resolves conditional includes and repo-local config.
+
+Directories must exist to add a rule (`~` is expanded, symlinks resolved); the identity doesn't need a key. Removing every rule leaves an empty (harmless) `rules.gitconfig` — its `include.path` entry stays in place. `dss doctor` flags rule drift (the effective git identity in the current directory not matching a configured rule) the same way it flags a stale binding or global switch.
 
 ## Output
 
@@ -210,6 +227,7 @@ src/
 │   ├── keys.ts             # dss key show/copy/rotate
 │   ├── dashboard.ts       # Bare-`dss` context dashboard
 │   ├── doctor.ts          # dss doctor (combined health check)
+│   ├── rule.ts             # dss rule add/ls/rm (directory rules → native includeIf)
 │   ├── firstRun.ts        # Automatic first-run flow (replaces old `onboard`)
 │   ├── completion.ts      # Shell completion script generation
 │   ├── prompts.ts         # Shared/cancellation-safe prompt helpers
@@ -217,10 +235,12 @@ src/
 ├── core/                   # Dependency-free domain types and lookups
 │   ├── types.ts            # ISpace/IIdentity/IStoreV2 and friends
 │   ├── identity.ts         # slugify, name validation, identity lookup
+│   ├── rules.ts             # matchRule (pure, longest-prefix directory match)
 │   └── hosts.ts             # Known Git hosts + key-settings links
 └── infra/                  # Filesystem, Git, and SSH side effects
     ├── store.ts             # Config store (~/.dss/spaces/config.json, v1→v2 migration)
-    ├── git.ts               # active.gitconfig + global include (includeIf-first)
+    ├── git.ts               # active/identity gitconfig + global include (includeIf-first)
+    ├── rules.ts              # rules.gitconfig compiler (directory rules → includeIf)
     ├── ssh.ts               # ssh-config (parse-don't-splice) and host access checks
     ├── keys.ts              # SSH key generation (system ssh-keygen binary)
     ├── clipboard.ts          # Platform-specific clipboard operations

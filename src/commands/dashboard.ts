@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import { loadStore } from '../infra/store';
 import { findIdentity } from '../core/identity';
+import { matchRule } from '../core/rules';
 import { getRepositoryBindingStatus, RepositoryBindingStatus } from '../infra/repoBinding';
 import { checkKeyLoadedInAgent } from '../infra/ssh';
 import { firstRunFlow } from './firstRun';
@@ -9,8 +10,9 @@ import { isJsonMode, jsonData } from './jsonOutput';
 
 /**
  * The bare-`dss` front door: which identity applies HERE (bound to this
- * repo, or the global default), and a fast local health summary. Replaces
- * the old no-args `--help` dump.
+ * repo, a directory rule matching cwd, or the global default — in that
+ * precedence order), and a fast local health summary. Replaces the old
+ * no-args `--help` dump.
  *
  * FAST BY DESIGN: no network round-trips. The only exec calls this path
  * makes are `git rev-parse`/`git config` (via getRepositoryBindingStatus)
@@ -60,7 +62,26 @@ export async function dashboard(): Promise<void> {
   let identity = bindingStatus?.bound && bindingStatus.spaceName
     ? findIdentity(store, bindingStatus.spaceName)
     : undefined;
-  let source = 'bound to this repo';
+  let source: 'bound to this repo' | 'directory rule' | 'global default' = 'bound to this repo';
+
+  // Precedence: bound (above) > directory rule > global default — matching
+  // the real includeIf resolution order (repo-local binding is read last by
+  // git, rules.gitconfig's includeIf sections next, active.gitconfig's
+  // unconditional [user] first/lowest — see infra/git.ts's
+  // ensureGlobalInclude for the include-order rationale).
+  if (!identity) {
+    let canonicalCwd: string | undefined;
+    try {
+      canonicalCwd = await fs.realpath(process.cwd());
+    } catch {
+      canonicalCwd = undefined;
+    }
+    const rule = canonicalCwd ? matchRule(canonicalCwd, store.rules) : undefined;
+    if (rule) {
+      identity = findIdentity(store, rule.identity);
+      source = 'directory rule';
+    }
+  }
 
   if (!identity) {
     identity = store.active ? findIdentity(store, store.active) : undefined;
@@ -136,7 +157,7 @@ export async function dashboard(): Promise<void> {
 
   jsonData({
     identity: { name: identity.name, email: identity.email, userName: identity.userName, host: identity.host },
-    source: source === 'bound to this repo' ? 'bound' : 'global',
+    source: source === 'bound to this repo' ? 'bound' : source === 'directory rule' ? 'rule' : 'global',
     health: { key: keyHealth, agent: agentHealth },
     identities: count,
   });

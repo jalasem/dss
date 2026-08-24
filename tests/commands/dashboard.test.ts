@@ -32,8 +32,8 @@ const mockCheckKeyLoadedInAgent = checkKeyLoadedInAgent as jest.MockedFunction<t
 const mockTestHostAccess = testHostAccess as jest.MockedFunction<typeof testHostAccess>;
 const mockFirstRunFlow = firstRunFlow as jest.MockedFunction<typeof firstRunFlow>;
 
-function storeOf(spaces: ISpace[], active?: string): IStoreV2 {
-  return { version: 2, identities: spaces.map(fromSpace), active, bindings: [] };
+function storeOf(spaces: ISpace[], active?: string, rules: IStoreV2['rules'] = []): IStoreV2 {
+  return { version: 2, identities: spaces.map(fromSpace), active, bindings: [], rules };
 }
 
 function loggedLines(): string[] {
@@ -104,6 +104,47 @@ describe('commands/dashboard', () => {
     const lines = loggedLines();
     expect(lines.some(l => l.includes('personal') && l.includes('global default'))).toBe(true);
     expect(lines.some(l => l.includes('dss link personal') && l.includes('bind it'))).toBe(true);
+  });
+
+  it('shows "directory rule" as the source when cwd (unbound) falls under a configured rule', async () => {
+    const store = storeOf(
+      [{ name: 'work', email: 'work@example.com', userName: 'Work', sshKeyPath: '/mock/work/id_ed25519' }],
+      undefined,
+      [{ dir: '/code/acme', identity: 'work' }]
+    );
+    mockLoadStore.mockResolvedValue(store);
+    mockGetRepositoryBindingStatus.mockResolvedValue({
+      repositoryRoot: '/code/acme/project',
+      configPath: '/code/acme/project/.git/dss/config',
+      bound: false
+    });
+    mockFs.realpath.mockResolvedValue('/code/acme/project' as never);
+
+    await dashboard();
+
+    const lines = loggedLines();
+    expect(lines.some(l => l.includes('work') && l.includes('directory rule'))).toBe(true);
+    expect(lines.some(l => l.includes('global default'))).toBe(false);
+  });
+
+  it('falls back to the global default when cwd is outside every configured rule', async () => {
+    const store = storeOf(
+      [{ name: 'personal', email: 'personal@example.com', userName: 'Personal', sshKeyPath: '/mock/personal/id_ed25519' }],
+      'personal',
+      [{ dir: '/code/acme', identity: 'personal' }]
+    );
+    mockLoadStore.mockResolvedValue(store);
+    mockGetRepositoryBindingStatus.mockResolvedValue({
+      repositoryRoot: '/elsewhere/project',
+      configPath: '/elsewhere/project/.git/dss/config',
+      bound: false
+    });
+    mockFs.realpath.mockResolvedValue('/elsewhere/project' as never);
+
+    await dashboard();
+
+    const lines = loggedLines();
+    expect(lines.some(l => l.includes('personal') && l.includes('global default'))).toBe(true);
   });
 
   it('does NOT show the "dss link" hint when cwd is not a git repo at all (getRepositoryBindingStatus throws)', async () => {

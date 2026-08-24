@@ -4,7 +4,7 @@ import path from 'path';
 import { ISpace, IConfig, IKeyInfo, IIdentity, IStoreV2 } from '../core/types';
 import { slugify, findIdentity } from '../core/identity';
 
-export type { IKeyInfo, IIdentity, IBinding, IStoreV2 } from '../core/types';
+export type { IKeyInfo, IIdentity, IBinding, IRule, IStoreV2 } from '../core/types';
 
 const CONFIG_DIR = path.join(os.homedir(), '.dss', 'spaces');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
@@ -22,7 +22,7 @@ interface IV1Config {
 }
 
 function emptyStore(): IStoreV2 {
-  return { version: 2, identities: [], bindings: [] };
+  return { version: 2, identities: [], bindings: [], rules: [] };
 }
 
 function inferAlgorithm(sshKeyPath: string): IKeyInfo['algorithm'] {
@@ -139,7 +139,7 @@ function migrateV1(v1: IV1Config): IStoreV2 {
 
   const active = v1.activeSpace ? slugify(v1.activeSpace) : undefined;
 
-  return { version: 2, identities, active, bindings: [] };
+  return { version: 2, identities, active, bindings: [], rules: [] };
 }
 
 async function backupIfAbsent(sourcePath: string, backupPath: string): Promise<void> {
@@ -183,7 +183,8 @@ export async function loadStore(): Promise<IStoreV2> {
         version: 2,
         identities: Array.isArray(v2.identities) ? v2.identities : [],
         active: v2.active,
-        bindings: Array.isArray(v2.bindings) ? v2.bindings : []
+        bindings: Array.isArray(v2.bindings) ? v2.bindings : [],
+        rules: Array.isArray(v2.rules) ? v2.rules : []
       };
     }
 
@@ -227,6 +228,23 @@ export function recordBinding(store: IStoreV2, repositoryPath: string, identity:
 /** Removes any binding for a canonical repository path. */
 export function removeBinding(store: IStoreV2, repositoryPath: string): void {
   store.bindings = store.bindings.filter(binding => binding.path !== repositoryPath);
+}
+
+/** Upserts a directory rule by canonical directory (same dir replaces its identity). */
+export function upsertRule(store: IStoreV2, dir: string, identity: string): void {
+  const existing = store.rules.find(rule => rule.dir === dir);
+  if (existing) {
+    existing.identity = identity;
+    return;
+  }
+  store.rules.push({ dir, identity });
+}
+
+/** Removes the rule for a canonical directory, if any. Returns whether a rule was actually removed. */
+export function removeRule(store: IStoreV2, dir: string): boolean {
+  const originalLength = store.rules.length;
+  store.rules = store.rules.filter(rule => rule.dir !== dir);
+  return store.rules.length !== originalLength;
 }
 
 export interface ILoadedConfig {
